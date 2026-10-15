@@ -10,6 +10,41 @@ export const INTELLIGENCE_KEY_MISSING_LABEL = `${INTELLIGENCE_API_KEY_ENV_NAMES[
 export const DEFAULT_AGENT_RUN_TIMEOUT_MS = 90_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
+export interface LocalAiConfig {
+  conversationBackend?: 'local' | 'intelligence';
+  localDatabaseUrl?: string;
+  llmBackend?: 'subscription' | 'openai';
+  llmProvider?: string;
+  subscriptionModel?: string;
+}
+
+// Select backends explicitly. Old credentials must never trigger a cloud fallback.
+export function localAiConfigFromEnv(
+  env: Record<string, string | undefined>,
+): LocalAiConfig {
+  const conversationBackend = env.CONVERSATION_BACKEND?.trim() || 'local';
+  const llmBackend = env.LLM_BACKEND?.trim() || 'subscription';
+  if (!['local', 'intelligence'].includes(conversationBackend))
+    throw new Error('CONVERSATION_BACKEND must be local or intelligence.');
+  if (!['subscription', 'openai'].includes(llmBackend))
+    throw new Error('LLM_BACKEND must be subscription or openai.');
+  return {
+    conversationBackend: conversationBackend as 'local' | 'intelligence',
+    llmBackend: llmBackend as 'subscription' | 'openai',
+    localDatabaseUrl: env.LOCAL_DATABASE_URL?.trim() || undefined,
+    llmProvider: env.LLM_PROVIDER?.trim() || 'codex',
+    subscriptionModel: env.LLM_MODEL?.trim() || undefined,
+  };
+}
+
+export function modelConfigured(
+  config: LocalAiConfig & { apiKey?: string; model?: string },
+): boolean {
+  return (
+    config.llmBackend === 'subscription' || !!(config.apiKey && config.model)
+  );
+}
+
 export function intelligenceApiKeyFromEnv(
   env: Record<string, string | undefined>,
 ): string | undefined {
@@ -49,7 +84,7 @@ function firstNonEmptyEnvValue(
   return undefined;
 }
 
-export interface PlatformConfig extends WebConfig {
+export interface PlatformConfig extends WebConfig, LocalAiConfig {
   intelligenceKey?: string;
   intelligenceApiUrl?: string;
   intelligenceWsUrl?: string;
@@ -80,9 +115,11 @@ export function setupStatus(
   activationFailed = false,
 ): SetupStatus {
   const missing = [
-    !config.intelligenceKey && INTELLIGENCE_KEY_MISSING_LABEL,
-    !config.apiKey && 'OPENAI_API_KEY',
-    !config.model && 'OPENAI_MODEL',
+    config.conversationBackend === 'local'
+      ? !config.localDatabaseUrl && 'LOCAL_DATABASE_URL'
+      : !config.intelligenceKey && INTELLIGENCE_KEY_MISSING_LABEL,
+    config.llmBackend !== 'subscription' && !config.apiKey && 'OPENAI_API_KEY',
+    config.llmBackend !== 'subscription' && !config.model && 'OPENAI_MODEL',
   ].filter((item): item is string => !!item);
   const declaredSlack = !!(
     config.slackChannel &&
@@ -97,12 +134,22 @@ export function setupStatus(
       ? 'setup_required'
       : 'not_configured';
   return {
-    intelligence: !!config.intelligenceKey,
-    model: !!(config.apiKey && config.model),
+    conversationBackend: config.conversationBackend ?? 'intelligence',
+    llmBackend: config.llmBackend ?? 'openai',
+    llmProvider:
+      config.llmBackend === 'subscription'
+        ? (config.llmProvider ?? 'codex')
+        : undefined,
+    intelligence:
+      config.conversationBackend === 'local'
+        ? !!config.localDatabaseUrl
+        : !!config.intelligenceKey,
+    model: modelConfigured(config),
     browser: !!(config.browserUrl && config.browserSecret),
     voice: !!(config.voiceKey && config.voiceModel && !missing.length),
     composio: !!config.composioApiKey,
-    slack,
+    slack:
+      config.conversationBackend === 'local' ? 'requires_intelligence' : slack,
     missing,
   };
 }

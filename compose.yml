@@ -6,6 +6,9 @@ services:
     ports:
       - '127.0.0.1:4310:4310'
     environment:
+      # Legacy all-container deployment. Subscription CLIs run on the host in compose.local.yml.
+      CONVERSATION_BACKEND: intelligence
+      LLM_BACKEND: openai
       OWNER_TOKEN: ${OWNER_TOKEN:?Set a 24+ character OWNER_TOKEN in .env}
       APP_ORIGIN: ${APP_ORIGIN:-http://localhost:4310}
       OWNER_ID: ${OWNER_ID:-opendots-owner}

@@ -1,18 +1,21 @@
-# Running the template
+# Running My Own Dots
 
-OpenDots runs a React app and a Node server. The server stores pages, Space and Dot configuration, and thread bindings in SQLite and connects to your configured conversation, model, and messaging services.
+My Own Dots runs a React app and a Node server. Start with the [local AI and conversations guide](LOCAL-AI.md). The default uses your subscription CLI and PostgreSQL in Docker; the hosted sections below describe optional compatibility mode. The server stores pages, Space and Dot configuration, and thread bindings in SQLite and connects to your configured conversation, model, and messaging services.
 
 ## Local development
 
-Use Node.js 24 and npm.
+Use Node.js 24, npm, uv, Docker and an authenticated supported AI CLI.
 
 ```sh
 npm ci
-cp .env.example .env
+npm run setup:local
+npm run conversations:up
+npm run setup:llm
+npm run llm:check
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. The API runs on port 4310. Without service credentials, the app shows its setup state; it does not generate simulated replies.
+Open http://127.0.0.1:5173. The API runs on port 4310. No Intelligence or OpenAI API credentials are needed in the default local subscription mode. Provider failures are reported; the app does not generate simulated replies.
 
 During `npm run dev`, both http://localhost:5173 and http://127.0.0.1:5173 are allowed browser origins. The UI sends API requests through Vite's `/api` proxy. To use a different proxy or custom domain, set `APP_ORIGIN` to one exact origin or a comma-separated list, for example `APP_ORIGIN=http://localhost:5173,http://127.0.0.1:5173`. An explicit value replaces the development defaults. Origins must match the scheme, hostname, and port exactly; omit paths and trailing slashes. Whitespace around list entries is trimmed and empty entries are ignored. Outside development, leaving `APP_ORIGIN` unset requires the browser origin to match the request URL's origin. This setting preserves cross-site request blocking; it does not enable direct cross-origin browser access to the API.
 
@@ -27,7 +30,7 @@ Open http://127.0.0.1:4310. Keep the server running for background work.
 
 ## Conversation services
 
-OpenDots requires CopilotKit Intelligence for conversations. Choose local evaluation below, a licensed [self-hosted deployment](https://docs.copilotkit.ai/intelligence/self-hosting), or hosted Intelligence. Pages and workspace metadata remain in SQLite; conversation history is stored separately. See [Data and privacy](../README.md#data-and-privacy).
+The default local backend stores conversations in PostgreSQL. The options below require explicitly setting `CONVERSATION_BACKEND=intelligence`; they retain a CopilotKit account/license dependency. Choose the official local evaluation below, a licensed [self-hosted deployment](https://docs.copilotkit.ai/intelligence/self-hosting), or hosted Intelligence. Pages and workspace metadata remain in SQLite; conversation history is stored separately. See [Data and privacy](../README.md#data-and-privacy).
 
 ### Hosted Intelligence
 
@@ -55,7 +58,7 @@ npx copilotkit@latest local connect
 npx copilotkit@latest local connect --approve-connection
 ```
 
-`local connect` previews the changes; the approved command writes the local API URL, gateway WebSocket URL, and project key to `.env`. OpenDots accepts these directly. Do not run `project select` afterward: it selects a hosted project. Add `OPENAI_API_KEY` and `OPENAI_MODEL` for the app, then restart `npm run dev`. Setup's Learning model is separate from the app's model.
+`local connect` previews the changes; the approved command writes the local API URL, gateway WebSocket URL, and project key to `.env`. OpenDots accepts these directly. Do not run `project select` afterward: it selects a hosted project. Keep `LLM_BACKEND=subscription` for your authenticated CLI, or explicitly select `LLM_BACKEND=openai` and add `OPENAI_API_KEY` and `OPENAI_MODEL`. Restart `npm run dev`. Setup's Learning model is separate from the app's model.
 
 Send a message and verify it appears in the local dashboard (`npx copilotkit@latest local login`). Use `local status` to inspect service health. Threads, Automatic Learning, and Channels are included; User Memory and Product Analytics are not. Channels require a public HTTPS address reachable by Slack or Teams.
 
@@ -99,7 +102,7 @@ Back up both storage layers: SQLite contains page content and thread bindings; t
 
 ## Browser tool
 
-Parallel is selected by default (`WEB_SEARCH_PROVIDER=parallel`). Live research needs the model configuration, but no browser worker. An optional server-side `PARALLEL_API_KEY` enables authenticated usage and higher limits. The anonymous MCP endpoint is free for light use. Queries, selected URLs, research objectives and a stable session identifier go to Parallel. See [public-web research](../README.md#public-web-research) for data sharing, permissions and limitations.
+Web research is disabled by default (`WEB_SEARCH_PROVIDER=disabled`). Set `WEB_SEARCH_PROVIDER=parallel` to opt into Parallel. Live research needs the model configuration, but no browser worker. An optional server-side `PARALLEL_API_KEY` enables authenticated usage and higher limits. The anonymous MCP endpoint is free for light use. Queries, selected URLs, research objectives and a stable session identifier go to Parallel. See [public-web research](../README.md#public-web-research) for data sharing, permissions and limitations.
 
 Set `WEB_SEARCH_PROVIDER=disabled` to turn off these research tools, or `WEB_SEARCH_PROVIDER=browser` for the existing URL-only reader. The browser service reads a supplied public URL and returns page text and a capture. Configure `BROWSER_URL` and `BROWSER_SECRET`, then run:
 
@@ -127,6 +130,8 @@ Tool arguments and results pass through Composio and the connected app provider.
 For a separate browser, persistent files, and optional shell for each specialist, follow [Computer setup](COMPUTERS.md). This uses pinned OpenBot computer/supervisor services and per-Dot permissions. Parallel research tools remain available alongside configured computer tools. With the browser provider selected, Dots use their computer tools in place of the read-only public-page tool; enable each Dot's required capabilities before use.
 
 ## Slack
+
+Managed Slack requires `CONVERSATION_BACKEND=intelligence` and is unavailable with independent local storage.
 
 OpenDots uses `@copilotkit/channels` with a managed Slack connection, following the runtime and channel pattern in [OpenTag](https://github.com/CopilotKit/OpenTag). The application declares the channel and its specialist agent; Intelligence manages the Slack adapter and delivery. You do not need a separate Slack webhook server or Socket Mode connection in OpenDots.
 
@@ -176,6 +181,8 @@ A configured key is not evidence of a successful call. Verify microphone access,
 
 ## Containers
 
+The default local setup uses `npm run conversations:up` with `compose.local.yml` for PostgreSQL only. Run the app and subscription CLI on the host. The commands below are for the legacy all-container API/Intelligence deployment (`compose.yml` selects those backends explicitly).
+
 Set `OWNER_TOKEN` and `BROWSER_SECRET` to different random secrets of at least 24 characters in `.env`, then run:
 
 ```sh
@@ -192,6 +199,8 @@ docker compose down
 For remote hosting, configure an HTTPS reverse proxy and the matching `APP_ORIGIN`. See [Security](../SECURITY.md) for the template's deployment boundary.
 
 ## Automatic Learning
+
+This feature requires `CONVERSATION_BACKEND=intelligence` and is unavailable with independent local storage. Local explicit memories remain available.
 
 OpenDots connects [CopilotKit Automatic Learning](https://docs.copilotkit.ai/learning)
 to individual Dots. It uses the server-side Intelligence credential

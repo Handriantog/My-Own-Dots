@@ -1,4 +1,7 @@
-import { IntelligenceAgent } from '@copilotkit/core';
+import {
+  IntelligenceAgent,
+  ProxiedCopilotRuntimeAgent,
+} from '@copilotkit/core';
 import type { Message } from '@ag-ui/core';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
@@ -15,11 +18,17 @@ export function currentTurnText(messages: Message[], error?: Error): string {
   return content;
 }
 
-const runtimeInfoSchema = z.object({
-  mode: z.literal('intelligence'),
-  intelligence: z.object({ wsUrl: z.url() }),
-  agents: z.record(z.string(), z.unknown()),
-});
+const runtimeInfoSchema = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal('intelligence'),
+    intelligence: z.object({ wsUrl: z.url() }),
+    agents: z.record(z.string(), z.unknown()),
+  }),
+  z.object({
+    mode: z.literal('sse'),
+    agents: z.record(z.string(), z.unknown()),
+  }),
+]);
 
 export async function runThreadTurn(
   runtimeUrl: string,
@@ -33,23 +42,30 @@ export async function runThreadTurn(
   signal.throwIfAborted();
   const response = await fetch(`${runtimeUrl}/info`, { headers, signal });
   if (!response.ok)
-    throw new Error(`Intelligence runtime returned HTTP ${response.status}.`);
+    throw new Error(`Conversation runtime returned HTTP ${response.status}.`);
   const info = runtimeInfoSchema.parse(await response.json());
   if (!Object.hasOwn(info.agents, dotId))
     throw new Error('The selected Dot is unavailable in the runtime.');
   // Core's runtime discovery is browser-only. Use the SDK's Node-compatible
   // Intelligence agent for voice compute and scheduled server turns.
-  const agent = new IntelligenceAgent({
-    url: info.intelligence.wsUrl,
+  const options = {
     runtimeUrl,
     agentId: dotId,
     headers,
-    fetch: (input, init) =>
+    fetch: ((input, init) =>
       fetch(input, {
         ...init,
         signal: init?.signal ? AbortSignal.any([signal, init.signal]) : signal,
-      }),
-  });
+      })) as typeof fetch,
+  };
+  const agent =
+    info.mode === 'intelligence'
+      ? new IntelligenceAgent({ ...options, url: info.intelligence.wsUrl })
+      : new ProxiedCopilotRuntimeAgent({
+          ...options,
+          runtimeMode: 'sse',
+          transport: 'rest',
+        });
   agent.threadId = threadId;
   let runError: Error | undefined;
   const subscription = agent.subscribe({
@@ -61,6 +77,12 @@ export async function runThreadTurn(
   signal.addEventListener('abort', stop, { once: true });
   try {
     signal.throwIfAborted();
+    if (info.mode === 'sse') {
+      await agent.connectAgent();
+      // Replayed failures describe a previous turn, not the new one.
+      runError = undefined;
+      signal.throwIfAborted();
+    }
     const idPrefix =
       metadata?.opendotsSource === 'voice_receipt'
         ? voiceReceiptMessagePrefix

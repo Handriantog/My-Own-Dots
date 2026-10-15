@@ -1,3 +1,4 @@
+import './local-defaults.js';
 import { webSearchProvider } from './parallel.js';
 import { createShutdown } from './shutdown.js';
 import { reportChannelFailure, safeFailure } from './slack-channel.js';
@@ -11,10 +12,12 @@ import { WorkspaceStore } from './workspace.js';
 import { Platform } from './platform.js';
 import {
   agentRunTimeoutMsFromEnv,
+  localAiConfigFromEnv,
   intelligenceApiKeyFromEnv,
   intelligenceWsUrlFromEnv,
   type PlatformConfig,
 } from './platform-config.js';
+const localAi = localAiConfigFromEnv(process.env);
 const host = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 4310);
 const ownerToken = process.env.OWNER_TOKEN;
@@ -32,14 +35,22 @@ const workspace = new WorkspaceStore(
   process.env.OWNER_ID ?? 'opendots-owner',
 );
 const config: PlatformConfig = {
+  ...localAi,
   intelligenceKey: intelligenceApiKeyFromEnv(process.env),
   intelligenceApiUrl: process.env.INTELLIGENCE_API_URL || undefined,
   intelligenceWsUrl: intelligenceWsUrlFromEnv(process.env),
   apiKey: process.env.OPENAI_API_KEY,
   model: process.env.OPENAI_MODEL,
   baseUrl: process.env.OPENAI_BASE_URL ?? 'https://api.openai.com/v1',
-  agentRunTimeoutMs: agentRunTimeoutMsFromEnv(process.env),
-  webSearchProvider: webSearchProvider(process.env.WEB_SEARCH_PROVIDER),
+  agentRunTimeoutMs: agentRunTimeoutMsFromEnv({
+    ...process.env,
+    AGENT_RUN_TIMEOUT_MS:
+      process.env.AGENT_RUN_TIMEOUT_MS ||
+      (localAi.llmBackend === 'subscription' ? '900000' : undefined),
+  }),
+  webSearchProvider: webSearchProvider(
+    process.env.WEB_SEARCH_PROVIDER || 'disabled',
+  ),
   parallelApiKey: process.env.PARALLEL_API_KEY,
   browserUrl: process.env.BROWSER_URL,
   browserSecret: process.env.BROWSER_SECRET,
@@ -64,6 +75,7 @@ const config: PlatformConfig = {
 const platform = new Platform(store, workspace, config);
 const researchConfig = {
   mode: 'live' as const,
+  ...localAi,
   apiKey: config.apiKey,
   model: config.model,
   baseUrl: config.baseUrl,
@@ -79,9 +91,9 @@ const runner = new Runner(
     const threadId = workspace.taskThread(claim.id);
     if (!threadId)
       throw new Error(
-        'This legacy task has no Intelligence conversation. Create a new scheduled task from a conversation.',
+        'This legacy task has no conversation. Create a new scheduled task from a conversation.',
       );
-    progress('Running this task in its Intelligence conversation.');
+    progress('Running this task in its saved conversation.');
     const text = await platform.turn(threadId, claim.prompt, signal, {
       opendotsSource: 'scheduled_task',
     });
@@ -89,9 +101,12 @@ const runner = new Runner(
   },
   config.agentRunTimeoutMs,
 );
-const wsOrigin = new URL(
-  config.intelligenceWsUrl ?? 'wss://realtime.intelligence.copilotkit.ai',
-).origin;
+const wsOrigin =
+  config.conversationBackend === 'local'
+    ? ''
+    : new URL(
+        config.intelligenceWsUrl ?? 'wss://realtime.intelligence.copilotkit.ai',
+      ).origin;
 const app = createApp({
   store,
   runner,
@@ -113,13 +128,13 @@ app.get('/api/*', (c) => c.json({ error: 'Not found.' }, 404));
 app.use('/*', serveStatic({ root: './dist/client' }));
 app.get('*', serveStatic({ path: './dist/client/index.html' }));
 const server = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
-  console.log(`OpenDots template listening on http://${host}:${info.port}`);
+  console.log(`My Own Dots listening on http://${host}:${info.port}`);
   runner.start();
   void platform
     .start()
     .catch((error) =>
       reportChannelFailure(
-        'Slack Channels activation failed; check setup status',
+        'Conversation services could not initialize; check setup and database status',
         [safeFailure(error)],
       ),
     );

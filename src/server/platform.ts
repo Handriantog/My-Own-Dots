@@ -1,3 +1,6 @@
+import { PostgresConversations } from './local-conversations.js';
+import { LocalAgentRunner } from './local-runner.js';
+import { localThreadResponse } from './local-thread-routes.js';
 import { ComputerService } from './computer-service.js';
 import { ConnectionService } from './connections.js';
 import { PageService } from './page-service.js';
@@ -29,6 +32,8 @@ export class Platform {
   readonly computers: ComputerService;
   readonly connections: ConnectionService;
   readonly intelligence?: CopilotKitIntelligence;
+  readonly localConversations?: PostgresConversations;
+  private readonly localRunner?: LocalAgentRunner;
   readonly handler?: CopilotHonoApp;
   constructor(
     readonly store: Store,
@@ -44,20 +49,34 @@ export class Platform {
     this.connections = new ConnectionService(workspace.connections);
     this.pages = new PageService(workspace, () => {
       this.requireReady();
-      return this.intelligence!;
+      return this.localConversations ?? this.intelligence!;
     });
-    if (!config.intelligenceKey) return;
-    this.intelligence = new CopilotKitIntelligence({
-      apiKey: config.intelligenceKey,
-      apiUrl: config.intelligenceApiUrl,
-      wsUrl: config.intelligenceWsUrl,
-      getLearningContainerId: learningSelector(
-        workspace,
-        config.slackDotId ?? workspace.dots()[0]?.id,
-      ),
-    });
+    if (config.conversationBackend === 'local') {
+      if (!config.localDatabaseUrl) return;
+      this.localConversations = new PostgresConversations(
+        config.localDatabaseUrl,
+        workspace.ownerId,
+      );
+      this.localRunner = new LocalAgentRunner(this.localConversations);
+    } else {
+      if (!config.intelligenceKey) return;
+      this.intelligence = new CopilotKitIntelligence({
+        apiKey: config.intelligenceKey,
+        apiUrl: config.intelligenceApiUrl,
+        wsUrl: config.intelligenceWsUrl,
+        getLearningContainerId: learningSelector(
+          workspace,
+          config.slackDotId ?? workspace.dots()[0]?.id,
+        ),
+      });
+    }
     const channels = [];
-    if (config.slackChannel && config.slackTeam && config.slackUsers.length) {
+    if (
+      this.intelligence &&
+      config.slackChannel &&
+      config.slackTeam &&
+      config.slackUsers.length
+    ) {
       const dotId = config.slackDotId ?? workspace.dots()[0].id;
       if (!workspace.dot(dotId))
         throw new Error('SLACK_DOT_ID does not identify an existing Dot.');
@@ -78,14 +97,9 @@ export class Platform {
       });
       channels.push(slack);
     }
-    const runtime = new CopilotRuntime({
-      intelligence: this.intelligence,
+    const common = {
       telemetryId: this.setupTelemetry.identity,
       telemetryProperties: this.setupTelemetry.metadata,
-      identifyUser: async () => ({
-        id: workspace.ownerId,
-        name: 'OpenDots owner',
-      }),
       agents: async () =>
         Object.fromEntries(
           workspace
@@ -102,9 +116,19 @@ export class Platform {
               ),
             ]),
         ),
-      channels,
-      generateThreadNames: true,
-    });
+    };
+    const runtime = this.localRunner
+      ? new CopilotRuntime({ ...common, runner: this.localRunner })
+      : new CopilotRuntime({
+          ...common,
+          intelligence: this.intelligence!,
+          channels,
+          generateThreadNames: true,
+          identifyUser: async () => ({
+            id: workspace.ownerId,
+            name: 'My Own Dots owner',
+          }),
+        });
     this.handler = createCopilotHonoHandler({
       runtime,
       basePath: '/api/copilotkit',
@@ -123,10 +147,11 @@ export class Platform {
     const missing = this.setup().missing;
     if (missing.length)
       throw new Error(
-        `Setup required: ${missing.join(', ')}. Conversations require CopilotKit Intelligence.`,
+        `Setup required: ${missing.join(', ')}. Configure the selected conversation and model backends.`,
       );
   }
   async start() {
+    await this.localConversations?.initialize();
     this.setupTelemetry.start();
     if (this.handler?.channels) {
       try {
@@ -144,15 +169,20 @@ export class Platform {
     }
   }
   async stop() {
-    await this.setupTelemetry.stop();
-    await this.handler?.channels?.stop();
+    try {
+      await this.localRunner?.close();
+    } finally {
+      await this.localConversations?.close();
+      await this.setupTelemetry.stop();
+      await this.handler?.channels?.stop();
+    }
   }
   async createConversation(dotId: string, title: string) {
     this.requireReady();
     if (!this.workspace.dot(dotId)) throw new Error('Dot not found.');
     const id = randomUUID();
     try {
-      await this.intelligence!.createThread({
+      await (this.localConversations ?? this.intelligence!).createThread({
         threadId: id,
         userId: this.workspace.ownerId,
         agentId: dotId,
@@ -160,7 +190,9 @@ export class Platform {
       });
     } catch {
       throw new Error(
-        'Intelligence could not create this conversation. Check the runtime key and connection.',
+        this.localConversations
+          ? 'Local conversation storage is unavailable. Start PostgreSQL with npm run conversations:up and check LOCAL_DATABASE_URL.'
+          : 'Intelligence could not create this conversation. Check the runtime key and connection.',
       );
     }
     return this.workspace.bindThread(id, dotId, title);
@@ -168,7 +200,9 @@ export class Platform {
   async history(threadId: string): Promise<string> {
     this.requireReady();
     this.workspace.requireThread(threadId);
-    const history = await this.intelligence!.getThreadMessages({
+    const history = await (
+      this.localConversations ?? this.intelligence!
+    ).getThreadMessages({
       threadId,
       userId: this.workspace.ownerId,
     });
@@ -185,7 +219,9 @@ export class Platform {
   async handle(request: Request): Promise<Response> {
     if (!this.handler)
       return Response.json(
-        { error: `Setup required: ${INTELLIGENCE_KEY_MISSING_LABEL}.` },
+        {
+          error: `Setup required: ${this.config.conversationBackend === 'local' ? 'LOCAL_DATABASE_URL' : INTELLIGENCE_KEY_MISSING_LABEL}.`,
+        },
         { status: 503 },
       );
     let body: unknown;
@@ -206,6 +242,42 @@ export class Platform {
         },
         { status: 403 },
       );
+    }
+    if (this.localConversations) {
+      try {
+        const response = await localThreadResponse(
+          request,
+          body,
+          this.localConversations,
+          this.workspace,
+        );
+        if (response) return response;
+        const responseFromRuntime = await this.handler.fetch(request);
+        if (
+          new URL(request.url).pathname === '/api/copilotkit/info' &&
+          responseFromRuntime.ok
+        ) {
+          const info = await responseFromRuntime.json();
+          return Response.json({
+            ...info,
+            threadEndpoints: {
+              list: true,
+              inspect: true,
+              mutations: false,
+              realtimeMetadata: false,
+            },
+          });
+        }
+        return responseFromRuntime;
+      } catch {
+        return Response.json(
+          {
+            error:
+              'Local conversation storage is unavailable. Check PostgreSQL and LOCAL_DATABASE_URL.',
+          },
+          { status: 503 },
+        );
+      }
     }
     return this.handler.fetch(request);
   }

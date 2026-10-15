@@ -18,6 +18,7 @@ import {
 } from '@copilotkit/runtime/v2';
 import { chat, maxIterations } from '@tanstack/ai';
 import { openaiCompatibleText } from '@tanstack/ai-openai/compatible';
+import { subscriptionText } from './subscription-adapter.js';
 import { learnedSkillTools, tanstackTools } from './tanstack-tools.js';
 import { Observable } from 'rxjs';
 import { z } from 'zod';
@@ -25,6 +26,7 @@ import { Store } from './store.js';
 import { WorkspaceStore } from './workspace.js';
 import {
   DEFAULT_AGENT_RUN_TIMEOUT_MS,
+  setupStatus,
   type PlatformConfig,
 } from './platform-config.js';
 import { browserResponse } from './research.js';
@@ -117,18 +119,16 @@ export class DotAgent extends AbstractAgent {
           input.threadId,
           dot.id,
         );
-        if (
-          !this.config.intelligenceKey ||
-          !this.config.apiKey ||
-          !this.config.model
-        ) {
+        if (setupStatus(this.config).missing.length) {
           configurationFailure = true;
           this.setupTelemetry?.capture({
             kind: 'setup_failed',
             step: 'setup_required',
             error_class: 'configuration_missing',
           });
-          throw new Error('Intelligence and model configuration are required.');
+          throw new Error(
+            'Conversation storage and model configuration are required.',
+          );
         }
         const initialSettings = this.store.settings();
         const initialConnections = this.workspace.connections.fingerprint(
@@ -329,12 +329,19 @@ export class DotAgent extends AbstractAgent {
           initialSettings.memoryAllowed && dot.memoryAllowed
             ? this.store.memories().map((memory) => memory.text)
             : [];
-        const adapter = openaiCompatibleText(this.config.model, {
-          apiKey: this.config.apiKey,
-          baseURL: this.config.baseUrl ?? 'https://api.openai.com/v1',
-          api: 'chat-completions',
-          maxRetries: 1,
-        });
+        const adapter =
+          this.config.llmBackend === 'subscription'
+            ? subscriptionText({
+                provider: this.config.llmProvider,
+                model: this.config.subscriptionModel,
+                timeoutMs: turnTimeLimitMs,
+              })
+            : openaiCompatibleText(this.config.model!, {
+                apiKey: this.config.apiKey!,
+                baseURL: this.config.baseUrl ?? 'https://api.openai.com/v1',
+                api: 'chat-completions',
+                maxRetries: 1,
+              });
         const start = async () => {
           const appTools =
             this.config.composioApiKey &&
@@ -365,7 +372,9 @@ export class DotAgent extends AbstractAgent {
           this.inner = new BuiltInAgent({
             type: 'tanstack',
             learnedSkills:
-              dot.skillDeliveryEnabled && conversation.learningContainerId
+              this.config.conversationBackend !== 'local' &&
+              dot.skillDeliveryEnabled &&
+              conversation.learningContainerId
                 ? {
                     containers: [{ id: conversation.learningContainerId }],
                     apiKey: this.config.intelligenceKey,
