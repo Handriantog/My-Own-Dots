@@ -1,42 +1,16 @@
-<div align="center">
+# My Own Dots
 
-# OpenDots
+A local agent workspace powered by your existing AI subscriptions. Forked from [OpenDots](https://github.com/CopilotKit/OpenDots), part of MyOwnStack.
 
-### Always-on AI coworkers that move between text, calls, and Slack.
+Give specialist Dots their own instructions and tools, chat with them, save and edit pages in Spaces, and schedule work. Inference uses the published [MyOwnLlmIntegrator](https://github.com/Handriantog/My-Own-LLM-Integrator) npm package. Conversation history lives in PostgreSQL running locally in Docker. The app and your authenticated AI CLI run on the host.
 
-**An open-source template for persistent AI agents, each with its own computer. Available on Web and Mobile.**
+**The default setup needs no CopilotKit account or model API key.** CopilotKit's open-source UI/runtime and AG-UI still power chat and approval cards. Managed Slack and Automatic Learning are optional Intelligence-only features; realtime voice and third-party search remain separate opt-in services.
 
-Built with [CopilotKit](https://github.com/CopilotKit/CopilotKit) and [AG-UI](https://docs.ag-ui.com/introduction). · [Get started](#get-started) · [Overview](#overview) · [Architecture](#architecture) · [Features](#features) · [Contributing](CONTRIBUTING.md)
-
-[![CI](https://github.com/CopilotKit/OpenDots/actions/workflows/ci.yml/badge.svg)](https://github.com/CopilotKit/OpenDots/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-![Alpha](https://img.shields.io/badge/status-alpha-orange.svg)
-
-<a href="https://trendshift.io/repositories/275323" target="_blank"><img src="https://trendshift.io/api/badge/trendshift/repositories/275323/daily?language=TypeScript" alt="CopilotKit/OpenDots | Trendshift #2 TypeScript Repository Of The Day" width="250" height="55"/></a>
-
-Host OpenDots on your own infrastructure. Conversations require CopilotKit Intelligence: use the hosted service, the [local Docker evaluation](docs/SETUP.md#local-intelligence-evaluation), or a licensed [self-hosted deployment](https://docs.copilotkit.ai/intelligence/self-hosting). Clone this template and customize it however you want.
-
-[**Building on OpenDots? Meet with the CopilotKit team →**](https://www.copilotkit.ai/talk-to-an-engineer?ref=opendots_readme)
-
-</div>
-
----
-
-<div align="center">
-
-<table><tr><td>
-
-https://github.com/user-attachments/assets/4c74fe7d-ecdd-42dd-95da-5d34f9b9576e
-
-</td></tr></table>
-
-</div>
-
-_Ask → browse → approve → save. A live computer view and a human review card appear right in chat, then the approved draft becomes an editable Space page. Enlarged for readability; idle time is trimmed and playback is accelerated._
+[Get started](#get-started) · [How subscription AI works](#how-subscription-ai-works) · [Local AI guide](docs/LOCAL-AI.md) · [Architecture](#architecture) · [Features](#features)
 
 ## Overview
 
-OpenDots is a starting point for building your own agent workspace. Clone it, define your Dots, connect your services, and adapt the interface and tools to your needs.
+My Own Dots is a starting point for building your own agent workspace. Clone it, define your Dots, connect your services, and adapt the interface and tools to your needs.
 
 **A template, not a hosted product.** You run the application and configure its infrastructure. The template is in early development; the Features section below describes what's included and distinguishes local verification from connected-service testing.
 
@@ -44,7 +18,7 @@ OpenDots is a starting point for building your own agent workspace. Clone it, de
 
 A Space is a home for working documents. Dots appear separately in navigation and can be granted access to multiple Spaces in their settings. Each Dot has a default destination for saved pages; existing installations retain their original Space access. Browse pages in a searchable library, switch between grid and list views, and organize documents as nested subpages. Open a page in a focused visual editor with formatting, slash commands, and undo/redo. Write directly, save a conversation as a page, or ask a specialist to create and revise content.
 
-Pages stay in the local workspace database. Their conversations use CopilotKit Threads, with a separate conversation for each page and specialist. Page links connect the document workspace to Dot chat. Manual editing works before you configure conversation services. Autosave reports its progress, failed saves retain your draft, and revision checks prevent stale edits from overwriting newer content. Markdown source mode remains available.
+Pages stay in the local SQLite workspace database. Their conversations persist in local PostgreSQL, with a separate conversation for each page and specialist. Page links connect the document workspace to Dot chat. Manual editing works before you start the conversation backend. Autosave reports its progress, failed saves retain your draft, and revision checks prevent stale edits from overwriting newer content. Markdown source mode remains available.
 
 <div align="center">
 
@@ -116,7 +90,7 @@ _Connect, talk, mute, minimize, and return to chat. This is a silent screen capt
 
 ### Slack
 
-Mention a Dot through a managed Slack connection using Channels SDK, then continue in its thread. The integration follows [OpenTag](https://github.com/CopilotKit/OpenTag), with an explicit workspace/user allowlist and a selected specialist. See [Slack setup](docs/SETUP.md#slack) to connect your deployment.
+With the optional Intelligence backend, mention a Dot through a managed Slack connection using Channels SDK, then continue in its thread. The integration follows [OpenTag](https://github.com/CopilotKit/OpenTag), with an explicit workspace/user allowlist and a selected specialist. See [Slack setup](docs/SETUP.md#slack) to connect your deployment.
 
 <div align="center">
 
@@ -136,90 +110,106 @@ Bring your agents into Slack with [Channels SDK](https://github.com/CopilotKit/c
 
 [AG-UI](https://docs.ag-ui.com/introduction) carries streamed messages, tool calls, and agent state between the backend and CopilotKit components. Computer activity appears inline as the agent works; human-in-the-loop cards pause a tool call for your decision before it continues.
 
-The template uses TanStack AI for model streaming and server-tool execution, CopilotKit's React SDK and runtime, Intelligence for durable Threads, and Channels SDK for Slack. Pages, application metadata, and background-work state are stored separately from conversation history.
+TanStack AI owns the tool loop and validation. A subscription adapter sends each model step to MyOwnLlmIntegrator, which invokes your logged-in CLI and returns a structured result. CopilotKit's open-source SSE runtime uses a local durable runner backed by PostgreSQL. SQLite holds pages, application metadata and background-work state. The integrator returns complete steps rather than token streaming.
 
 ```mermaid
 flowchart TB
-  Web["Web app: pages, Spaces, Dots, chat"] -->|AG-UI| Runtime[CopilotKit runtime]
-  Slack[Slack] <--> Managed[Managed channel connection]
-  Managed <--> Channels[Channels SDK]
-  Channels --> Agents[Specialist compute agents]
-  Runtime --> Agents
-  Agents --> AI[TanStack AI]
-  AI --> Provider[OpenAI-compatible model provider]
-  Runtime <--> Intelligence["Intelligence / Threads"]
-  Channels <--> Intelligence
-  Web <--> Speech[Realtime speech]
-  Speech --> Bridge[Compute bridge]
-  Bridge --> Agents
-  Agents --> Controls[Tool permissions]
-  Controls --> Computer[Isolated browser / workspace]
-  Agents --> Jobs[Background work]
-  Runtime --> Metadata[(Pages, Spaces, Dots, work metadata)]
+  Web[Web workspace] <-->|AG-UI / SSE| Runtime[CopilotKit OSS runtime]
+  Runtime --> Agent[Dot / TanStack tool loop]
+  Agent --> Integrator[myown-llm-integrator]
+  Integrator --> CLI[Authenticated AI CLI on host]
+  CLI --> Account[Your provider account]
+  Runtime <--> Threads[Local durable runner]
+  Threads <--> Postgres[(PostgreSQL in Docker)]
+  Runtime <--> SQLite[(SQLite pages and settings)]
+  Agent --> Tools[Permitted tools and approval flows]
+  Tools --> Computers[Optional Dot computers]
 ```
 
-You configure the Intelligence project, model provider, and channel connection for your deployment; calls also need a speech provider. Credentials stay on the server. Missing configuration should produce a clear setup state, and test fixtures should remain visibly separate from live integrations.
+Provider selection and credentials stay server-side. Browser requests cannot choose executables, change the model provider, or bypass application tool permissions. The selected CLI still sends inference to its provider; this is local storage and subscription access, not offline AI.
 
-[OpenMuse](https://github.com/CopilotKit/OpenMuse) and [OpenBot](https://github.com/CopilotKit/openbot) are code references for persistent work, agent computers, and execution controls. OpenDots can be adapted to your own workflows and deployment choices.
+### How subscription AI works
+
+The default path uses your **Codex CLI signed in with ChatGPT**. My Own Dots calls the installed `myown-llm-integrator@0.1.0` npm package, which runs its bundled Python engine and invokes that CLI. The CLI uses your existing account session; the app does not need an OpenAI API key or a CopilotKit Intelligence subscription. Subscription usage limits and model access still apply.
+
+Each conversation turn follows this flow:
+
+1. The server loads saved conversation history from PostgreSQL and combines it with the Dot's instructions, permitted context, and tool definitions.
+2. The subscription adapter sends the current model step to Integrator's `runAgent`, with a JSON schema describing an answer and proposed tool calls. Integrator handles the provider process, timeouts, cancellation, and structured-output validation.
+3. The CLI returns an answer or tool decisions. TanStack AI and the application's tools validate those decisions and enforce permissions. Actions that require approval pause in the existing review cards; the provider CLI is instructed to return decisions rather than execute application actions itself.
+4. Tool results are supplied to the next model step until the Dot finishes or waits for your decision. The local runner persists messages, tool results, run events, and state so the conversation can be reopened after a restart.
+
+Scheduled turns and research summaries use the same subscription integration. Output arrives after each model step completes, rather than token by token. Stopping a turn propagates cancellation to the provider process. Provider restrictions are not an operating-system sandbox; see the [Local AI guide](docs/LOCAL-AI.md) for operational limits.
+
+The app, Python engine, and authenticated CLI run **on the host**, where the CLI can access its normal login profile. Docker runs PostgreSQL through [`compose.local.yml`](compose.local.yml). SQLite continues to hold pages, Dots, permissions, memories, and schedules. This independent local conversation backend replaces the persistence needed by this app; it does not reproduce Intelligence's managed Slack or Automatic Learning services.
+
+After `npm run setup:local`, the relevant `.env` defaults are:
+
+```dotenv
+CONVERSATION_BACKEND=local
+LLM_BACKEND=subscription
+LLM_PROVIDER=codex
+LLM_MODEL=
+AGENT_RUN_TIMEOUT_MS=900000
+DO_NOT_TRACK=1
+```
+
+Leave `LLM_MODEL` empty to inherit the provider's configured model. To use another supported CLI, install it, sign in, change `LLM_PROVIDER` (for example, `claude-code` or `gemini`), and restart the app. Other CLIs retain their own authentication and billing behavior. The [Integrator provider guide](https://github.com/Handriantog/My-Own-LLM-Integrator/blob/main/docs/providers.md) describes provider-specific requirements.
+
+The two backends are selected independently. `LLM_BACKEND=openai` enables the original API-key model path; `CONVERSATION_BACKEND=intelligence` enables the original hosted conversation path. Neither is selected automatically when an old key is present, and failures do not silently fall back to hosted services. The sibling Integrator source checkout is not required to run Dots; changes there need a package update before this app uses them.
 
 ## Get started
 
-Use **Node.js 24** and **npm**:
+Install **Node.js 24+**, **Docker with Compose**, **uv**, and a supported AI CLI. Log in to that CLI with your subscription account (Codex is the default).
 
 ```sh
-git clone https://github.com/CopilotKit/OpenDots.git
-cd OpenDots
+git clone https://github.com/Handriantog/My-Own-Dots.git
+cd My-Own-Dots
 npm ci
-cp .env.example .env
+npm run setup:local
+npm run conversations:up
+npm run setup:llm
+npm run llm:check
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173**. You can create Spaces, write pages, and configure Dots before connecting services. To start chatting, connect an Intelligence project and a model.
+Open **http://127.0.0.1:5173**. `setup:local` generates `.env` and database credentials; existing nonempty settings are preserved. The configuration check confirms the CLI is available; a real chat confirms authentication and model access.
 
-Choose where to store conversations before connecting. For local Docker evaluation, follow [Local Intelligence evaluation](docs/SETUP.md#local-intelligence-evaluation). For hosted Intelligence, sign in and select or create a project in the `OpenDots` folder:
-
-```sh
-npx copilotkit@latest login
-npx copilotkit@latest project select
-```
-
-`project select` writes a project key to `.env` as `CPK_INTELLIGENCE_API_KEY`. Keep the generated `CPK_TELEMETRY_ID` with that key so SDK usage can resolve to your Intelligence account. Then add `OPENAI_API_KEY` and `OPENAI_MODEL` to `.env` and restart `npm run dev`.
-
-Do not run `copilotkit onboard` in this folder. OpenDots already contains its CopilotKit integration, and onboarding adds a second, generic one.
-
-See [Setup](docs/SETUP.md) for configuration, Slack, calls, the browser service, and Docker.
+Set `LLM_PROVIDER` to choose another integrator provider and optionally set `LLM_MODEL`. Restart after changes. See [Local AI setup](docs/LOCAL-AI.md) for supported configuration, migration, backups, troubleshooting and optional services.
 
 ## Data and privacy
 
-Conversation messages, tool calls, and run events are persisted in the configured Intelligence deployment. The hosted setup sends them to CopilotKit's cloud; the local evaluation setup uses Intelligence on your machine. OpenDots has no standalone SQLite conversation store. SQLite stores pages, workspace metadata, and thread bindings separately.
+The local Docker volume stores conversations, tool results and run events. SQLite stores pages, settings, explicit memories and schedules. Back up both stores and keep `OWNER_ID` stable. Stopping Docker preserves its volume; deleting the volume deletes conversation history.
 
-The configured model provider receives conversation context, including authorized page content and tool results. Local Intelligence does not make a remote model local: configure the app's model and the Automatic Learning model separately. Public-web research sends queries and selected URLs to Parallel by default; set `WEB_SEARCH_PROVIDER=disabled` to disable those tools. When connected apps are enabled, tool arguments and results pass through Composio and the app provider. Speech and messaging integrations send data to their configured providers when used.
+The selected provider receives conversation context and authorized tool results. Web research is disabled by default. Explicitly selecting Parallel sends queries and selected URLs to that service. Composio, voice, managed Slack and computer services only apply when configured. Local mode disables telemetry by default with `DO_NOT_TRACK=1`.
 
-CopilotKit SDK telemetry collects usage metadata separately from conversation persistence. OpenDots also records bounded browser setup stages and first successful assistant activation with a random installation ID; the same opt-out flags disable this tracking and purge pending setup events. See [browser setup telemetry](docs/SETUP-TELEMETRY.md). Runtime events are tagged `OpenDots`; see [signup and usage tracking](docs/TELEMETRY.md). Set `COPILOTKIT_TELEMETRY_DISABLED=true` or `DO_NOT_TRACK=1` to opt out; see [CopilotKit telemetry](https://docs.copilotkit.ai/telemetry). Review [CopilotKit's privacy policy](https://www.copilotkit.ai/privacy-policy) and the policies and retention settings of each service you configure. Installing or renewing local Intelligence still requires CopilotKit sign-in and internet access.
+Existing hosted conversation history is not automatically copied into the local database. Keep the old backend configuration to access or export it. The original [Intelligence deployment instructions](docs/SETUP.md#hosted-intelligence) remain available for explicit compatibility mode.
 
 ## Features
 
-| Area                       | Included                                                                                                                                |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Spaces and Specialist Dots | Saved names, role instructions, and per-Dot research and memory permissions                                                             |
-| Pages                      | Searchable library, visual editor, slash commands, autosave, and revision checks                                                        |
-| Conversations              | React SDK chat and Threads integration, page-specific conversations, and source links                                                   |
-| Slack                      | Managed Channels SDK declaration with workspace and user allowlists                                                                     |
-| Calls                      | WebRTC speech, delegated compute, bounded sessions, hangup, and timeline receipts                                                       |
-| Background work            | Scheduled server-side turns in their original conversation, with pause and retry controls                                               |
-| Browser                    | Separate read-only public-page service with page capture and navigation limits                                                          |
-| Dot computers              | Per-Dot browser profiles, files, shell, takeover, permissions, and action records through OpenBot                                       |
-| Connections                | Per-Dot MCP servers, Composio connected apps, per-tool access, and owner approval for MCP write actions                                 |
-| Appearance                 | System, light, and dark themes; dark colors are derived at build time from the light styles                                             |
-| Memory                     | User-managed preferences that permitted Dots can use                                                                                    |
-| Automatic Learning         | Per-Dot Learning containers, conversation evidence routing, and published-skill delivery; see [setup](docs/SETUP.md#automatic-learning) |
-| Deployment                 | Local Node setup and separate application/browser containers                                                                            |
+| Area                       | Included                                                                                                                           |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Spaces and Specialist Dots | Saved names, role instructions, and per-Dot research and memory permissions                                                        |
+| Pages                      | Searchable library, visual editor, slash commands, autosave, and revision checks                                                   |
+| Conversations              | React SDK chat and Threads integration, page-specific conversations, and source links                                              |
+| Slack                      | Optional Intelligence backend only: managed Channels with workspace and user allowlists                                            |
+| Calls                      | WebRTC speech, delegated compute, bounded sessions, hangup, and timeline receipts                                                  |
+| Background work            | Scheduled server-side turns in their original conversation, with pause and retry controls                                          |
+| Browser                    | Separate read-only public-page service with page capture and navigation limits                                                     |
+| Dot computers              | Per-Dot browser profiles, files, shell, takeover, permissions, and action records through OpenBot                                  |
+| Connections                | Per-Dot MCP servers, Composio connected apps, per-tool access, and owner approval for MCP write actions                            |
+| Appearance                 | System, light, and dark themes; dark colors are derived at build time from the light styles                                        |
+| Memory                     | User-managed preferences that permitted Dots can use                                                                               |
+| Automatic Learning         | Optional Intelligence backend only: per-Dot containers and published-skill delivery; see [setup](docs/SETUP.md#automatic-learning) |
+| Deployment                 | Host app and subscription CLI, Docker PostgreSQL, optional computer/browser containers                                             |
 
 Scheduled tasks run in their original conversation. If a worker stops or its lease expires during a run, OpenDots marks that run **Interrupted** and waits for an explicit retry. Review its pages and computer actions, then use **Retry after review** when appropriate. Completed effects may already be present even when a run has no final result.
 
-Local checks cover setup, persistence, permissions, SDK failure handling, and browser isolation. Automated tests use service fixtures. **Live Intelligence, model responses, and page-context chat were verified on September 29, 2026.** Live OpenBot computer browsing, file creation, shell verification, and file persistence across stop/start were also verified locally. Live Realtime speech, call controls, and receipt persistence were verified locally on September 30, 2026. Slack and spoken compute delegation still need connected-service verification. See [recording notes](docs/demos/README.md) for the demonstrated flows and limits.
+Local checks cover setup, subscription tool decisions, durable conversation replay, permissions, SDK failure handling, and browser isolation. Automated inference uses fixtures, including the real npm/Python subprocess and SSE runtime with a dedicated PostgreSQL test database. **On October 16, 2026, a real Codex subscription completion succeeded; browser checks covered chat, page saving, history reload, and approving or declining drafts with fixture inference.** This does not establish live compatibility for every provider.
 
-Automatic Learning routing and skill delivery are configured locally. Cloud schedules, eligible-thread counts, and published-skill delivery still need connected-service verification. Skills require review and publication in Intelligence; existing conversations without a container are not enrolled retroactively.
+The following connected-service demos are inherited upstream verification: **Live Intelligence, model responses, and page-context chat were verified on September 29, 2026.** Live OpenBot computer browsing, file creation, shell verification, and file persistence across stop/start were also verified locally. Live Realtime speech, call controls, and receipt persistence were verified locally on September 30, 2026. Slack and spoken compute delegation still need connected-service verification. See [recording notes](docs/demos/README.md) for the demonstrated flows and limits.
+
+In optional Intelligence mode, Automatic Learning routing and skill delivery are configurable. Cloud schedules, eligible-thread counts, and published-skill delivery still need connected-service verification. Skills require review and publication in Intelligence; existing conversations without a container are not enrolled retroactively.
 
 This is a single-owner starting point. Shared editing, invitations, file uploads, and interactive page embeds are not included. Schedules are recurring instructions, not a complete goal or event-trigger system. Specialist Dots have separate roles and conversations; multi-Dot group conversations and automatic delegation are further work.
 
@@ -246,11 +236,11 @@ See [Contributing](CONTRIBUTING.md) for development guidance and [Security](SECU
 
 ## License
 
-[MIT](LICENSE).
+Original OpenDots code is [MIT](LICENSE). The `myown-llm-integrator` dependency is AGPL-3.0-only; see its [license and attribution](https://github.com/Handriantog/My-Own-LLM-Integrator#attribution-and-license). Other dependencies retain their licenses.
 
 ## Public-web research
 
-Parallel is selected by default in live research and Dot conversations. Ask a topic-only question to discover and read up to five sources, or supply URLs to extract them directly. Sources are saved with their links. A browser worker is not required for this research path; computer tools remain available for interactive work.
+Web research is disabled by default. Set `WEB_SEARCH_PROVIDER=parallel` to explicitly enable Parallel in live research and Dot conversations. Ask a topic-only question to discover and read up to five sources, or supply URLs to extract them directly. Sources are saved with their links. A browser worker is not required for this research path; computer tools remain available for interactive work.
 
 `WEB_SEARCH_PROVIDER=browser` preserves the existing URL-only browser reader, and `WEB_SEARCH_PROVIDER=disabled` disables these research tools. Workspace and Dot research permissions, pause and cancellation controls still apply. Sample research remains fictional and does not contact a provider.
 

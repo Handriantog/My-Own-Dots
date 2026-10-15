@@ -35,7 +35,7 @@ export function createShutdown(options: {
       };
       await Promise.race([
         Promise.all([
-          settle('Stopping Channels failed', options.stopPlatform),
+          settle('Stopping conversation services failed', options.stopPlatform),
           settle('Closing HTTP server failed', options.closeServer),
         ]),
         deadline,

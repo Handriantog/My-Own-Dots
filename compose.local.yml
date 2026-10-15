@@ -1,0 +1,20 @@
+name: my-own-dots-local
+services:
+  conversations:
+    image: postgres:17.6-bookworm
+    ports:
+      - '127.0.0.1:${LOCAL_POSTGRES_PORT:-5434}:5432'
+    environment:
+      POSTGRES_USER: dots
+      POSTGRES_DB: dots
+      POSTGRES_PASSWORD: ${LOCAL_POSTGRES_PASSWORD:?Run npm run setup:local first}
+    volumes:
+      - conversations-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U dots -d dots']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+volumes:
+  conversations-data:

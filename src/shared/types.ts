@@ -113,6 +113,9 @@ export interface CallReceipt {
   error: string | null;
 }
 export interface SetupStatus {
+  conversationBackend?: 'local' | 'intelligence';
+  llmBackend?: 'subscription' | 'openai';
+  llmProvider?: string;
   intelligence: boolean;
   model: boolean;
   browser: boolean;
