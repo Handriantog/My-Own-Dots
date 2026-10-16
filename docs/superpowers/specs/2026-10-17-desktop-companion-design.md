@@ -12,7 +12,7 @@ The owner confirmed these requirements during the design discussion:
 - Preserve the existing furry plush appearance. Use the blue character in `public/dots/blue.png` as the master visual reference, including its face, proportions, feet, arms, and headphones.
 - Freely explore the available desktop surfaces; do not restrict autonomous activity to a home corner.
 - Treat other applications' windows as physical playground surfaces. Support standing on their top edges, climbing their sides, and falling when support disappears.
-- Allow the user to click and drag Dot.
+- Allow the user to click and drag Dot with a visible pinching-hand pickup: grasp the plush fur, lift the body, and let its limbs dangle. The owner's reference shows a cat held at the upper back, with its body suspended below the grip.
 - Maintain a continuous body and identity. Ordinary movement must not teleport, snap between unrelated poses, slide planted feet, or restart animations unpredictably.
 - Provide appropriate sound for meaningful interactions and physical events, including falls and bumps. Keep the current audition assets provisional; improve their roughness later.
 - Design for Windows and Linux eventually, while shipping and validating macOS first.
@@ -27,7 +27,7 @@ Launching the desktop application starts a single instance and introduces Dot wi
 
 The main experience is the character itself. It chooses reachable destinations, looks toward them, travels, and takes short breaks. Free roaming includes the middle of the screen through climbs, jumps, and falls; it does not mean walking unsupported through empty space. The screen's usable bottom edge is the fallback floor. With no eligible windows, Dot explores that floor and performs idle activities.
 
-Dot notices a nearby pointer and pauses destination selection so it is easy to interact with. It completes a safe stopping motion instead of freezing halfway through an unsupported jump. Clicking produces a brief acknowledgment. Pressing and moving beyond a small drag threshold picks it up. Releasing it in midair resumes gravity. A drag does not also trigger the click reaction.
+Dot notices a nearby pointer and pauses destination selection so it is easy to interact with. It completes a safe stopping motion instead of freezing halfway through an unsupported jump. Clicking produces a brief acknowledgment. Pressing and moving beyond a small drag threshold closes a hand cursor into a visible pinch, gathers the fur at the grip, and lifts Dot into a dangling pose. Releasing it in midair resumes gravity. A drag does not also trigger the click reaction.
 
 The menu-bar utility provides color selection, effects volume, mute, pause/resume roaming, visibility/recovery, tracking status, and Quit. This is an operational control surface; the character's future assistant popup is deferred. Resume or recovery does not summon an already visible Dot to a different position. A hidden or offscreen Dot returns through a visible arrival sequence.
 
@@ -81,7 +81,23 @@ The requirement applies to normal application use and fullscreen application win
 
 Use a compact window around the character rather than capturing input over the entire desktop. Transparent portions pass clicks to the underlying application. The character's opaque body and a small forgiving hit margin receive its interactions. Refresh hit testing when Dot moves under a stationary pointer, not only on mouse movement. Once a drag starts, hold input capture through release so crossing transparent pixels or leaving the original bounds cannot drop the drag unexpectedly.
 
-The drag threshold starts at 4 logical pixels. Preserve the point where the user grabbed the body so pickup does not jump to its center. While held, pointer movement owns position; the body and feet may sway around the grab anchor. On release, use bounded recent pointer velocity, then gravity. Release over a reachable support may settle directly when contact is valid. Losing capture safely releases Dot once. Native capture behavior and inactive-window clicks must be demonstrated on macOS before the interaction is accepted.
+The drag threshold starts at 4 logical pixels. Preserve the point where the user grabbed the body so pickup does not jump to its center. While held, the pointer controls the pinch anchor; the torso and limbs respond beneath that anchor rather than moving as a rigid image. On release, use bounded recent pointer velocity, then gravity. Release over a reachable support may settle directly when contact is valid. Losing capture safely releases Dot once. Native capture behavior and inactive-window clicks must be demonstrated on macOS before the interaction is accepted.
+
+### Pinching hand and suspended body
+
+The pickup should read as a hand lifting a soft creature by a small fold of its upper-body fur, matching the posture of the owner's cat reference. Use an original small hand graphic as the interaction cursor, with an open/reaching pose and a closed thumb-and-finger pinch. The reference guides the gesture and suspended posture; it is not an application asset.
+
+Use this continuous sequence:
+
+1. **Approach:** over the draggable silhouette, show the open hand and keep the ordinary desktop pointer outside it. Make the upper-body fur the visually preferred grip region, without requiring a precise pixel hit.
+2. **Pinch:** once dragging is recognized, close the fingers around the actual grabbed point. Gather a small local fur fold between the fingertips and add slight compression around it. Keep the contact point attached to the cursor throughout the transition. Begin this pose from the current action rather than resetting Dot upright.
+3. **Lift:** transfer support from the floor or window to the pinch anchor. Stretch the soft body slightly below the grip; arms and feet relax into a hanging pose, with a brief surprised expression. Keep the face, headphones, and overall proportions recognizable. Fingers visually overlap the gripped fur to make the contact legible.
+4. **Carry:** hold the fur patch firmly at the pointer while the body lags, tilts, and swings gently beneath it in response to movement. Limbs have smaller secondary movement. When the pointer stops, oscillation decays into a relaxed hanging pose. The body does not remain in its walking or standing animation while carried.
+5. **Release:** open the fingers, ease the fur fold back to its rest shape, and restore the appropriate cursor. The body's current pose and bounded velocity flow into settling or falling, followed by the existing landing recovery.
+
+The upper-body grip produces the reference's upright dangling posture. Off-center grabs must preserve their actual contact point and adapt the pose; do not teleport the body or warp the OS pointer to a canonical upper-back hotspot. Keep deformation and rotation within authored limits so an unusual grip does not tear the mesh, invert the face, stretch the headphones, or make the character unrecognizable. Pickup/release pose blends start around 100–160 ms, and carry sway is damped and bounded; these are tuning defaults, not delays before responding to pointer movement.
+
+Display one visible pointer representation during the interaction. A rendered animated hand must replace the arrow only within the companion's interaction/capture lifetime. It must not block clicks on other apps when no drag is active. Release, canceled capture, hide, screen lock, renderer failure, and quit all restore the normal system cursor and clear the hand overlay. Test cursor restoration and the fingertip hotspot at Retina/non-Retina scale and across monitors. If native animated cursors cannot express the gesture reliably, render the hand alongside Dot during capture while keeping the same anchor contract; do not silently reduce the interaction to a generic move cursor.
 
 ## Native observations and playground surfaces
 
@@ -137,13 +153,13 @@ Use explicit phases for anticipation, execution, contact, and recovery. Some act
 
 The animation controller owns one base physical action plus compatible expression and secondary-motion layers. Do not let competing timers each own an animation. Blend joint transforms and expression values over short authored transitions, starting from the actual current pose. Preserve footfall phase when changing speed. Clamp procedural deformations to the rig's designed range and damp secondary motion so it cannot accumulate energy or jitter indefinitely. Keep acceleration, carry-release thresholds, jump reach, contact tolerances, and transition durations in a named movement profile. Tune that profile against recorded scenarios; do not bury inconsistent per-action movement rules in rendering code.
 
-Required action families are arrival, idle/attention, walking, turning, jumping, grabbing, climbing, hanging, pulling up, slipping, falling, soft/harder landing, bump recoil, pickup/carry/release, sitting/standing, stretching, yawning, sleeping, and waking. Mirroring may share motion where the artwork remains consistent; turning between front and side presentation needs a deliberate transition. Listening/thinking/speaking animations belong to the later assistant integration.
+Required action families are arrival, idle/attention, walking, turning, jumping, grabbing, climbing, hanging, pulling up, slipping, falling, soft/harder landing, bump recoil, pinch/lift/dangling carry/release, sitting/standing, stretching, yawning, sleeping, and waking. The hand's open/pinch/release poses and Dot's grip deformation form one coordinated interaction. Mirroring may share motion where the artwork remains consistent; turning between front and side presentation needs a deliberate transition. Listening/thinking/speaking animations belong to the later assistant integration.
 
 ## Plush artwork and customization
 
 Create one master layered character asset from the existing plush identity. Separate body, arms, feet, eyes, mouth, headphones, shading, and recolor masks. Fill hidden areas needed when limbs move; the flattened source image does not contain all of those surfaces. Keep the same facial landmarks, silhouette, fur scale, proportions, and accessory placement across poses and facing views.
 
-The initial renderer uses layered PNG textures, a compact skeleton, modest mesh deformation for soft body movement, and authored action curves. The character package contains texture references, dimensions, pivots, rest transforms, parent/joint relationships, contact anchors, permitted deformation ranges, action phases, contact markers, and facing metadata. Reject incomplete packages rather than substituting mismatched frames during play.
+The initial renderer uses layered PNG textures, a compact skeleton, modest mesh deformation for soft body movement, and authored action curves. The character package contains texture references, dimensions, pivots, rest transforms, parent/joint relationships, contact anchors, permitted deformation ranges, action phases, contact markers, and facing metadata. Include a deformable pinch region, hanging limb poses, bounded body stretch, and separate hand-cursor artwork with a consistent fingertip hotspot. Keep the hand's artwork and colors independent of Dot's body-color customization. Reject incomplete packages rather than substituting mismatched frames during play.
 
 Use neutral shaded body artwork with masks or a color-mapping shader that preserves texture and highlights. Apply customization to body and limbs together; keep eyes, mouth, and headphones out of the body mask. A global hue rotation of the flattened image is not the customization method. Validate dark, light, and saturated colors so fur detail and feature contrast remain legible. No new animation set is generated when the color changes.
 
@@ -160,6 +176,8 @@ Use the Web Audio API with predecoded local assets and a persistent effects bus.
 Each event includes a unique identifier, action/contact identity, simulation timestamp, intensity, position, and cancellation scope. Deduplicate before scheduling. Select variants without immediately repeating the last one. Keep pitch changes small enough to preserve one character identity. Master effects volume initially defaults to 40 percent, with immediate persistent mute and volume controls. Honor the selected system output and volume.
 
 Use a bounded four-voice mix with direct interaction and collision sounds above routine steps and rustles. Soft and hard landing clips are mutually exclusive, selected and scaled from impact strength. Fade interrupted sounds instead of cutting them abruptly. A falling cue starts once, is canceled on landing or pickup, and does not restart for each falling frame. Carry rustles require meaningful movement; attention and repeated contacts have cooldowns. Sleep has one settling breath and no repeating snore.
+
+For the pinching interaction, emit the existing pickup effect once when the grip becomes established, movement-dependent carry rustles during suspension, and the release effect once when the grip opens. Hand animation frames and a stationary held pose do not retrigger those sounds. Use the provisional pack for timing; soften the grip and carry effects during the already deferred sound-refinement pass.
 
 Position sound gently across the stereo field according to the character's location on its current monitor. Smooth gain and pan changes. Clear pending events during sleep, pause, hidden state, shutdown, and invalid-scene recovery so stale sounds cannot play afterward. Muting does not affect behavior. Measure synchronization on the actual output device; Bluetooth latency is outside a zero-latency guarantee.
 
@@ -200,23 +218,25 @@ Future chat, voice, and agent task states should enter through a narrow companio
 
 Use pure simulation tests with seeded intentions and scripted window snapshots, plus native integration checks and recorded visual review. A mock scene can prove physics rules but cannot prove macOS stacking, native window tracking, drag capture, packaging, or pleasant animation.
 
-| Area                | Acceptance evidence                                                                                                                                      |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Launch              | One Dot starts without the web server, Docker, inference, or network access; a second launch creates no duplicate                                        |
-| Window priority     | Open/switch ordinary applications, maximize them, switch Spaces, and enter/leave fullscreen; Dot remains available without taking typing focus           |
-| Pointer handling    | Empty transparent regions click through; body clicks react once; drag preserves grab offset across window bounds and monitor transfer                    |
-| Playground geometry | Walk/climb only exposed eligible edges; overlapping, moved, resized, closed, and minimized windows update support correctly                              |
-| Continuous motion   | Record walking, stopping, turning, climbing, hanging, release, falling, and landing; no unexplained root jumps or abrupt animation resets                |
-| Contact quality     | Hands/feet remain anchored during contact and transitions; displacement after a stable snapshot is within 2 logical pixels at default size               |
-| Fast movement       | Fast falls and rapidly moved windows do not tunnel, drag Dot across the screen instantaneously, or create unlimited velocity                             |
-| Identity            | Neutral, front/side, and action poses retain the same face, proportions, fur texture, and accessories                                                    |
-| Color               | Change color during walking, holding, and climbing; preserve motion/contact state and protect facial/accessory colors                                    |
-| Audio               | Every cataloged interaction has a trigger; one impact gives one appropriate effect; cancellation, variants, cooldowns, pan, volume, and mute work        |
-| Audio feedback      | Rough effects remain explicitly provisional; later listening review compares softened assets on headphones and speakers                                  |
-| Recovery            | Permission denial/revocation, helper failure, sleep/wake, display removal, scene changes, and corrupt preferences follow their specified paths           |
-| Resources           | Profile a 30-minute session with 20 normal windows, including active movement and rest; no unbounded allocation growth or accumulating audio voices      |
-| Packaging           | Launch the installed app outside the source checkout; verify bundled assets/helper, authorization behavior, clean quit, and each advertised architecture |
-| Existing app        | Existing web tests, typecheck, lint, and build still pass when desktop code and packaging are added                                                      |
+| Area                | Acceptance evidence                                                                                                                                                                   |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Launch              | One Dot starts without the web server, Docker, inference, or network access; a second launch creates no duplicate                                                                     |
+| Window priority     | Open/switch ordinary applications, maximize them, switch Spaces, and enter/leave fullscreen; Dot remains available without taking typing focus                                        |
+| Pointer handling    | Empty transparent regions click through; body clicks react once; drag preserves grab offset across window bounds and monitor transfer                                                 |
+| Pinching pickup     | Hand closes around a visible fur fold; upper-body pickup suspends torso and dangling limbs; stopping the pointer lets sway decay; release blends into existing physics without a snap |
+| Cursor recovery     | One visible cursor with an aligned fingertip hotspot; normal pointer returns on release, capture loss, hide, lock, renderer failure, and quit, including across display scales        |
+| Playground geometry | Walk/climb only exposed eligible edges; overlapping, moved, resized, closed, and minimized windows update support correctly                                                           |
+| Continuous motion   | Record walking, stopping, turning, climbing, hanging, release, falling, and landing; no unexplained root jumps or abrupt animation resets                                             |
+| Contact quality     | Hands/feet remain anchored during contact and transitions; displacement after a stable snapshot is within 2 logical pixels at default size                                            |
+| Fast movement       | Fast falls and rapidly moved windows do not tunnel, drag Dot across the screen instantaneously, or create unlimited velocity                                                          |
+| Identity            | Neutral, front/side, and action poses retain the same face, proportions, fur texture, and accessories                                                                                 |
+| Color               | Change color during walking, holding, and climbing; preserve motion/contact state and protect facial/accessory colors                                                                 |
+| Audio               | Every cataloged interaction has a trigger; one impact gives one appropriate effect; cancellation, variants, cooldowns, pan, volume, and mute work                                     |
+| Audio feedback      | Rough effects remain explicitly provisional; later listening review compares softened assets on headphones and speakers                                                               |
+| Recovery            | Permission denial/revocation, helper failure, sleep/wake, display removal, scene changes, and corrupt preferences follow their specified paths                                        |
+| Resources           | Profile a 30-minute session with 20 normal windows, including active movement and rest; no unbounded allocation growth or accumulating audio voices                                   |
+| Packaging           | Launch the installed app outside the source checkout; verify bundled assets/helper, authorization behavior, clean quit, and each advertised architecture                              |
+| Existing app        | Existing web tests, typecheck, lint, and build still pass when desktop code and packaging are added                                                                                   |
 
 Performance goals are unmeasured targets: 60 fps active presentation, p95 render-frame work below 16.7 ms, fresh native geometry applied within 100 ms p95 during ordinary window movement, and less than 50 ms visible-to-audible event skew on the built-in or wired output. Measure host, renderer, GPU, and helper resource use together. Report the test machine and observed CPU/memory figures rather than inventing a universal footprint budget. Reduce polling and rendering when resting or hidden without discontinuities on resume.
 
