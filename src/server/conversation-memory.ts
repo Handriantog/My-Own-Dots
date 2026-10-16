@@ -49,6 +49,8 @@ export interface SourceRecord {
   text: string;
   role: string;
   createdAt: number;
+  toolName?: string;
+  workflowComplete?: boolean;
 }
 export interface EpisodePage {
   matches: SourceRecord[];
@@ -61,6 +63,8 @@ interface SourceRow {
   text: string;
   role: string;
   created_at: Date;
+  tool_name?: string;
+  workflow_complete?: boolean;
 }
 /** Bound threads are the authority. PG rows alone never establish a grant. */
 export class ConversationMemory {
@@ -92,11 +96,12 @@ export class ConversationMemory {
   async indexRun(runId: string): Promise<void> {
     const rows = await this.pg.query<{
       thread_id: string;
+      input: { messages: Message[] };
       evidence_messages: Message[];
       evidence_guard: EvidenceGuard;
       created_at: Date;
     }>(
-      `SELECT r.thread_id,r.evidence_messages,r.evidence_guard,r.created_at FROM local_ai_runs r
+      `SELECT r.thread_id,r.input,r.evidence_messages,r.evidence_guard,r.created_at FROM local_ai_runs r
        WHERE r.owner_id=$1 AND r.run_id=$2 AND r.thread_id=ANY($3::text[]) AND r.status<>'running'
        AND r.evidence_guard IS NOT NULL AND r.provenance_complete=true
        AND NOT EXISTS(SELECT 1 FROM memory_index_runs i WHERE i.owner_id=r.owner_id AND i.thread_id=r.thread_id AND i.run_id=r.run_id)`,
@@ -143,6 +148,15 @@ export class ConversationMemory {
             hash: source.contentHash,
             start,
             text: text.slice(start, start + 4000),
+            toolName:
+              message.role === 'tool'
+                ? [...run.input.messages, ...run.evidence_messages]
+                    .flatMap((m) =>
+                      m.role === 'assistant' ? (m.toolCalls ?? []) : [],
+                    )
+                    .find((call) => call.id === message.toolCallId)?.function
+                    .name
+                : null,
             role: message.role,
             source,
           });
@@ -151,8 +165,8 @@ export class ConversationMemory {
       // One statement atomically inserts all chunks and the indexing receipt.
       await this.pg.query(
         `WITH inserted AS (
-        INSERT INTO memory_episode_chunks(owner_id,source_id,thread_id,run_id,message_id,content_hash,start_offset,text,role,source,created_at)
-        SELECT $1,c->>'id',$2,$3,c->>'messageId',c->>'hash',(c->>'start')::integer,c->>'text',c->>'role',c->'source',$5::timestamptz
+        INSERT INTO memory_episode_chunks(owner_id,source_id,thread_id,run_id,message_id,content_hash,start_offset,text,role,source,created_at,tool_name)
+        SELECT $1,c->>'id',$2,$3,c->>'messageId',c->>'hash',(c->>'start')::integer,c->>'text',c->>'role',c->'source',$5::timestamptz,c->>'toolName'
         FROM jsonb_array_elements($4::jsonb) c ON CONFLICT DO NOTHING
       ) , receipt AS (INSERT INTO memory_index_runs VALUES ($1,$2,$3,1) ON CONFLICT DO NOTHING RETURNING 1)
       INSERT INTO memory_index_meta VALUES ($1,1) ON CONFLICT(owner_id) DO UPDATE SET revision=memory_index_meta.revision+1`,
@@ -254,6 +268,8 @@ export class ConversationMemory {
       text: row.text,
       role: row.role,
       createdAt: row.created_at.getTime(),
+      toolName: row.tool_name ?? undefined,
+      workflowComplete: row.workflow_complete === true,
     };
   }
   async searchEpisodes(query: EpisodeQuery): Promise<EpisodePage> {
@@ -267,7 +283,7 @@ export class ConversationMemory {
     if (!/[\p{L}\p{N}]/u.test(query.query) || !threads.length)
       return { matches: [], coverage };
     const result = await this.pg.query<SourceRow>(
-      `SELECT source_id,source,text,role,created_at FROM memory_episode_chunks
+      `SELECT source_id,source,text,role,created_at,tool_name,(SELECT e.workflow_complete FROM memory_evidence e WHERE e.owner_id=memory_episode_chunks.owner_id AND e.thread_id=memory_episode_chunks.thread_id AND e.run_id=memory_episode_chunks.run_id) AS workflow_complete FROM memory_episode_chunks
       WHERE owner_id=$1 AND thread_id=ANY($2::text[]) AND search @@ websearch_to_tsquery('simple',$3)
       AND ($4::timestamptz IS NULL OR created_at >= $4) AND ($5::timestamptz IS NULL OR created_at <= $5)
       ORDER BY created_at DESC,source_id LIMIT $6 OFFSET $7`,
@@ -294,7 +310,7 @@ export class ConversationMemory {
   }
   async sourceById(id: string): Promise<SourceRecord | undefined> {
     const result = await this.pg.query<SourceRow>(
-      'SELECT source_id,source,text,role,created_at FROM memory_episode_chunks WHERE owner_id=$1 AND source_id=$2 AND thread_id=ANY($3::text[])',
+      'SELECT source_id,source,text,role,created_at,tool_name,(SELECT e.workflow_complete FROM memory_evidence e WHERE e.owner_id=memory_episode_chunks.owner_id AND e.thread_id=memory_episode_chunks.thread_id AND e.run_id=memory_episode_chunks.run_id) AS workflow_complete FROM memory_episode_chunks WHERE owner_id=$1 AND source_id=$2 AND thread_id=ANY($3::text[])',
       [this.ownerId, id, this.threads()],
     );
     const row = result.rows[0];

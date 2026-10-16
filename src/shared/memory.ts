@@ -90,3 +90,49 @@ export interface MemoryPage {
   items: MemoryItem[];
   nextCursor?: string;
 }
+
+const dreamFields = {
+  title: z.string().min(1).max(120),
+  text: z.string().min(1).max(12000),
+  sourceIds: z.array(memoryIdSchema).min(1).max(20),
+  support: z.enum(['explicit_user', 'inferred']),
+  justification: z.string().min(1).max(1000),
+  retention: z.enum(['stable', 'temporary']),
+  expiresAt: z.number().int().nonnegative().nullable(),
+};
+const targetFields = {
+  targetId: memoryIdSchema,
+  expectedRevision: z.number().int().positive(),
+};
+export const dreamChangeInputSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('create'), ...dreamFields }).strict(),
+  z.object({ kind: z.literal('skill-candidate'), ...dreamFields }).strict(),
+  z
+    .object({ kind: z.literal('update'), ...dreamFields, ...targetFields })
+    .strict(),
+  z
+    .object({ kind: z.literal('supersede'), ...dreamFields, ...targetFields })
+    .strict(),
+  z
+    .object({ kind: z.literal('expire'), ...dreamFields, ...targetFields })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('merge'),
+      ...dreamFields,
+      ...targetFields,
+      duplicates: z.array(z.object(targetFields).strict()).min(1).max(10),
+    })
+    .strict(),
+]);
+export type DreamChangeInput = z.infer<typeof dreamChangeInputSchema>;
+export type DreamChange = DreamChangeInput & {
+  sources: SourceRef[];
+  explicitUser: boolean;
+};
+export interface DreamProposal {
+  changes: DreamChange[];
+  evidence: SourceRef[];
+  noChangeReason?: string;
+}
+export type PublicationPolicy = 'hybrid' | 'review_all';

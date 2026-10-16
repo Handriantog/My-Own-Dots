@@ -14,6 +14,7 @@ export async function initializeConversationMemorySchema(pg: MemoryDatabase) {
       PRIMARY KEY(owner_id,source_id),
       FOREIGN KEY(owner_id,thread_id,run_id) REFERENCES local_ai_runs(owner_id,thread_id,run_id) ON DELETE CASCADE
     );
+    ALTER TABLE memory_episode_chunks ADD COLUMN IF NOT EXISTS tool_name text;
     CREATE INDEX IF NOT EXISTS memory_episodes_search ON memory_episode_chunks USING gin(search);
     CREATE INDEX IF NOT EXISTS memory_episodes_thread ON memory_episode_chunks(owner_id,thread_id,created_at,source_id);
     CREATE TABLE IF NOT EXISTS memory_jobs (
