@@ -17,6 +17,7 @@ import {
 /** Curated memory is owner-scoped. The workspace owns this connection. */
 export class MemoryStore {
   private depth = 0;
+  private pinValidator?: (item: MemoryItem) => void;
   constructor(
     private db: DatabaseSync,
     readonly ownerId: string,
@@ -130,7 +131,19 @@ export class MemoryStore {
         .get(this.ownerId)?.value ?? 0,
     );
   }
+  setPinValidator(validate: (item: MemoryItem) => void) {
+    this.pinValidator = validate;
+  }
+  pinned(): MemoryItem[] {
+    return this.db
+      .prepare(
+        "SELECT value FROM memory_items WHERE ownerId=? AND status='active' AND json_extract(value,'$.pinned')=1",
+      )
+      .all(this.ownerId)
+      .map((row) => JSON.parse(String(row.value)) as MemoryItem);
+  }
   private save(item: MemoryItem) {
+    this.pinValidator?.(item);
     this.db
       .prepare(
         `INSERT INTO memory_items VALUES (?,?,?,?,?,?,?,?,?)

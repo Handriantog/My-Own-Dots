@@ -1,3 +1,6 @@
+import type { MemoryRecall } from './memory-recall.js';
+import type { ContextBuilder, ContextFrame } from './context-builder.js';
+import { memoryTools } from './memory-tools.js';
 import type { EvidenceGuard } from '../shared/memory.js';
 import { parallelSources } from './parallel.js';
 import { pageReviewTool } from '../shared/page-review.js';
@@ -59,6 +62,7 @@ export class DotAgent extends AbstractAgent {
     private dotId: string,
     private channel = false,
     private setupTelemetry?: SetupTelemetry,
+    private memoryServices?: { recall: MemoryRecall; context: ContextBuilder },
   ) {
     super({ agentId: dotId });
   }
@@ -70,6 +74,7 @@ export class DotAgent extends AbstractAgent {
       this.dotId,
       this.channel,
       this.setupTelemetry,
+      this.memoryServices,
     );
   }
   abortRun() {
@@ -339,15 +344,32 @@ export class DotAgent extends AbstractAgent {
         );
         const pageContext = pages.context();
         const memories =
-          initialSettings.memoryAllowed && dot.memoryAllowed
+          !this.memoryServices &&
+          initialSettings.memoryAllowed &&
+          dot.memoryAllowed
             ? this.store.memories().map((memory) => memory.text)
             : [];
+        const frame: ContextFrame = {
+          ownerId: this.workspace.ownerId,
+          dotId: dot.id,
+          threadId: input.threadId,
+          runId: input.runId,
+          canonicalMessages: input.messages,
+        };
         const adapter =
           this.config.llmBackend === 'subscription'
             ? subscriptionText({
                 provider: this.config.llmProvider,
                 model: this.config.subscriptionModel,
                 timeoutMs: turnTimeLimitMs,
+                prepare: this.memoryServices
+                  ? (payload, signal) =>
+                      this.memoryServices!.context.project(
+                        payload,
+                        frame,
+                        signal,
+                      )
+                  : undefined,
               })
             : openaiCompatibleText(this.config.model!, {
                 apiKey: this.config.apiKey!,
@@ -388,6 +410,16 @@ export class DotAgent extends AbstractAgent {
             ...tools,
             ...appTools,
             ...pageTools(pages, recordPages),
+            ...(this.memoryServices &&
+            initialSettings.memoryAllowed &&
+            dot.memoryAllowed
+              ? memoryTools(
+                  this.memoryServices.recall,
+                  dot.id,
+                  check,
+                  controller.signal,
+                )
+              : []),
             ...(computer.configured
               ? computerTools(computer, dot.id, check, controller.signal)
               : []),
@@ -415,9 +447,16 @@ export class DotAgent extends AbstractAgent {
                     message.role !== 'system' && message.role !== 'developer',
                 ),
               });
+              frame.canonicalMessages = ctx.input.messages;
+              const canonicalChat = ctx.input.messages.filter((m) =>
+                ['user', 'assistant', 'tool'].includes(m.role),
+              );
               return chat({
                 adapter,
-                messages: converted.messages,
+                messages: converted.messages.map((message, index) => ({
+                  ...message,
+                  id: canonicalChat[index]?.id,
+                })),
                 systemPrompts: [
                   prompt,
                   ...converted.systemPrompts,
