@@ -1,3 +1,4 @@
+import type { ContextCheckpoint } from './context-compaction.js';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { Message } from '@ag-ui/core';
@@ -164,6 +165,64 @@ export class ConversationMemory {
         ],
       );
     }
+  }
+  async threadMessages(threadId: string): Promise<Message[]> {
+    this.workspace.requireThread(threadId);
+    const result = await this.pg.query<{ messages: Message[] }>(
+      'SELECT messages FROM local_ai_threads WHERE owner_id=$1 AND id=$2',
+      [this.ownerId, threadId],
+    );
+    if (!result.rows[0]) throw new Error('Conversation not found');
+    return result.rows[0].messages;
+  }
+  async latestCheckpoint(
+    threadId: string,
+  ): Promise<ContextCheckpoint | undefined> {
+    this.workspace.requireThread(threadId);
+    const result = await this.pg.query<{ value: ContextCheckpoint }>(
+      'SELECT value FROM memory_checkpoints WHERE owner_id=$1 AND thread_id=$2 ORDER BY covered_count DESC,created_at DESC LIMIT 1',
+      [this.ownerId, threadId],
+    );
+    const checkpoint = result.rows[0]?.value;
+    if (!checkpoint) return;
+    const prefix = (await this.threadMessages(threadId)).slice(
+      0,
+      checkpoint.sourceMessageIds.length,
+    );
+    return evidenceHash(prefix) === checkpoint.sourceHash
+      ? checkpoint
+      : undefined;
+  }
+  async saveCheckpoint(
+    checkpoint: ContextCheckpoint,
+    expectedPrefixHash: string,
+  ): Promise<boolean> {
+    const messages = await this.threadMessages(checkpoint.threadId);
+    const prefix = messages.slice(0, checkpoint.sourceMessageIds.length);
+    if (
+      checkpoint.sourceHash !== expectedPrefixHash ||
+      evidenceHash(prefix) !== expectedPrefixHash ||
+      !isDeepStrictEqual(
+        prefix.map((m) => m.id),
+        checkpoint.sourceMessageIds,
+      )
+    )
+      return false;
+    const result = await this.pg.query(
+      `INSERT INTO memory_checkpoints(owner_id,thread_id,id,covered_count,value)
+      SELECT $1,$2,$3,$4::integer,$5::jsonb FROM local_ai_threads t WHERE t.owner_id=$1 AND t.id=$2
+      AND (SELECT coalesce(jsonb_agg(m ORDER BY ordinal),'[]'::jsonb) FROM jsonb_array_elements(t.messages) WITH ORDINALITY AS x(m,ordinal) WHERE ordinal<=$4::integer)=$6::jsonb
+      ON CONFLICT(owner_id,id) DO UPDATE SET value=excluded.value RETURNING id`,
+      [
+        this.ownerId,
+        checkpoint.threadId,
+        checkpoint.id,
+        checkpoint.sourceMessageIds.length,
+        JSON.stringify(checkpoint),
+        JSON.stringify(prefix),
+      ],
+    );
+    return result.rowCount === 1;
   }
   async generation(): Promise<number> {
     const result = await this.pg.query(

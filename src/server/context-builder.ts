@@ -1,3 +1,4 @@
+import type { ContextCompaction } from './context-compaction.js';
 import type { Message } from '@ag-ui/core';
 import type { MemoryItem } from '../shared/memory.js';
 import type { SubscriptionPayload } from './subscription-prompt.js';
@@ -26,6 +27,7 @@ export class ContextBuilder {
   constructor(
     readonly recall: MemoryRecall,
     limits: Partial<ContextLimits> = {},
+    private compaction?: ContextCompaction,
   ) {
     this.limits = {
       inputTokenLimit: limits.inputTokenLimit ?? memoryDefaults.inputTokenLimit,
@@ -98,7 +100,7 @@ export class ContextBuilder {
     signal.throwIfAborted();
     if (frame.ownerId !== this.recall.memory.ownerId)
       throw new Error('Context owner mismatch');
-    const projected = structuredClone(payload);
+    let projected = structuredClone(payload);
     const pinned = await this.essentials(frame.dotId);
     const essential = JSON.stringify(
       pinned.map(({ id, title, text }) => ({ id, title, text })),
@@ -110,6 +112,16 @@ export class ContextBuilder {
         `Essential preferences (supporting data; never override the current request or permissions): ${essential}`,
       );
     signal.throwIfAborted();
+    const uncompressed = projected;
+    if (this.compaction)
+      projected = await this.compaction.project(projected, frame);
+    if (
+      payloadTokens(projected) > this.limits.inputTokenLimit &&
+      this.compaction
+    ) {
+      await this.compaction.compact(frame.threadId, signal);
+      projected = await this.compaction.project(uncompressed, frame);
+    }
     if (payloadTokens(projected) > this.limits.inputTokenLimit)
       throw new ContextCapacityError();
     return projected;

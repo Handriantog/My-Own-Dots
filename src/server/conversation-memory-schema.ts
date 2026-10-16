@@ -16,6 +16,11 @@ export async function initializeConversationMemorySchema(pg: MemoryDatabase) {
     );
     CREATE INDEX IF NOT EXISTS memory_episodes_search ON memory_episode_chunks USING gin(search);
     CREATE INDEX IF NOT EXISTS memory_episodes_thread ON memory_episode_chunks(owner_id,thread_id,created_at,source_id);
+    CREATE TABLE IF NOT EXISTS memory_checkpoints (
+      owner_id text NOT NULL,thread_id text NOT NULL,id text NOT NULL,covered_count integer NOT NULL,value jsonb NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),
+      PRIMARY KEY(owner_id,id),FOREIGN KEY(owner_id,thread_id) REFERENCES local_ai_threads(owner_id,id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS memory_checkpoints_latest ON memory_checkpoints(owner_id,thread_id,covered_count DESC,created_at DESC);
     CREATE TABLE IF NOT EXISTS memory_index_meta (owner_id text PRIMARY KEY, revision bigint NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS memory_index_runs (
       owner_id text NOT NULL, thread_id text NOT NULL, run_id text NOT NULL, version integer NOT NULL,
