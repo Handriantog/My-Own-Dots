@@ -7,7 +7,9 @@ import {
   PreferenceStore,
   parsePreferences,
   parsePreferenceChange,
+  restorePlacement,
 } from '../../src/desktop/host/preferences.js';
+import { display } from './fixtures.js';
 
 const dirs: string[] = [];
 afterEach(async () => {
@@ -16,6 +18,21 @@ afterEach(async () => {
   );
 });
 describe('desktop preferences', () => {
+  it('restores only a fully visible placement on a still-connected display', () => {
+    const prefs = {
+      ...DEFAULT_PREFERENCES,
+      displayId: '1',
+      placement: { x: 0.5, y: 1 },
+    };
+    expect(restorePlacement(prefs, [display])).toEqual({ x: 720, y: 850 });
+    expect(
+      restorePlacement({ ...prefs, placement: { x: 0, y: 1 } }, [display]),
+    ).toBeUndefined();
+    expect(
+      restorePlacement({ ...prefs, placement: { x: 0.5, y: 0 } }, [display]),
+    ).toBeUndefined();
+    expect(restorePlacement(prefs, [])).toBeUndefined();
+  });
   it('accepts only deliberate settings changes within supported ranges', () => {
     expect(parsePreferenceChange({ color: '#ffaa99', volume: 0.3 })).toEqual({
       color: '#ffaa99',

@@ -1,7 +1,12 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import type { Preferences } from '../shared/contracts.js';
+import {
+  BODY,
+  type DesktopDisplay,
+  type Point,
+  type Preferences,
+} from '../shared/contracts.js';
 
 export const DEFAULT_PREFERENCES: Preferences = {
   version: 1,
@@ -44,6 +49,26 @@ export function parsePreferenceChange(
 ): Partial<Preferences> | null {
   const parsed = changeSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
+}
+export function restorePlacement(
+  preferences: Preferences,
+  displays: DesktopDisplay[],
+): Point | undefined {
+  const display = displays.find((d) => d.id === preferences.displayId);
+  if (!display || !preferences.placement) return undefined;
+  const area = display.workArea;
+  const point = {
+    x: area.x + preferences.placement.x * area.width,
+    y: area.y + preferences.placement.y * area.height,
+  };
+  if (
+    point.x < area.x + BODY.width / 2 ||
+    point.x > area.x + area.width - BODY.width / 2 ||
+    point.y < area.y + BODY.height ||
+    point.y > area.y + area.height
+  )
+    return undefined;
+  return point;
 }
 export class PreferenceStore {
   private pending: Promise<void> = Promise.resolve();

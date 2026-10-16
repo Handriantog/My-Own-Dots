@@ -1,6 +1,6 @@
 # Desktop Dot companion
 
-Status: design ready for owner review. The desktop application, window tracking, character rig, physics, and runtime audio integration are not implemented. An original sound audition pack exists; the owner found some effects too rough and explicitly deferred refinement.
+Status: approved by the owner on October 17, 2026, with autonomous implementation authorized. The macOS application, Swift observer, physics, layered plush rig, pinch interaction, audio integration, controls, and local packaging are implemented on `feat/desktop-companion`. See [verification evidence](../../desktop/verification.md) for tested behavior and remaining native acceptance limits. The owner found some sound effects too rough and explicitly deferred refinement.
 
 ## Purpose and agreed scope
 
@@ -242,4 +242,4 @@ Performance goals are unmeasured targets: 60 fps active presentation, p95 render
 
 Implement in demonstrable slices: first establish the macOS overlay and native tracking with a diagnostic body; then complete surfaces, dragging, and continuous physics; then build and validate the master plush rig and its transitions; then integrate provisional sounds, customization, recovery, and packaging. The diagnostic body is not the final visual deliverable. The subsequent implementation plan must include native evidence and asset production, not only application scaffolding.
 
-The spec is ready for owner review before implementation planning. The first implementation plan should retain this scope and the explicit deferred sound refinement.
+The owner approved this design and authorized the [implementation plan](../plans/2026-10-17-desktop-companion.md) and subsequent build without another approval checkpoint. Sound refinement remains deferred.

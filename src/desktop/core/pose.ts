@@ -90,6 +90,8 @@ export function samplePose(
         };
   const lf = targetFoot(-1, l),
     rf = targetFoot(1, r);
+  const pat =
+    action === 'pat' ? Math.sin(Math.min(1, age / 0.45) * Math.PI) : 0;
   const continuousFoot = (from: Point, to: Point): Point => {
     const distance = Math.hypot(to.x - from.x, to.y - from.y);
     const amount = Math.min(1, (180 * dt) / (distance || 1));
@@ -99,12 +101,12 @@ export function samplePose(
     lean: mix(previous.lean, lean, easing),
     stretch: mix(
       previous.stretch,
-      held ? 1.09 : sitting ? 0.83 : 1 - landing * 0.12,
+      held ? 1.09 : sitting ? 0.83 : 1 - landing * 0.12 - pat * 0.09,
       easing,
     ),
     squash: mix(
       previous.squash,
-      held ? 0.97 : sitting ? 1.08 : 1 + landing * 0.1,
+      held ? 0.97 : sitting ? 1.08 : 1 + landing * 0.1 + pat * 0.07,
       easing,
     ),
     gait: phase,

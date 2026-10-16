@@ -21,7 +21,11 @@ import { CompanionSimulation } from './core/simulation.js';
 import { hitTestRig } from './core/rig-model.js';
 import { buildWorld } from './core/world.js';
 import { HelperSupervisor } from './host/helper.js';
-import { PreferenceStore, parsePreferenceChange } from './host/preferences.js';
+import {
+  PreferenceStore,
+  parsePreferenceChange,
+  restorePlacement,
+} from './host/preferences.js';
 import { PresentationMailbox, validPointerInput } from './host/presentation.js';
 import type {
   DesktopDisplay,
@@ -88,20 +92,7 @@ async function start(): Promise<void> {
     }));
   let currentDisplays = displays();
   let world = buildWorld(null, currentDisplays, performance.now());
-  const savedDisplay = currentDisplays.find(
-    (d) => d.id === preferences.displayId,
-  );
-  const savedPoint =
-    savedDisplay && preferences.placement
-      ? {
-          x:
-            savedDisplay.workArea.x +
-            preferences.placement.x * savedDisplay.workArea.width,
-          y:
-            savedDisplay.workArea.y +
-            preferences.placement.y * savedDisplay.workArea.height,
-        }
-      : undefined;
+  const savedPoint = restorePlacement(preferences, currentDisplays);
   let simulation = new CompanionSimulation(world, Date.now(), savedPoint);
   let overlay: BrowserWindow;
   let settingsWindow: BrowserWindow | null = null;

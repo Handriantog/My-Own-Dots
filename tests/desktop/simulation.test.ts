@@ -189,5 +189,6 @@ describe('continuous companion simulation', () => {
     expect(actions.has('walk')).toBe(true);
     expect(actions.has('climb')).toBe(true);
     expect(actions.has('fall')).toBe(true);
+    expect(actions.has('pull_up')).toBe(true);
   });
 });

@@ -80,4 +80,24 @@ describe('continuous rig pose', () => {
       ),
     ).toBeLessThan(2);
   });
+  it('gives a click a visible soft acknowledgment without moving the feet', () => {
+    const pose = samplePose(
+      initialPose(),
+      {
+        action: 'pat',
+        age: 0.12,
+        speed: 0,
+        distance: 0,
+        facing: 1,
+        time: 1,
+        sway: 0,
+        reducedMotion: false,
+      },
+      0.1,
+    );
+    expect(pose.stretch).toBeLessThan(0.98);
+    expect(pose.squash).toBeGreaterThan(1.02);
+    expect(pose.leftFoot.y).toBe(0);
+    expect(pose.rightFoot.y).toBe(0);
+  });
 });
