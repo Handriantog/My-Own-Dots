@@ -195,3 +195,22 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
     }
   },
 );
+
+it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
+  'initializes multiple processes without reacquiring schema DDL locks',
+  async () => {
+    const stores = Array.from(
+      { length: 6 },
+      () =>
+        new PostgresConversations(
+          process.env.LOCAL_TEST_DATABASE_URL!,
+          randomUUID(),
+        ),
+    );
+    try {
+      await Promise.all(stores.map((store) => store.initialize()));
+    } finally {
+      await Promise.all(stores.map((store) => store.close()));
+    }
+  },
+);

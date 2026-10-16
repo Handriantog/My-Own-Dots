@@ -1,7 +1,21 @@
 import type { Pool } from 'pg';
 export type MemoryDatabase = Pick<Pool, 'query'>;
 export async function initializeConversationMemorySchema(pg: MemoryDatabase) {
+  const version = await pg.query(
+    "SELECT to_regclass('memory_schema_version') AS name",
+  );
+  if (version.rows[0]?.name) {
+    const installed = await pg.query(
+      'SELECT version FROM memory_schema_version WHERE version=1',
+    );
+    if (installed.rowCount) return;
+  }
+  // One query is one implicit transaction. Take the same base-table lock order
+  // as conversation writes, and serialize schema installers across processes.
   await pg.query(`
+    SELECT pg_advisory_xact_lock(1847765521);
+    LOCK TABLE local_ai_threads IN ACCESS EXCLUSIVE MODE;
+    LOCK TABLE local_ai_runs IN ACCESS EXCLUSIVE MODE;
     ALTER TABLE local_ai_runs ADD COLUMN IF NOT EXISTS evidence_guard jsonb;
     ALTER TABLE local_ai_runs ADD COLUMN IF NOT EXISTS prior_message_ids jsonb NOT NULL DEFAULT '[]';
     ALTER TABLE local_ai_runs ADD COLUMN IF NOT EXISTS evidence_messages jsonb NOT NULL DEFAULT '[]';
@@ -52,5 +66,7 @@ export async function initializeConversationMemorySchema(pg: MemoryDatabase) {
       PRIMARY KEY(owner_id,thread_id,run_id),
       FOREIGN KEY(owner_id,thread_id,run_id) REFERENCES local_ai_runs(owner_id,thread_id,run_id) ON DELETE CASCADE
     );
+    CREATE TABLE IF NOT EXISTS memory_schema_version(version integer PRIMARY KEY);
+    INSERT INTO memory_schema_version VALUES(1) ON CONFLICT DO NOTHING;
   `);
 }
