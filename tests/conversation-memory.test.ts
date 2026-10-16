@@ -3,7 +3,10 @@ import { Pool } from 'pg';
 import { expect, it } from 'vitest';
 import type { Message, RunAgentInput } from '@ag-ui/core';
 import { PostgresConversations } from '../src/server/local-conversations.js';
-import { ConversationMemory } from '../src/server/conversation-memory.js';
+import {
+  ConversationMemory,
+  evidenceHash,
+} from '../src/server/conversation-memory.js';
 import { WorkspaceStore } from '../src/server/workspace.js';
 import { pageAccess, pageTools } from '../src/server/page-tools.js';
 
@@ -71,6 +74,24 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
         ];
         await lease.finishRun(messages, {}, 'finished');
         await lease.release();
+        if (threadId === 'thread') {
+          const known = {
+            threadId,
+            runId: input.runId,
+            messageIds: ['u'],
+            contentHash: evidenceHash(input.messages[0]),
+            guard: {
+              originDotId: dot.id,
+              spaceIds: [page.spaceId],
+              pageIds: [page.id],
+            },
+            start: 0,
+            end: 23,
+          };
+          expect(await repository.readSource(known)).toMatchObject({
+            text: 'Remember launch SKU-001',
+          });
+        }
         await repository.indexRun(input.runId);
         await repository.indexRun(input.runId);
       }

@@ -1,3 +1,5 @@
+import type { RecallQuery } from './memory-recall.js';
+import type { RecallPrincipal } from './memory-access.js';
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import type { Memory } from '../shared/types.js';
@@ -38,6 +40,71 @@ export class MemoryStore {
       CREATE TABLE IF NOT EXISTS memory_settings (ownerId TEXT NOT NULL, dotId TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(ownerId,dotId));
       CREATE TABLE IF NOT EXISTS memory_meta (ownerId TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(ownerId,key));
     `);
+    const hasFts = db
+      .prepare("SELECT 1 FROM sqlite_master WHERE name='memory_fts'")
+      .get();
+    db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(itemId UNINDEXED,title,text);
+      CREATE TRIGGER IF NOT EXISTS memory_fts_insert AFTER INSERT ON memory_items BEGIN
+        INSERT INTO memory_fts VALUES(new.id,json_extract(new.value,'$.title'),json_extract(new.value,'$.text')); END;
+      CREATE TRIGGER IF NOT EXISTS memory_fts_update AFTER UPDATE ON memory_items BEGIN
+        DELETE FROM memory_fts WHERE itemId=old.id;
+        INSERT INTO memory_fts VALUES(new.id,json_extract(new.value,'$.title'),json_extract(new.value,'$.text')); END;
+      CREATE TRIGGER IF NOT EXISTS memory_fts_delete AFTER DELETE ON memory_items BEGIN DELETE FROM memory_fts WHERE itemId=old.id; END;`);
+    if (!hasFts)
+      db.exec(
+        "INSERT INTO memory_fts SELECT id,json_extract(value,'$.title'),json_extract(value,'$.text') FROM memory_items",
+      );
+  }
+  search(
+    query: RecallQuery,
+    principal: RecallPrincipal,
+    cursor?: string,
+    limit = 5,
+  ): MemoryPage {
+    const words = query.query.match(/[\p{L}\p{N}_]+/gu) ?? [];
+    if (!words.length) return { items: [] };
+    const offset = Number(cursor ?? 0);
+    if (!Number.isSafeInteger(offset) || offset < 0)
+      throw new Error('Invalid memory cursor');
+    const match = words
+      .map((word) => '"' + word.replaceAll('"', '""') + '"')
+      .join(' AND ');
+    const clauses = [
+      'memory_fts MATCH ?',
+      'm.ownerId=?',
+      "m.status='active'",
+      "(json_extract(m.value,'$.expiresAt') IS NULL OR json_extract(m.value,'$.expiresAt')>?)",
+      "(m.scopeKind='owner' OR (m.scopeKind='dot' AND m.scopeId=?) OR (m.scopeKind='space' AND m.scopeId IN (SELECT value FROM json_each(?))))",
+    ];
+    const args: SQLInputValue[] = [
+      match,
+      this.ownerId,
+      Date.now(),
+      principal.dotId,
+      JSON.stringify(principal.spaceIds),
+    ];
+    if (query.kinds) {
+      clauses.push('m.kind IN (SELECT value FROM json_each(?))');
+      args.push(JSON.stringify(query.kinds));
+    }
+    if (query.scope) {
+      clauses.push('m.scopeKind=? AND m.scopeId=?');
+      args.push(
+        query.scope.kind,
+        query.scope.kind === 'owner' ? '' : query.scope.id,
+      );
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT m.value FROM memory_fts JOIN memory_items m ON m.id=memory_fts.itemId WHERE ${clauses.join(' AND ')} ORDER BY bm25(memory_fts),m.id LIMIT ? OFFSET ?`,
+      )
+      .all(...args, limit + 1, offset);
+    return {
+      items: rows
+        .slice(0, limit)
+        .map((row) => JSON.parse(String(row.value)) as MemoryItem),
+      ...(rows.length > limit ? { nextCursor: String(offset + limit) } : {}),
+    };
   }
   atomic<T>(fn: () => T): T {
     if (this.depth) return fn();

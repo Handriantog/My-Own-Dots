@@ -16,6 +16,7 @@ export async function initializeConversationMemorySchema(pg: MemoryDatabase) {
     );
     CREATE INDEX IF NOT EXISTS memory_episodes_search ON memory_episode_chunks USING gin(search);
     CREATE INDEX IF NOT EXISTS memory_episodes_thread ON memory_episode_chunks(owner_id,thread_id,created_at,source_id);
+    CREATE TABLE IF NOT EXISTS memory_index_meta (owner_id text PRIMARY KEY, revision bigint NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS memory_index_runs (
       owner_id text NOT NULL, thread_id text NOT NULL, run_id text NOT NULL, version integer NOT NULL,
       PRIMARY KEY(owner_id,thread_id,run_id),

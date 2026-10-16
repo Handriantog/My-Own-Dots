@@ -111,3 +111,31 @@ it('exposes curated memory on the workspace connection', () => {
     workspace.close();
   }
 });
+
+it('text-only edits retain evidence, pending status, kind, pin, and expiry', () => {
+  const { memory } = setup();
+  const item = memory.create({
+    ...input,
+    kind: 'skill',
+    status: 'pending',
+    pinned: true,
+    expiresAt: 9999999999999,
+    sources: [
+      {
+        threadId: 't',
+        runId: 'r',
+        messageIds: ['m'],
+        contentHash: 'a'.repeat(64),
+        guard: { originDotId: 'd', spaceIds: ['s'], pageIds: [] },
+      },
+    ],
+  });
+  const changed = memory.edit(item.id, 1, { text: 'Updated procedure' });
+  expect(changed).toMatchObject({
+    kind: 'skill',
+    status: 'pending',
+    pinned: true,
+    expiresAt: 9999999999999,
+    sources: item.sources,
+  });
+});

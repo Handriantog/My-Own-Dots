@@ -50,7 +50,18 @@ export const memoryCreateSchema = z
     message: 'Facts must contain at most 2000 characters',
     path: ['text'],
   });
-export const memoryPatchSchema = z.object(fields).partial().strict();
+export const memoryPatchSchema = z
+  .object({
+    ...fields,
+    kind: fields.kind.removeDefault(),
+    status: fields.status.removeDefault(),
+    pinned: fields.pinned.removeDefault(),
+    sources: fields.sources.removeDefault(),
+    expiresAt: fields.expiresAt.removeDefault(),
+    supersedesId: fields.supersedesId.removeDefault(),
+  })
+  .partial()
+  .strict();
 export const memoryListQuerySchema = z
   .object({
     limit: z.number().int().min(1).max(100).default(50),

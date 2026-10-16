@@ -153,7 +153,8 @@ export class ConversationMemory {
         INSERT INTO memory_episode_chunks(owner_id,source_id,thread_id,run_id,message_id,content_hash,start_offset,text,role,source,created_at)
         SELECT $1,c->>'id',$2,$3,c->>'messageId',c->>'hash',(c->>'start')::integer,c->>'text',c->>'role',c->'source',$5::timestamptz
         FROM jsonb_array_elements($4::jsonb) c ON CONFLICT DO NOTHING
-      ) INSERT INTO memory_index_runs VALUES ($1,$2,$3,1) ON CONFLICT DO NOTHING`,
+      ) , receipt AS (INSERT INTO memory_index_runs VALUES ($1,$2,$3,1) ON CONFLICT DO NOTHING RETURNING 1)
+      INSERT INTO memory_index_meta VALUES ($1,1) ON CONFLICT(owner_id) DO UPDATE SET revision=memory_index_meta.revision+1`,
         [
           this.ownerId,
           run.thread_id,
@@ -163,6 +164,13 @@ export class ConversationMemory {
         ],
       );
     }
+  }
+  async generation(): Promise<number> {
+    const result = await this.pg.query(
+      'SELECT revision FROM memory_index_meta WHERE owner_id=$1',
+      [this.ownerId],
+    );
+    return Number(result.rows[0]?.revision ?? 0);
   }
   async coverage(dotId?: string): Promise<IndexCoverage> {
     const result = await this.pg.query<{ eligible: string; indexed: string }>(
@@ -244,6 +252,44 @@ export class ConversationMemory {
       ref.start ?? 0,
     ]);
     const record = await this.sourceById(id);
-    return record && isDeepStrictEqual(record.source, ref) ? record : undefined;
+    if (record)
+      return isDeepStrictEqual(record.source, ref) ? record : undefined;
+    if (!this.threads().includes(ref.threadId) || !this.sourcesExist(ref.guard))
+      return;
+    const result = await this.pg.query<{
+      evidence_messages: Message[];
+      evidence_guard: EvidenceGuard;
+      created_at: Date;
+    }>(
+      `SELECT evidence_messages,evidence_guard,created_at FROM local_ai_runs WHERE owner_id=$1 AND thread_id=$2 AND run_id=$3 AND provenance_complete=true AND status<>'running'`,
+      [this.ownerId, ref.threadId, ref.runId],
+    );
+    const run = result.rows[0];
+    if (
+      !run ||
+      !isDeepStrictEqual(run.evidence_guard, ref.guard) ||
+      ref.messageIds.length !== 1
+    )
+      return;
+    const message = run.evidence_messages.find(
+      (m) => m.id === ref.messageIds[0],
+    );
+    if (!message || evidenceHash(message) !== ref.contentHash) return;
+    const text =
+      typeof message.content === 'string'
+        ? message.content
+        : JSON.stringify(message.content ?? '');
+    const start = ref.start ?? 0,
+      end = ref.end ?? text.length;
+    if (start < 0 || end > text.length || start >= end) return;
+    return {
+      id,
+      ownerId: this.ownerId,
+      source: ref,
+      guard: ref.guard,
+      text: text.slice(start, end),
+      role: message.role,
+      createdAt: run.created_at.getTime(),
+    };
   }
 }
