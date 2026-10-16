@@ -1,3 +1,4 @@
+import type { SourceRef } from '../shared/memory.js';
 import { defineTool } from '@copilotkit/runtime/v2';
 import { z } from 'zod';
 import { recallQuerySchema, type MemoryRecall } from './memory-recall.js';
@@ -6,10 +7,18 @@ export function memoryTools(
   dotId: string,
   check: () => void,
   signal: AbortSignal,
+  record?: (guard: SourceRef['guard']) => Promise<void>,
 ) {
   const verify = () => {
     signal.throwIfAborted();
     check();
+  };
+  const deliver = async <T extends { sources: SourceRef[] }>(
+    result: T,
+  ): Promise<T> => {
+    for (const source of result.sources) await record?.(source.guard);
+    verify();
+    return result;
   };
   const readSchema = z
     .object({
@@ -25,7 +34,10 @@ export function memoryTools(
       parameters: recallQuerySchema,
       execute: async (input) => {
         verify();
-        return recall.search(dotId, input);
+        const result = await recall.search(dotId, input);
+        for (const match of result.matches) await deliver(match);
+        verify();
+        return result;
       },
     }),
     defineTool({
@@ -35,7 +47,7 @@ export function memoryTools(
       parameters: readSchema,
       execute: async ({ id, cursor }) => {
         verify();
-        return recall.read(dotId, id, cursor);
+        return deliver(await recall.read(dotId, id, cursor));
       },
     }),
     defineTool({
@@ -45,7 +57,7 @@ export function memoryTools(
       parameters: readSchema,
       execute: async ({ id, cursor }) => {
         verify();
-        return recall.readSource(dotId, id, cursor);
+        return deliver(await recall.readSource(dotId, id, cursor));
       },
     }),
   ];

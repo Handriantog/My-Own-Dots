@@ -23,6 +23,14 @@ export async function initializeConversationMemorySchema(pg: MemoryDatabase) {
       attempts integer NOT NULL DEFAULT 0,model_calls integer NOT NULL DEFAULT 0,elapsed_ms bigint NOT NULL DEFAULT 0,call_started_at bigint,
       due_at bigint NOT NULL,created_at bigint NOT NULL,error text,PRIMARY KEY(owner_id,id)
     );
+    ALTER TABLE memory_jobs ADD COLUMN IF NOT EXISTS publication_policy text NOT NULL DEFAULT 'hybrid';
+    ALTER TABLE memory_jobs ADD COLUMN IF NOT EXISTS call_limit integer NOT NULL DEFAULT 3;
+    ALTER TABLE memory_jobs ADD COLUMN IF NOT EXISTS time_limit integer NOT NULL DEFAULT 300000;
+    ALTER TABLE memory_jobs ADD COLUMN IF NOT EXISTS retry_limit integer NOT NULL DEFAULT 2;
+    ALTER TABLE memory_jobs ADD COLUMN IF NOT EXISTS idle_ms integer NOT NULL DEFAULT 0;
+    ALTER TABLE memory_jobs ADD COLUMN IF NOT EXISTS admitted_day text;
+    CREATE TABLE IF NOT EXISTS memory_daily_admissions(owner_id text NOT NULL,dot_id text NOT NULL,day_key text NOT NULL,count integer NOT NULL,PRIMARY KEY(owner_id,dot_id,day_key));
+    CREATE TABLE IF NOT EXISTS memory_processed_sources(owner_id text NOT NULL,source_id text NOT NULL,job_id text NOT NULL,PRIMARY KEY(owner_id,source_id));
     CREATE UNIQUE INDEX IF NOT EXISTS memory_jobs_logical ON memory_jobs(owner_id,logical_key) WHERE state IN ('queued','running');
     CREATE UNIQUE INDEX IF NOT EXISTS memory_jobs_active ON memory_jobs(owner_id,dot_id,kind) WHERE state='running';
     CREATE INDEX IF NOT EXISTS memory_jobs_due ON memory_jobs(owner_id,state,due_at);

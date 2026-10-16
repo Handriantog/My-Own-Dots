@@ -204,6 +204,8 @@ export function createApp({
       previous.appsAllowed !== settings.appsAllowed
     )
       runner.abortAll();
+    if (settings.paused || previous.memoryAllowed !== settings.memoryAllowed)
+      await platform?.memory?.permissionsChanged();
     if (settings.paused) voice?.abortAll();
     else void voice?.resumePending();
     return c.json(settings);

@@ -23,6 +23,10 @@ export interface ContextLimits {
 }
 export class ContextBuilder {
   private cache = new MemoryCache<MemoryItem[]>();
+  private estimates = new MemoryCache<number>();
+  inputTokens(threadId: string): number | undefined {
+    return this.estimates.get(threadId);
+  }
   readonly limits: ContextLimits;
   constructor(
     readonly recall: MemoryRecall,
@@ -134,11 +138,12 @@ export class ContextBuilder {
       payloadTokens(projected) > this.limits.inputTokenLimit &&
       this.compaction
     ) {
-      await this.compaction.compact(frame.threadId, signal);
+      await this.compaction.compact(frame.threadId, signal, 'foreground');
       projected = await this.compaction.project(uncompressed, frame);
     }
     if (payloadTokens(projected) > this.limits.inputTokenLimit)
       throw new ContextCapacityError();
+    this.estimates.set(frame.threadId, payloadTokens(projected));
     return projected;
   }
 }

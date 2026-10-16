@@ -72,6 +72,7 @@ export class DreamPublication {
     proposal: DreamProposal,
     policy: PublicationPolicy,
     dotId: string,
+    fence?: <T>(work: () => T) => Promise<T>,
   ): Promise<ApplyReceipt> {
     const existing = this.memory.history.receipt(jobId);
     if (existing) return existing;
@@ -79,68 +80,72 @@ export class DreamPublication {
     const supported = await Promise.all(
       proposal.changes.map((change) => this.validate(change, dotId)),
     );
-    return this.memory.atomic(() => {
-      const retry = this.memory.history.receipt(jobId);
-      if (retry) return retry;
-      const changes: AppliedChange[] = [];
-      for (const [index, change] of proposal.changes.entries()) {
-        this.recall.access.forDot(dotId);
-        if (
-          change.sources.some(
-            (source) =>
-              this.memory.sourceSuppressed(source) ||
-              !this.recall.access.guardAllowed(
-                this.recall.access.forDot(dotId),
-                source.guard,
-              ),
+    const commit = () =>
+      this.memory.atomic(() => {
+        const retry = this.memory.history.receipt(jobId);
+        if (retry) return retry;
+        const changes: AppliedChange[] = [];
+        for (const [index, change] of proposal.changes.entries()) {
+          this.recall.access.forDot(dotId);
+          if (
+            change.sources.some(
+              (source) =>
+                this.memory.sourceSuppressed(source) ||
+                !this.recall.access.guardAllowed(
+                  this.recall.access.forDot(dotId),
+                  source.guard,
+                ),
+            )
           )
-        )
-          throw new Error('Proposal source evidence was suppressed or revoked');
-        const targets = this.targets(change).map((target) =>
-          this.target(target.targetId, target.expectedRevision),
-        );
-        const automatic =
-          policy === 'hybrid' &&
-          supported[index] &&
-          change.kind !== 'skill-candidate' &&
-          targets.every(
-            (item) =>
-              item.scope.kind === 'dot' &&
-              item.scope.id === dotId &&
-              !item.pinned,
+            throw new Error(
+              'Proposal source evidence was suppressed or revoked',
+            );
+          const targets = this.targets(change).map((target) =>
+            this.target(target.targetId, target.expectedRevision),
           );
-        if (automatic)
-          for (const before of targets) {
-            const after = this.memory.edit(before.id, before.revision, {
-              status: 'superseded',
-              pinned: false,
-            });
-            changes.push({ before, after });
-          }
-        const after = this.memory.create({
-          scope: { kind: 'dot', id: dotId },
-          kind: change.kind === 'skill-candidate' ? 'skill' : 'fact',
-          status: automatic ? 'active' : 'pending',
-          title: change.title,
-          text: change.text,
-          sources: change.sources,
-          expiresAt: change.expiresAt,
-          supersedesId: targets[0]?.id ?? null,
-          pinned: false,
-        });
-        if (!automatic) this.memory.history.saveOperation(after.id, change);
-        changes.push({ before: null, after });
-      }
-      const receipt = {
-        id: randomUUID(),
-        jobId,
-        dotId,
-        createdAt: Date.now(),
-        changes,
-      };
-      this.memory.history.saveReceipt(receipt);
-      return receipt;
-    });
+          const automatic =
+            policy === 'hybrid' &&
+            supported[index] &&
+            change.kind !== 'skill-candidate' &&
+            targets.every(
+              (item) =>
+                item.scope.kind === 'dot' &&
+                item.scope.id === dotId &&
+                !item.pinned,
+            );
+          if (automatic)
+            for (const before of targets) {
+              const after = this.memory.edit(before.id, before.revision, {
+                status: 'superseded',
+                pinned: false,
+              });
+              changes.push({ before, after });
+            }
+          const after = this.memory.create({
+            scope: { kind: 'dot', id: dotId },
+            kind: change.kind === 'skill-candidate' ? 'skill' : 'fact',
+            status: automatic ? 'active' : 'pending',
+            title: change.title,
+            text: change.text,
+            sources: change.sources,
+            expiresAt: change.expiresAt,
+            supersedesId: targets[0]?.id ?? null,
+            pinned: false,
+          });
+          if (!automatic) this.memory.history.saveOperation(after.id, change);
+          changes.push({ before: null, after });
+        }
+        const receipt = {
+          id: randomUUID(),
+          jobId,
+          dotId,
+          createdAt: Date.now(),
+          changes,
+        };
+        this.memory.history.saveReceipt(receipt);
+        return receipt;
+      });
+    return fence ? fence(commit) : commit();
   }
   async review(
     id: string,

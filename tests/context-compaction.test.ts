@@ -1,3 +1,4 @@
+import { InferenceScheduler } from '../src/server/inference-scheduler.js';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { expect, it } from 'vitest';
@@ -86,6 +87,10 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
         threadId: 't',
         userId: owner,
       });
+      const scheduler = new InferenceScheduler();
+      const releaseForeground = await scheduler.enterForeground(
+        new AbortController().signal,
+      );
       const inference = new MemoryInference(
         { provider: 'codex' },
         (async () => ({
@@ -100,11 +105,17 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
           },
           usage: {},
         })) as typeof runAgent,
+        scheduler,
       );
       const compact = new ContextCompaction(repository, inference);
-      expect(await compact.compact('t', new AbortController().signal)).toBe(
-        'updated',
-      );
+      try {
+        expect(
+          await compact.compact('t', AbortSignal.timeout(1000), 'foreground'),
+        ).toBe('updated');
+      } finally {
+        releaseForeground();
+        await scheduler.close();
+      }
       const checkpoint = await new ConversationMemory(
         pg,
         owner,

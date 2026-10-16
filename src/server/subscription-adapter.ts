@@ -1,3 +1,5 @@
+import type { InferenceScheduler } from './inference-scheduler.js';
+import type { AgentOptions } from 'myown-llm-integrator';
 import {
   serializeChatOptions,
   renderSubscriptionPrompt,
@@ -22,6 +24,7 @@ export interface SubscriptionConfig {
   provider?: string;
   model?: string;
   timeoutMs?: number;
+  scheduler?: InferenceScheduler;
   prepare?: (
     payload: SubscriptionPayload,
     signal: AbortSignal,
@@ -145,13 +148,24 @@ class SubscriptionTextAdapter extends BaseTextAdapter<
   readonly name = 'myown-llm-integrator';
   private readonly subscription: SubscriptionConfig;
   private readonly prepare?: SubscriptionConfig['prepare'];
+  private readonly scheduler?: InferenceScheduler;
 
   constructor(config: SubscriptionConfig) {
     super({}, config.model ?? 'cli-default');
     this.subscription = requestConfig(config);
     this.prepare = config.prepare;
+    this.scheduler = config.scheduler;
   }
 
+  private request(options: AgentOptions) {
+    return this.scheduler
+      ? this.scheduler.run(
+          'foreground',
+          options.signal ?? new AbortController().signal,
+          (signal) => runAgent({ ...options, signal }),
+        )
+      : runAgent(options);
+  }
   async *chatStream(options: ChatOptions): AsyncIterable<StreamChunk> {
     const signal = abortSignal(options);
     const runId = options.runId ?? randomUUID();
@@ -181,7 +195,7 @@ class SubscriptionTextAdapter extends BaseTextAdapter<
           payload,
           signal ?? new AbortController().signal,
         )) as typeof payload;
-      const response = await runAgent({
+      const response = await this.request({
         ...this.subscription,
         signal,
         prompt: renderSubscriptionPrompt(payload),
@@ -283,7 +297,7 @@ class SubscriptionTextAdapter extends BaseTextAdapter<
           payload,
           signal ?? new AbortController().signal,
         );
-      const response = await runAgent({
+      const response = await this.request({
         ...this.subscription,
         signal,
         prompt: renderSubscriptionPrompt(payload),

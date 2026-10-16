@@ -1,3 +1,4 @@
+import { MemoryMaintenance } from './memory-maintenance.js';
 import { PostgresConversations } from './local-conversations.js';
 import { LocalAgentRunner } from './local-runner.js';
 import { localThreadResponse } from './local-thread-routes.js';
@@ -33,6 +34,7 @@ export class Platform {
   readonly connections: ConnectionService;
   readonly intelligence?: CopilotKitIntelligence;
   readonly localConversations?: PostgresConversations;
+  readonly memory?: MemoryMaintenance;
   private readonly localRunner?: LocalAgentRunner;
   readonly handler?: CopilotHonoApp;
   constructor(
@@ -57,7 +59,12 @@ export class Platform {
         config.localDatabaseUrl,
         workspace.ownerId,
       );
-      this.localRunner = new LocalAgentRunner(this.localConversations);
+      if (config.llmBackend === 'subscription')
+        this.memory = new MemoryMaintenance(store, workspace, config);
+      this.localRunner = new LocalAgentRunner(
+        this.localConversations,
+        this.memory,
+      );
     } else {
       if (!config.intelligenceKey) return;
       this.intelligence = new CopilotKitIntelligence({
@@ -113,6 +120,7 @@ export class Platform {
                 dot.id,
                 false,
                 this.setupTelemetry,
+                this.memory,
               ),
             ]),
         ),
@@ -152,6 +160,7 @@ export class Platform {
   }
   async start() {
     await this.localConversations?.initialize();
+    this.memory?.start();
     this.setupTelemetry.start();
     if (this.handler?.channels) {
       try {
@@ -169,9 +178,11 @@ export class Platform {
     }
   }
   async stop() {
+    this.memory?.pause();
     try {
       await this.localRunner?.close();
     } finally {
+      await this.memory?.stop();
       await this.localConversations?.close();
       await this.setupTelemetry.stop();
       await this.handler?.channels?.stop();

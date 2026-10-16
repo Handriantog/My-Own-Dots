@@ -1,3 +1,4 @@
+import type { InferencePriority } from './inference-scheduler.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Message } from '@ag-ui/core';
@@ -64,6 +65,7 @@ export class ContextCompaction {
   async compact(
     threadId: string,
     signal: AbortSignal,
+    priority: InferencePriority = 'compact',
   ): Promise<'updated' | 'no_change' | 'stale'> {
     signal.throwIfAborted();
     const binding = this.repository.workspace.requireThread(threadId);
@@ -117,6 +119,7 @@ export class ContextCompaction {
       const result = checkpointSummarySchema.parse(
         await this.inference.run({
           purpose: 'compact',
+          priority,
           prompt,
           schema: z.toJSONSchema(checkpointSummarySchema),
           signal,

@@ -103,7 +103,11 @@ export class DreamAnalysis {
       };
     let lookups: unknown[] = [];
     const started = Date.now();
-    for (let calls = 0; calls < 3 - job.modelCalls; calls++) {
+    for (
+      let calls = 0;
+      calls < (job.callLimit ?? 3) - job.modelCalls;
+      calls++
+    ) {
       signal.throwIfAborted();
       this.recall.access.forDot(job.dotId);
       const prompt = JSON.stringify({
@@ -126,7 +130,8 @@ export class DreamAnalysis {
         24000
       )
         throw new Error('Dream evidence exceeds analysis capacity');
-      const remaining = 300000 - job.elapsedMs - (Date.now() - started);
+      const remaining =
+        (job.timeoutMs ?? 300000) - job.elapsedMs - (Date.now() - started);
       if (remaining <= 0) throw new Error('Dream time budget exhausted');
       const output = responseSchema.parse(
         await this.inference.run({

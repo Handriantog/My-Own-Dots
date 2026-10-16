@@ -156,3 +156,42 @@ export interface RestorePreview {
   changes: AppliedChange[];
   expiresAt: number;
 }
+
+export const memorySettingsSchema = z
+  .object({
+    revision: z.number().int().positive(),
+    createdAt: z.number().int().nonnegative(),
+    enabledAt: z.number().int().nonnegative().nullable(),
+    learningEnabled: z.boolean(),
+    autoCompact: z.boolean(),
+    autoDream: z.boolean(),
+    publicationPolicy: z.enum(['hybrid', 'review_all']),
+    compactThreshold: z.number().min(0.25).max(0.95),
+    compactIdleMs: z.number().int().min(1000).max(86400000),
+    compactExchanges: z.number().int().min(1).max(1000),
+    compactNewTokens: z.number().int().min(100).max(1000000),
+    dreamIntervalMs: z.number().int().min(60000).max(604800000),
+    dreamIdleMs: z.number().int().min(1000).max(86400000),
+    jobModelCalls: z.number().int().min(1).max(3),
+    jobTimeoutMs: z.number().int().min(1000).max(300000),
+    automaticJobsPerDay: z.number().int().min(1).max(24),
+    retries: z.number().int().min(0).max(2),
+    timeZone: z
+      .string()
+      .max(100)
+      .refine((zone) => {
+        try {
+          new Intl.DateTimeFormat('en', { timeZone: zone });
+          return true;
+        } catch {
+          return false;
+        }
+      }, 'Invalid IANA time zone'),
+  })
+  .strict();
+export const memorySettingsPatchSchema = memorySettingsSchema
+  .omit({ revision: true, createdAt: true, enabledAt: true })
+  .partial()
+  .strict();
+export type MemorySettings = z.infer<typeof memorySettingsSchema>;
+export type MemorySettingsPatch = z.infer<typeof memorySettingsPatchSchema>;

@@ -1,3 +1,4 @@
+/* global process */
 // Offline fixture for the real Integrator subprocess. No network or account.
 import { readFileSync } from 'node:fs';
 const prompt = readFileSync(0, 'utf8');

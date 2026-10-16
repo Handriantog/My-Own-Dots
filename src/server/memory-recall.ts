@@ -32,6 +32,7 @@ export type RecallQuery = z.infer<typeof recallQuerySchema>;
 export interface RecallMatch {
   id: string;
   kind: 'fact' | 'skill' | 'episode';
+  revision?: number;
   title: string;
   text: string;
   createdAt: number;
@@ -105,7 +106,7 @@ export class MemoryRecall {
     if ('sources' in item)
       for (const ref of item.sources)
         if (!(await this.episodes.readSource(ref))) return false;
-    return true;
+    return this.access.canRead(principal, item);
   }
   async search(dotId: string, input: RecallQuery): Promise<RecallPage> {
     const query = recallQuerySchema.parse(input);
@@ -162,6 +163,7 @@ export class MemoryRecall {
         matches.push({
           id: item.id,
           kind: item.kind,
+          revision: item.revision,
           title: item.title,
           text: item.text.slice(0, 600),
           createdAt: item.createdAt,

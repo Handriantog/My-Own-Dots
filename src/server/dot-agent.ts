@@ -1,3 +1,4 @@
+import type { InferenceScheduler } from './inference-scheduler.js';
 import type { MemoryRecall } from './memory-recall.js';
 import type { ContextBuilder, ContextFrame } from './context-builder.js';
 import { memoryTools } from './memory-tools.js';
@@ -62,7 +63,11 @@ export class DotAgent extends AbstractAgent {
     private dotId: string,
     private channel = false,
     private setupTelemetry?: SetupTelemetry,
-    private memoryServices?: { recall: MemoryRecall; context: ContextBuilder },
+    private memoryServices?: {
+      recall: MemoryRecall;
+      context: ContextBuilder;
+      scheduler?: InferenceScheduler;
+    },
   ) {
     super({ agentId: dotId });
   }
@@ -149,6 +154,9 @@ export class DotAgent extends AbstractAgent {
           );
         }
         const initialSettings = this.store.settings();
+        const memoryGeneration = this.memoryServices
+          ? this.workspace.memory.generation()
+          : undefined;
         const initialConnections = this.workspace.connections.fingerprint(
           dot.id,
         );
@@ -157,6 +165,8 @@ export class DotAgent extends AbstractAgent {
           const current = this.workspace.dot(dot.id);
           if (
             settings.paused ||
+            (memoryGeneration !== undefined &&
+              memoryGeneration !== this.workspace.memory.generation()) ||
             !current ||
             settings.researchAllowed !== initialSettings.researchAllowed ||
             settings.memoryAllowed !== initialSettings.memoryAllowed ||
@@ -362,13 +372,23 @@ export class DotAgent extends AbstractAgent {
                 provider: this.config.llmProvider,
                 model: this.config.subscriptionModel,
                 timeoutMs: turnTimeLimitMs,
+                scheduler: this.memoryServices?.scheduler,
                 prepare: this.memoryServices
-                  ? (payload, signal) =>
-                      this.memoryServices!.context.project(
+                  ? async (payload, signal) => {
+                      const essentials =
+                        await this.memoryServices!.context.essentials(dot.id);
+                      for (const memory of essentials)
+                        for (const source of memory.sources)
+                          await this.evidenceRecorder?.({
+                            ...source.guard,
+                            originDotId: dot.id,
+                          });
+                      return this.memoryServices!.context.project(
                         payload,
                         frame,
                         signal,
-                      )
+                      );
+                    }
                   : undefined,
               })
             : openaiCompatibleText(this.config.model!, {
@@ -381,7 +401,8 @@ export class DotAgent extends AbstractAgent {
           spaceIds: string[];
           pageIds: string[];
         }) => {
-          await this.evidenceRecorder?.({ originDotId: this.dotId, ...guard });
+          await this.evidenceRecorder?.({ ...guard, originDotId: this.dotId });
+          check();
         };
         const start = async () => {
           if (pageContext)
@@ -418,6 +439,7 @@ export class DotAgent extends AbstractAgent {
                   dot.id,
                   check,
                   controller.signal,
+                  recordPages,
                 )
               : []),
             ...(computer.configured

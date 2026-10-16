@@ -1,3 +1,10 @@
+import { memoryDefaults } from './memory-config.js';
+import {
+  memorySettingsSchema,
+  memorySettingsPatchSchema,
+  type MemorySettings,
+  type MemorySettingsPatch,
+} from '../shared/memory.js';
 import { MemoryHistory } from './memory-history.js';
 import type { Message } from '@ag-ui/core';
 import type { SourceRef } from '../shared/memory.js';
@@ -60,6 +67,57 @@ export class MemoryStore {
       db.exec(
         "INSERT INTO memory_fts SELECT id,json_extract(value,'$.title'),json_extract(value,'$.text') FROM memory_items",
       );
+  }
+  settings(dotId: string, now = Date.now()): MemorySettings {
+    const row = this.db
+      .prepare('SELECT value FROM memory_settings WHERE ownerId=? AND dotId=?')
+      .get(this.ownerId, dotId);
+    if (row) return memorySettingsSchema.parse(JSON.parse(String(row.value)));
+    const { inputTokenLimit, pinnedTokenLimit, ...timing } = memoryDefaults;
+    void inputTokenLimit;
+    void pinnedTokenLimit;
+    const settings = memorySettingsSchema.parse({
+      ...timing,
+      revision: 1,
+      createdAt: now,
+      enabledAt: null,
+      learningEnabled: false,
+      autoCompact: true,
+      autoDream: true,
+      publicationPolicy: 'hybrid',
+    });
+    this.db
+      .prepare('INSERT OR IGNORE INTO memory_settings VALUES (?,?,?)')
+      .run(this.ownerId, dotId, JSON.stringify(settings));
+    return this.settings(dotId, now);
+  }
+  updateSettings(
+    dotId: string,
+    revision: number,
+    patch: MemorySettingsPatch,
+    now = Date.now(),
+  ): MemorySettings {
+    const parsed = memorySettingsPatchSchema.parse(patch);
+    return this.atomic(() => {
+      const old = this.settings(dotId, now);
+      if (old.revision !== revision)
+        throw new Error('Memory settings revision conflict');
+      const settings = memorySettingsSchema.parse({
+        ...old,
+        ...parsed,
+        revision: revision + 1,
+        enabledAt:
+          parsed.learningEnabled === true && !old.learningEnabled
+            ? now
+            : old.enabledAt,
+      });
+      this.db
+        .prepare(
+          'UPDATE memory_settings SET value=? WHERE ownerId=? AND dotId=?',
+        )
+        .run(JSON.stringify(settings), this.ownerId, dotId);
+      return settings;
+    });
   }
   sourceSuppressed(ref: SourceRef): boolean {
     return this.history.sourceSuppressed(ref);

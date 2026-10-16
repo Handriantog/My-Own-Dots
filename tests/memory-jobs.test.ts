@@ -133,3 +133,65 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
     }
   },
 );
+
+it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
+  'persists daily admissions and fences publication after a lease is lost',
+  async () => {
+    const owner = randomUUID(),
+      pg = new Pool({ connectionString: process.env.LOCAL_TEST_DATABASE_URL });
+    const conversations = new PostgresConversations(
+      process.env.LOCAL_TEST_DATABASE_URL!,
+      owner,
+    );
+    let now = Date.now();
+    try {
+      await conversations.initialize();
+      const jobs = new MemoryJobs(pg, owner, () => now);
+      const a = await jobs.enqueue({
+        kind: 'dream',
+        dotId: 'd',
+        origin: 'automatic',
+        sourceIds: [],
+        logicalKey: 'a',
+      });
+      expect(await jobs.claim()).toBeUndefined();
+      expect(await jobs.admitAutomatic(a.id, '2026-11-01', 1)).toBe(true);
+      expect(await jobs.admitAutomatic(a.id, '2026-11-01', 1)).toBe(true);
+      const b = await jobs.enqueue({
+        kind: 'dream',
+        dotId: 'd',
+        origin: 'automatic',
+        sourceIds: [],
+        logicalKey: 'b',
+      });
+      expect(
+        await new MemoryJobs(pg, owner).admitAutomatic(b.id, '2026-11-01', 1),
+      ).toBe(false);
+      const c = await jobs.enqueue({
+        kind: 'dream',
+        dotId: 'd',
+        origin: 'automatic',
+        sourceIds: [],
+        logicalKey: 'c',
+      });
+      expect(await jobs.admitAutomatic(c.id, '2026-11-02', 1)).toBe(true);
+      const running = (await jobs.claim())!;
+      expect(
+        await jobs.withLease(running.id, running.leaseToken!, () => 42),
+      ).toBe(42);
+      now += 60001;
+      await expect(
+        jobs.withLease(running.id, running.leaseToken!, () => {
+          throw new Error('should not execute');
+        }),
+      ).rejects.toThrow('lease');
+    } finally {
+      await pg.query('DELETE FROM memory_jobs WHERE owner_id=$1', [owner]);
+      await pg.query('DELETE FROM memory_daily_admissions WHERE owner_id=$1', [
+        owner,
+      ]);
+      await conversations.close();
+      await pg.end();
+    }
+  },
+);
