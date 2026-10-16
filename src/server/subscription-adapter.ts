@@ -1,3 +1,4 @@
+import { measured } from './memory-metrics.js';
 import type { InferenceScheduler } from './inference-scheduler.js';
 import type { AgentOptions } from 'myown-llm-integrator';
 import {
@@ -164,7 +165,7 @@ class SubscriptionTextAdapter extends BaseTextAdapter<
           options.signal ?? new AbortController().signal,
           (signal) => runAgent({ ...options, signal }),
         )
-      : runAgent(options);
+      : measured('providerExecution', () => runAgent(options));
   }
   async *chatStream(options: ChatOptions): AsyncIterable<StreamChunk> {
     const signal = abortSignal(options);

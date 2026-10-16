@@ -117,12 +117,10 @@ it('uses essential context and recall tools without preloading unrelated memorie
       title: 'Archive',
       text: 'Unrelated archived detail',
     });
-    engine.runAgent
-      .mockReset()
-      .mockResolvedValue({
-        result: { text: 'Ready', toolCalls: [] },
-        usage: {},
-      });
+    engine.runAgent.mockReset().mockResolvedValue({
+      result: { text: 'Ready', toolCalls: [] },
+      usage: {},
+    });
     const agent = new DotAgent(
       store,
       workspace,

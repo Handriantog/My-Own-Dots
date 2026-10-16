@@ -204,6 +204,7 @@ export class ConversationMemory {
   }
   async latestCheckpoint(
     threadId: string,
+    messages?: Message[],
   ): Promise<ContextCheckpoint | undefined> {
     this.workspace.requireThread(threadId);
     const result = await this.pg.query<{ value: ContextCheckpoint }>(
@@ -212,7 +213,7 @@ export class ConversationMemory {
     );
     const checkpoint = result.rows[0]?.value;
     if (!checkpoint) return;
-    const prefix = (await this.threadMessages(threadId)).slice(
+    const prefix = (messages ?? (await this.threadMessages(threadId))).slice(
       0,
       checkpoint.sourceMessageIds.length,
     );

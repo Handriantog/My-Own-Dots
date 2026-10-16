@@ -1,3 +1,4 @@
+import { memoryMetrics } from './memory-metrics.js';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import {
@@ -109,6 +110,7 @@ export class MemoryRecall {
     return this.access.canRead(principal, item);
   }
   async search(dotId: string, input: RecallQuery): Promise<RecallPage> {
+    const began = performance.now();
     const query = recallQuerySchema.parse(input);
     const principal = this.access.forDot(dotId);
     const key = evidenceHash([
@@ -129,6 +131,7 @@ export class MemoryRecall {
         if (item && (await this.permitted(principal, item)))
           matches.push(match);
       }
+      memoryMetrics.observe('recall', performance.now() - began, false);
       return { ...cached, matches };
     }
     const memoryPage =
@@ -207,6 +210,7 @@ export class MemoryRecall {
         : {}),
     };
     this.cache.set(key + (query.cursor ?? ''), result);
+    memoryMetrics.observe('recall', performance.now() - began, true);
     return result;
   }
   private excerpt(

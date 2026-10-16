@@ -1,3 +1,4 @@
+import { measured } from './memory-metrics.js';
 import type { ContextCompaction } from './context-compaction.js';
 import type { Message } from '@ag-ui/core';
 import type { MemoryItem } from '../shared/memory.js';
@@ -22,6 +23,7 @@ export interface ContextLimits {
   pinnedTokenLimit: number;
 }
 export class ContextBuilder {
+  private prepared = false;
   private cache = new MemoryCache<MemoryItem[]>();
   private estimates = new MemoryCache<number>();
   inputTokens(threadId: string): number | undefined {
@@ -97,6 +99,19 @@ export class ContextBuilder {
     return visible;
   }
   async project(
+    payload: SubscriptionPayload,
+    frame: ContextFrame,
+    signal: AbortSignal,
+  ): Promise<SubscriptionPayload> {
+    const cold = !this.prepared;
+    this.prepared = true;
+    return measured(
+      'context',
+      () => this.projectInput(payload, frame, signal),
+      cold,
+    );
+  }
+  private async projectInput(
     payload: SubscriptionPayload,
     frame: ContextFrame,
     signal: AbortSignal,

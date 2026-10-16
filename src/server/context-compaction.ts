@@ -80,7 +80,7 @@ export class ContextCompaction {
     const lastUser = messages.findLastIndex((m) => m.role === 'user');
     const end = safeBoundary(messages, Math.min(lastUser, messages.length - 8));
     if (end <= 0) return 'no_change';
-    let previous = await this.repository.latestCheckpoint(threadId);
+    let previous = await this.repository.latestCheckpoint(threadId, messages);
     if (
       previous?.permissionGeneration !== this.permissions(binding.dotId) ||
       previous?.suppressionGeneration !== suppressionGeneration
@@ -164,7 +164,10 @@ export class ContextCompaction {
     payload: SubscriptionPayload,
     frame: ContextFrame,
   ): Promise<SubscriptionPayload> {
-    const checkpoint = await this.repository.latestCheckpoint(frame.threadId);
+    const checkpoint = await this.repository.latestCheckpoint(
+      frame.threadId,
+      frame.canonicalMessages,
+    );
     if (
       !checkpoint ||
       checkpoint.permissionGeneration !== this.permissions(frame.dotId) ||

@@ -1,3 +1,4 @@
+import { memoryMetrics, measured } from './memory-metrics.js';
 export type InferencePriority = 'foreground' | 'manual' | 'compact' | 'dream';
 const rank: Record<InferencePriority, number> = {
   foreground: 0,
@@ -6,6 +7,7 @@ const rank: Record<InferencePriority, number> = {
   dream: 3,
 };
 interface Entry {
+  queuedAt: number;
   priority: InferencePriority;
   signal: AbortSignal;
   work: (signal: AbortSignal) => Promise<unknown>;
@@ -61,6 +63,7 @@ export class InferenceScheduler {
     if (signal.aborted) return Promise.reject(signal.reason);
     return new Promise<T>((resolve, reject) => {
       const entry: Entry = {
+        queuedAt: performance.now(),
         priority,
         signal,
         work,
@@ -95,7 +98,14 @@ export class InferenceScheduler {
     active.done = Promise.resolve()
       .then(() => {
         controller.signal.throwIfAborted();
-        return entry.work(controller.signal);
+        memoryMetrics.observe(
+          'providerQueue',
+          performance.now() - entry.queuedAt,
+          false,
+        );
+        return measured('providerExecution', () =>
+          entry.work(controller.signal),
+        );
       })
       .then((value) => {
         controller.signal.throwIfAborted();

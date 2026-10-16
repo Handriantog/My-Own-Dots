@@ -104,7 +104,16 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
         await lease.finishRun(messages, {}, 'finished');
         await lease.release();
       }
+      const historyReads = vi.spyOn(pg, 'query');
+      const historyCount = () =>
+        historyReads.mock.calls.filter((call) =>
+          /SELECT (?:t\.)?messages(?:,| FROM)/.test(String(call[0])),
+        ).length;
+      await memory.tick(now + 119998);
+      const readCount = historyCount();
       await memory.tick(now + 119999);
+      expect(historyCount()).toBe(readCount);
+      expect(readCount).toBeGreaterThan(0);
       expect(calls).toEqual([]);
       now += 120000;
       await memory.tick(now);

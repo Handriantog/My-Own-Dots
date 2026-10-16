@@ -1,3 +1,4 @@
+import { memoryMetrics } from './memory-metrics.js';
 import type { EvidenceGuard } from '../shared/memory.js';
 import {
   AbstractAgent,
@@ -40,6 +41,7 @@ interface ActiveRun {
   events: BaseEvent[];
   stopRequested: boolean;
   activityController: AbortController;
+  toolStarts: Map<string, number>;
   storageFailed: boolean;
   pendingWrite?: Promise<BaseEvent>;
   done: Promise<void>;
@@ -97,6 +99,7 @@ export class LocalAgentRunner extends AgentRunner {
       events: [],
       stopRequested: false,
       activityController: new AbortController(),
+      toolStarts: new Map(),
       storageFailed: false,
       done: Promise.resolve(),
     };
@@ -136,6 +139,29 @@ export class LocalAgentRunner extends AgentRunner {
                 'Conversation storage failed. This turn was stopped; unsaved output was not delivered.',
               );
             }
+            if (
+              persisted.type === EventType.TOOL_CALL_START &&
+              'toolCallId' in persisted
+            )
+              active.toolStarts.set(
+                String(persisted.toolCallId),
+                performance.now(),
+              );
+            if (
+              persisted.type === EventType.TOOL_CALL_RESULT &&
+              'toolCallId' in persisted
+            ) {
+              const key = String(persisted.toolCallId),
+                began = active.toolStarts.get(key);
+              if (began !== undefined) {
+                memoryMetrics.observe(
+                  'tools',
+                  performance.now() - began,
+                  false,
+                );
+                active.toolStarts.delete(key);
+              }
+            }
             active.events.push(structuredClone(persisted));
             if (!isTerminal(persisted)) active.subject.next(persisted);
             return persisted;
@@ -150,6 +176,7 @@ export class LocalAgentRunner extends AgentRunner {
   }
 
   private async execute(request: AgentRunnerRunRequest, active: ActiveRun) {
+    const turnStarted = performance.now();
     let lease: ThreadLease | null = null;
     let begun = false;
     let releaseForeground: (() => void) | undefined;
@@ -331,6 +358,7 @@ export class LocalAgentRunner extends AgentRunner {
         );
       }
       releaseForeground?.();
+      memoryMetrics.observe('turn', performance.now() - turnStarted, false);
       this.active.delete(request.threadId);
       if (failure) active.subject.next(runError(failure));
       else if (active.events.length) active.subject.next(active.events.at(-1)!);

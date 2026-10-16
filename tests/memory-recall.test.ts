@@ -166,3 +166,31 @@ it('bounds searches, handles punctuation, and keeps storage errors distinct from
     /unavailable/,
   );
 });
+
+it('finds exact identifiers amid distractors and makes lexical paraphrase misses explicit', async () => {
+  const { workspace, dot, recall } = fixture();
+  for (let i = 0; i < 100; i++)
+    workspace.memory.create({
+      scope: { kind: 'dot', id: dot.id },
+      title: 'Other shipping project',
+      text: `Unrelated shipment ${i}.`,
+    });
+  const target = workspace.memory.create({
+    scope: { kind: 'dot', id: dot.id },
+    title: 'Delivery agreement',
+    text: 'Delivery code REF-731-α arrives on October 20.',
+  });
+  expect(
+    (await recall.search(dot.id, { query: 'REF-731-α' })).matches.map(
+      (m) => m.id,
+    ),
+  ).toContain(target.id);
+  expect(
+    (await recall.search(dot.id, { query: 'arrival deadline' })).matches,
+  ).toEqual([]);
+  expect(
+    (await recall.search(dot.id, { query: 'Delivery' })).matches.map(
+      (m) => m.id,
+    ),
+  ).toContain(target.id);
+});

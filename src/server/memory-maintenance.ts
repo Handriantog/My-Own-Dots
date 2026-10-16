@@ -65,6 +65,17 @@ export class MemoryMaintenance {
   private closing = false;
   private lastInteractiveAt: number;
   private lastError?: string;
+  private scanCursor = 0;
+  private boundaries = new Map<
+    string,
+    {
+      key: string;
+      blocked: boolean;
+      bytes: number;
+      exchanges: number;
+      hash: string;
+    }
+  >();
   constructor(
     readonly store: Store,
     readonly workspace: WorkspaceStore,
@@ -213,23 +224,26 @@ export class MemoryMaintenance {
     threadId: string,
     origin: 'manual' | 'automatic' = 'manual',
     idleMs = 0,
+    boundaryHash?: string,
   ): Promise<MemoryJob> {
     if (this.closing || this.store.settings().paused)
       throw new Error('Maintenance is paused');
-    const binding = this.workspace.requireThread(threadId),
-      messages = await this.repository.threadMessages(threadId);
+    const binding = this.workspace.requireThread(threadId);
+    const hash =
+      boundaryHash ??
+      evidenceHash(await this.repository.threadMessages(threadId));
     const settings = this.workspace.memory.settings(
       binding.dotId,
       this.clock(),
     );
-    const key = 'compact:' + threadId + ':' + evidenceHash(messages);
+    const key = 'compact:' + threadId + ':' + hash;
     return (
       (await this.jobs.find(key)) ??
       (await this.jobs.enqueue({
         kind: 'compact',
         dotId: binding.dotId,
         threadId,
-        sourceIds: [evidenceHash(messages)],
+        sourceIds: [hash],
         origin,
         logicalKey: key,
         callLimit: settings.jobModelCalls,
@@ -354,6 +368,16 @@ export class MemoryMaintenance {
       return;
     await this.indexPending();
     let queuedDream = false;
+    const threads = this.workspace.conversations();
+    const scan = new Set(
+      Array.from(
+        { length: Math.min(25, threads.length) },
+        (_, i) => threads[(this.scanCursor + i) % threads.length].id,
+      ),
+    );
+    this.scanCursor = threads.length
+      ? (this.scanCursor + 25) % threads.length
+      : 0;
     for (const dot of this.workspace.dots()) {
       const settings = this.workspace.memory.settings(dot.id, now);
       if (!dot.memoryAllowed || !this.store.settings().memoryAllowed)
@@ -361,45 +385,66 @@ export class MemoryMaintenance {
       if (settings.autoCompact) {
         for (const thread of this.workspace
           .conversations()
-          .filter((t) => t.dotId === dot.id)) {
+          .filter((t) => t.dotId === dot.id && scan.has(t.id))) {
           const snapshot = await this.pg.query<{
-            messages: Message[];
+            last_run_id: string;
+            updated_at: Date;
             last_status: string;
+            checkpoint_id: string | null;
           }>(
-            `SELECT t.messages,r.status AS last_status FROM local_ai_threads t LEFT JOIN local_ai_runs r ON r.owner_id=t.owner_id AND r.thread_id=t.id AND r.run_id=t.last_run_id WHERE t.owner_id=$1 AND t.id=$2`,
+            `SELECT t.last_run_id,t.updated_at,r.status AS last_status,(SELECT id FROM memory_checkpoints c WHERE c.owner_id=t.owner_id AND c.thread_id=t.id ORDER BY covered_count DESC,created_at DESC LIMIT 1) AS checkpoint_id FROM local_ai_threads t LEFT JOIN local_ai_runs r ON r.owner_id=t.owner_id AND r.thread_id=t.id AND r.run_id=t.last_run_id WHERE t.owner_id=$1 AND t.id=$2`,
             [this.workspace.ownerId, thread.id],
           );
           const row = snapshot.rows[0];
-          if (
-            !row ||
-            row.last_status === 'running' ||
-            pendingApproval(row.messages)
-          )
-            continue;
-          const checkpoint = await this.repository.latestCheckpoint(thread.id);
-          const recent = row.messages.slice(
-            checkpoint?.sourceMessageIds.length ?? 0,
-          );
-          const exchanges = await this.pg.query(
-            'SELECT count(*) AS n FROM memory_evidence WHERE owner_id=$1 AND thread_id=$2 AND workflow_complete=true AND completed_at>$3',
-            [this.workspace.ownerId, thread.id, checkpoint?.createdAt ?? 0],
-          );
-          const tokens =
-            this.context.inputTokens(thread.id) ??
-            estimateTokens(JSON.stringify(recent));
+          if (!row || row.last_status === 'running') continue;
+          const key = JSON.stringify([
+            row,
+            this.workspace.memory.suppressionGeneration(),
+            dot.spaceIds,
+            dot.memoryAllowed,
+          ]);
+          let boundary = this.boundaries.get(thread.id);
+          if (boundary?.key !== key) {
+            const messages = await this.repository.threadMessages(thread.id);
+            const checkpoint = await this.repository.latestCheckpoint(
+              thread.id,
+              messages,
+            );
+            const exchanges = await this.pg.query(
+              'SELECT count(*) AS n FROM memory_evidence WHERE owner_id=$1 AND thread_id=$2 AND workflow_complete=true AND completed_at>$3',
+              [this.workspace.ownerId, thread.id, checkpoint?.createdAt ?? 0],
+            );
+            boundary = {
+              key,
+              blocked: pendingApproval(messages),
+              bytes: estimateTokens(
+                JSON.stringify(
+                  messages.slice(checkpoint?.sourceMessageIds.length ?? 0),
+                ),
+              ),
+              exchanges: Number(exchanges.rows[0].n),
+              hash: evidenceHash(messages),
+            };
+            this.boundaries.delete(thread.id);
+            this.boundaries.set(thread.id, boundary);
+            if (this.boundaries.size > 256)
+              this.boundaries.delete(this.boundaries.keys().next().value!);
+          }
+          if (boundary.blocked) continue;
+          const tokens = this.context.inputTokens(thread.id) ?? boundary.bytes;
           const threshold =
             tokens >=
             this.context.limits.inputTokenLimit * settings.compactThreshold;
           const idle =
             now - this.lastInteractiveAt >= settings.compactIdleMs &&
-            (Number(exchanges.rows[0].n) >= settings.compactExchanges ||
-              estimateTokens(JSON.stringify(recent)) >=
-                settings.compactNewTokens);
+            (boundary.exchanges >= settings.compactExchanges ||
+              boundary.bytes >= settings.compactNewTokens);
           if (threshold || idle)
             await this.requestCompact(
               thread.id,
               'automatic',
               threshold ? 0 : settings.compactIdleMs,
+              boundary.hash,
             );
         }
       }
