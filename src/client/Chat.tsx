@@ -1,3 +1,5 @@
+import { MemoryActivity, type MemoryActivityHandle } from './MemoryActivity';
+import { parseMemoryCommand } from '../shared/memory-commands';
 import { PageReviewCard } from './PageReviewCard';
 import { pageReviewSchema, pageReviewTool } from '../shared/page-review';
 import {
@@ -44,6 +46,7 @@ export function Chat({
   initialPrompt,
   onConsumed,
   voiceReady,
+  localMemory = false,
   calls,
   paused,
   onSaved,
@@ -55,6 +58,7 @@ export function Chat({
   initialPrompt?: string;
   onConsumed: () => void;
   voiceReady: boolean;
+  localMemory?: boolean;
   calls: CallReceipt[];
   paused: boolean;
   onSaved: () => void;
@@ -94,6 +98,7 @@ export function Chat({
       active = false;
     };
   }, [thread.id, contextAttempt]);
+  const memoryActivity = useRef<MemoryActivityHandle>(null);
   const [draft, setDraft] = useState('');
   const [source, setSource] = useState('');
   const [sourceOpen, setSourceOpen] = useState(false);
@@ -151,6 +156,24 @@ export function Chat({
     if (!text.trim() || running || !loaded || !contextReady || paused) return;
     setError('');
     setRunError('');
+    const command = localMemory ? parseMemoryCommand(text) : null;
+    if (command) {
+      setRunning(true);
+      try {
+        if (!memoryActivity.current)
+          throw new Error('Memory controls are loading.');
+        await memoryActivity.current.execute(command);
+        setDraft('');
+      } catch (cause) {
+        setDraft(text);
+        setError(
+          cause instanceof Error ? cause.message : 'Memory command failed.',
+        );
+      } finally {
+        setRunning(false);
+      }
+      return;
+    }
     setRunning(true);
     agent.addMessage({
       id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
@@ -342,6 +365,13 @@ export function Chat({
             {pageContext.title}
           </a>
         </div>
+      )}
+      {localMemory && (
+        <MemoryActivity
+          ref={memoryActivity}
+          dotId={dot.id}
+          threadId={thread.id}
+        />
       )}
       <div className="chat-transcript">
         {!visible.length && (

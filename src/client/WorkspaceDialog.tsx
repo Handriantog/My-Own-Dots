@@ -1,3 +1,4 @@
+import { LocalLearningSettings } from './LocalLearningSettings';
 import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import type { Dot, Memory, State, WorkspaceState } from '../shared/types';
@@ -306,8 +307,8 @@ export function WorkspaceDialog({
                 <span>
                   <strong>Use saved memories</strong>
                   <small>
-                    Include your preferences in new turns. Changing permission
-                    stops active work.
+                    Allow essential preferences and on-demand recall. Changing
+                    permission stops active work.
                   </small>
                 </span>
               </label>
@@ -329,6 +330,15 @@ export function WorkspaceDialog({
               )}
             </>
           )}
+          {dialog.type === 'dot' &&
+            dialog.dot &&
+            workspace.setup.conversationBackend === 'local' &&
+            workspace.setup.llmBackend === 'subscription' && (
+              <LocalLearningSettings
+                dotId={dialog.dot.id}
+                onChanged={() => {}}
+              />
+            )}
           {dialog.type === 'dot' && workspace.setup.composio && (
             <fieldset className="space-access-fields">
               <legend>Connected apps</legend>
@@ -474,8 +484,8 @@ export function WorkspaceDialog({
               )}
               {workspace.setup.conversationBackend === 'local' && (
                 <p>
-                  Managed Slack and Automatic Learning require Intelligence.
-                  Local memories and MCP connections remain available.
+                  Local learning uses Compact and Dream. Enable it in each Dot’s
+                  settings. Managed Slack still requires Intelligence.
                 </p>
               )}
               <p>
