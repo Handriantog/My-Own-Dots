@@ -178,3 +178,21 @@ it('waits for durable page provenance before returning tool content', async () =
   expect(recorded).toEqual([{ spaceIds: [page.spaceId], pageIds: [page.id] }]);
   workspace.close();
 });
+
+it('keeps evidence fingerprints stable when JSON storage reorders object keys', () => {
+  expect(
+    evidenceHash({
+      id: 'm',
+      role: 'user',
+      content: 'Keep exact value',
+      nested: { a: 1, b: 2 },
+    }),
+  ).toBe(
+    evidenceHash({
+      nested: { b: 2, a: 1 },
+      content: 'Keep exact value',
+      role: 'user',
+      id: 'm',
+    }),
+  );
+});

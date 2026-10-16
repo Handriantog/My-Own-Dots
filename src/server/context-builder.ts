@@ -101,6 +101,21 @@ export class ContextBuilder {
     if (frame.ownerId !== this.recall.memory.ownerId)
       throw new Error('Context owner mismatch');
     let projected = structuredClone(payload);
+    const masked = new Map(
+      this.recall.memory
+        .maskMessages(frame.threadId, frame.canonicalMessages)
+        .map((message) => [message.id, message]),
+    );
+    projected.messages = projected.messages.map((message) => {
+      const source = message.id ? masked.get(message.id) : undefined;
+      if (!source) return message;
+      return {
+        ...message,
+        content:
+          typeof source.content === 'string' ? source.content : message.content,
+        ...(source.role === 'assistant' ? { toolCalls: source.toolCalls } : {}),
+      };
+    });
     const pinned = await this.essentials(frame.dotId);
     const essential = JSON.stringify(
       pinned.map(({ id, title, text }) => ({ id, title, text })),

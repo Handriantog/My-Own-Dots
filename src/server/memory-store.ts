@@ -1,3 +1,6 @@
+import { MemoryHistory } from './memory-history.js';
+import type { Message } from '@ag-ui/core';
+import type { SourceRef } from '../shared/memory.js';
 import type { RecallQuery } from './memory-recall.js';
 import type { RecallPrincipal } from './memory-access.js';
 import { randomUUID } from 'node:crypto';
@@ -16,6 +19,7 @@ import {
 
 /** Curated memory is owner-scoped. The workspace owns this connection. */
 export class MemoryStore {
+  readonly history: MemoryHistory;
   private depth = 0;
   private pinValidator?: (item: MemoryItem) => void;
   constructor(
@@ -51,10 +55,20 @@ export class MemoryStore {
         DELETE FROM memory_fts WHERE itemId=old.id;
         INSERT INTO memory_fts VALUES(new.id,json_extract(new.value,'$.title'),json_extract(new.value,'$.text')); END;
       CREATE TRIGGER IF NOT EXISTS memory_fts_delete AFTER DELETE ON memory_items BEGIN DELETE FROM memory_fts WHERE itemId=old.id; END;`);
+    this.history = new MemoryHistory(db, ownerId);
     if (!hasFts)
       db.exec(
         "INSERT INTO memory_fts SELECT id,json_extract(value,'$.title'),json_extract(value,'$.text') FROM memory_items",
       );
+  }
+  sourceSuppressed(ref: SourceRef): boolean {
+    return this.history.sourceSuppressed(ref);
+  }
+  suppressionGeneration(): number {
+    return this.history.suppressionGeneration();
+  }
+  maskMessages(threadId: string, messages: Message[]): Message[] {
+    return this.history.maskMessages(threadId, messages);
   }
   search(
     query: RecallQuery,
@@ -273,18 +287,24 @@ export class MemoryStore {
       if (!item) throw new Error('Memory not found');
       if (item.revision !== expectedRevision)
         throw new Error('Memory revision conflict');
+      const preserveLegacy =
+        item.kind === 'fact' &&
+        item.text.length > 2000 &&
+        (parsed.text === undefined || parsed.text === item.text) &&
+        (parsed.kind === undefined || parsed.kind === 'fact');
       const data = memoryCreateSchema.parse({
         scope: item.scope,
         kind: item.kind,
         status: item.status,
         title: item.title,
-        text: item.text,
+        text: preserveLegacy ? item.text.slice(0, 2000) : item.text,
         pinned: item.pinned,
         sources: item.sources,
         expiresAt: item.expiresAt,
         supersedesId: item.supersedesId,
         ...parsed,
       });
+      if (preserveLegacy) data.text = item.text;
       return this.save({
         ...item,
         ...data,

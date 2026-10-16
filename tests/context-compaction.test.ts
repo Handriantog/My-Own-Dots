@@ -3,7 +3,10 @@ import { Pool } from 'pg';
 import { expect, it } from 'vitest';
 import type { Message } from '@ag-ui/core';
 import { PostgresConversations } from '../src/server/local-conversations.js';
-import { ConversationMemory } from '../src/server/conversation-memory.js';
+import {
+  ConversationMemory,
+  evidenceHash,
+} from '../src/server/conversation-memory.js';
 import { WorkspaceStore } from '../src/server/workspace.js';
 import { Store } from '../src/server/store.js';
 import { MemoryAccess } from '../src/server/memory-access.js';
@@ -144,6 +147,38 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       expect(renderSubscriptionPrompt(projected)).toContain(
         'Wait for my approval',
       );
+      ws.memory.history.suppress(
+        [
+          {
+            threadId: 't',
+            runId: 'r',
+            messageIds: ['m0'],
+            contentHash: evidenceHash(messages[0]),
+            guard: { originDotId: dot.id, spaceIds: [], pageIds: [] },
+            start: 0,
+            end: String(messages[0].content).length,
+          },
+        ],
+        'Forgot original amount',
+      );
+      const afterForget = await context.project(
+        {
+          systemPrompts: [],
+          messages: [
+            { id: 'm0', role: 'user', content: 'Original budget $123' },
+          ],
+          availableTools: [],
+        },
+        {
+          ownerId: owner,
+          dotId: dot.id,
+          threadId: 't',
+          runId: 'next',
+          canonicalMessages: messages,
+        },
+        new AbortController().signal,
+      );
+      expect(renderSubscriptionPrompt(afterForget)).not.toContain('$123');
       // Appends do not invalidate the covered prefix; changed source bytes do.
       await pg.query(
         'UPDATE local_ai_threads SET messages=messages || $3::jsonb WHERE owner_id=$1 AND id=$2',

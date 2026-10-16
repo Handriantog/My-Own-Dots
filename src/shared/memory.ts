@@ -136,3 +136,23 @@ export interface DreamProposal {
   noChangeReason?: string;
 }
 export type PublicationPolicy = 'hybrid' | 'review_all';
+
+export interface AppliedChange {
+  before: MemoryItem | null;
+  after: MemoryItem;
+}
+export interface ApplyReceipt {
+  id: string;
+  jobId: string;
+  dotId: string;
+  createdAt: number;
+  changes: AppliedChange[];
+}
+export interface RestorePreview {
+  id: string;
+  changeSetId: string;
+  expectedRevisions: Record<string, number>;
+  conflicts: string[];
+  changes: AppliedChange[];
+  expiresAt: number;
+}

@@ -58,7 +58,13 @@ export class MemoryAccess {
       return false;
     if ('source' in item)
       return (
-        item.guard.originDotId === current.dotId &&
+        (item.guard.originDotId === current.dotId ||
+          this.workspace.memory.history.hasGrant(
+            item.source,
+            current.dotId,
+            current.spaceIds,
+          )) &&
+        !this.workspace.memory.sourceSuppressed(item.source) &&
         this.guardAllowed(current, item.guard)
       );
     if (
@@ -70,6 +76,10 @@ export class MemoryAccess {
     if (scope.kind === 'dot' && scope.id !== current.dotId) return false;
     if (scope.kind === 'space' && !current.spaceIds.includes(scope.id))
       return false;
-    return item.sources.every((ref) => this.guardAllowed(current, ref.guard));
+    return item.sources.every(
+      (ref) =>
+        !this.workspace.memory.sourceSuppressed(ref) &&
+        this.guardAllowed(current, ref.guard),
+    );
   }
 }

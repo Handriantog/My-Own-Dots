@@ -35,6 +35,7 @@ export interface ContextCheckpoint extends z.infer<
   schemaVersion: 1;
   createdAt: number;
   permissionGeneration: string;
+  suppressionGeneration: number;
 }
 /** Stops before any tool call whose result would fall outside the prefix. */
 function safeBoundary(messages: Message[], candidate: number): number {
@@ -67,12 +68,21 @@ export class ContextCompaction {
     signal.throwIfAborted();
     const binding = this.repository.workspace.requireThread(threadId);
     const permissionGeneration = this.permissions(binding.dotId);
+    const suppressionGeneration =
+      this.repository.workspace.memory.suppressionGeneration();
     const messages = await this.repository.threadMessages(threadId);
+    const visibleMessages = this.repository.workspace.memory.maskMessages(
+      threadId,
+      messages,
+    );
     const lastUser = messages.findLastIndex((m) => m.role === 'user');
     const end = safeBoundary(messages, Math.min(lastUser, messages.length - 8));
     if (end <= 0) return 'no_change';
     let previous = await this.repository.latestCheckpoint(threadId);
-    if (previous?.permissionGeneration !== this.permissions(binding.dotId))
+    if (
+      previous?.permissionGeneration !== this.permissions(binding.dotId) ||
+      previous?.suppressionGeneration !== suppressionGeneration
+    )
       previous = undefined;
     let start = previous?.sourceMessageIds.length ?? 0;
     if (start >= end) return 'no_change';
@@ -97,7 +107,7 @@ export class ContextCompaction {
           'A conversation message is too large to compact safely. Shorten the source or start a new conversation.',
         );
       const sourcePrefix = messages.slice(0, boundary);
-      const evidence = messages.slice(start, boundary);
+      const evidence = visibleMessages.slice(start, boundary);
       const prompt = JSON.stringify({
         instruction:
           'Preserve the goal, exact user constraints and amounts, explicit corrections, decisions, completed actions, questions and next steps. A correction supersedes an earlier value. Do not infer success from an attempt. Cite original message IDs. A previous checkpoint is a fallible aid; originals take precedence.',
@@ -125,9 +135,14 @@ export class ContextCompaction {
         schemaVersion: 1,
         createdAt: Date.now(),
         permissionGeneration,
+        suppressionGeneration,
       };
       signal.throwIfAborted();
-      if (permissionGeneration !== this.permissions(binding.dotId))
+      if (
+        permissionGeneration !== this.permissions(binding.dotId) ||
+        suppressionGeneration !==
+          this.repository.workspace.memory.suppressionGeneration()
+      )
         return 'stale';
       if (
         !(await this.repository.saveCheckpoint(
@@ -149,7 +164,9 @@ export class ContextCompaction {
     const checkpoint = await this.repository.latestCheckpoint(frame.threadId);
     if (
       !checkpoint ||
-      checkpoint.permissionGeneration !== this.permissions(frame.dotId)
+      checkpoint.permissionGeneration !== this.permissions(frame.dotId) ||
+      checkpoint.suppressionGeneration !==
+        this.repository.workspace.memory.suppressionGeneration()
     )
       return payload;
     const prefix = frame.canonicalMessages.slice(

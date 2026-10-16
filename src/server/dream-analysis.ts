@@ -67,6 +67,15 @@ function endorsed(source: SourceRecord): boolean {
   }
   return false;
 }
+export function hasWorkflowSupport(sources: SourceRecord[]): boolean {
+  return (
+    new Set(
+      sources
+        .filter(endorsed)
+        .map((s) => s.source.threadId + ':' + s.source.runId),
+    ).size >= 2
+  );
+}
 export class DreamAnalysis {
   constructor(
     readonly recall: MemoryRecall,
