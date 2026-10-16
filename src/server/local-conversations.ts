@@ -1,5 +1,5 @@
 import type { EvidenceGuard } from '../shared/memory.js';
-import { unionEvidence } from './conversation-memory.js';
+import { unionEvidence, evidenceHash } from './conversation-memory.js';
 import { initializeConversationMemorySchema } from './conversation-memory-schema.js';
 import { isDeepStrictEqual } from 'node:util';
 import { Pool, type PoolClient } from 'pg';
@@ -502,6 +502,32 @@ export class PostgresConversations implements LocalConversationStore {
                 JSON.stringify(messages),
               ],
             );
+            if (status !== 'interrupted') {
+              const answered = new Set(
+                messages
+                  .filter((m) => m.role === 'tool')
+                  .map((m) => m.toolCallId),
+              );
+              const pending = messages.some(
+                (m) =>
+                  m.role === 'assistant' &&
+                  m.toolCalls?.some((call) => !answered.has(call.id)),
+              );
+              await query(
+                `INSERT INTO memory_evidence(owner_id,id,thread_id,run_id,dot_id,workflow_complete,completed_at)
+                SELECT owner_id,$4,thread_id,run_id,evidence_guard->>'originDotId',$5,$6 FROM local_ai_runs
+                WHERE owner_id=$1 AND thread_id=$2 AND run_id=$3 AND provenance_complete=true AND evidence_guard IS NOT NULL
+                ON CONFLICT(owner_id,thread_id,run_id) DO NOTHING`,
+                [
+                  this.ownerId,
+                  threadId,
+                  runId,
+                  evidenceHash([this.ownerId, threadId, runId]),
+                  status === 'finished' && !pending,
+                  Date.now(),
+                ],
+              );
+            }
             await query('COMMIT');
             runId = undefined;
           } catch (error) {

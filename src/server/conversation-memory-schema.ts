@@ -16,6 +16,22 @@ export async function initializeConversationMemorySchema(pg: MemoryDatabase) {
     );
     CREATE INDEX IF NOT EXISTS memory_episodes_search ON memory_episode_chunks USING gin(search);
     CREATE INDEX IF NOT EXISTS memory_episodes_thread ON memory_episode_chunks(owner_id,thread_id,created_at,source_id);
+    CREATE TABLE IF NOT EXISTS memory_jobs (
+      owner_id text NOT NULL,id text NOT NULL,kind text NOT NULL,dot_id text NOT NULL,thread_id text,source_ids jsonb NOT NULL,
+      origin text NOT NULL,logical_key text NOT NULL,state text NOT NULL DEFAULT 'queued',lease_token text,lease_until bigint,
+      attempts integer NOT NULL DEFAULT 0,model_calls integer NOT NULL DEFAULT 0,elapsed_ms bigint NOT NULL DEFAULT 0,call_started_at bigint,
+      due_at bigint NOT NULL,created_at bigint NOT NULL,error text,PRIMARY KEY(owner_id,id)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS memory_jobs_logical ON memory_jobs(owner_id,logical_key) WHERE state IN ('queued','running');
+    CREATE UNIQUE INDEX IF NOT EXISTS memory_jobs_active ON memory_jobs(owner_id,dot_id,kind) WHERE state='running';
+    CREATE INDEX IF NOT EXISTS memory_jobs_due ON memory_jobs(owner_id,state,due_at);
+    CREATE TABLE IF NOT EXISTS memory_evidence (
+      owner_id text NOT NULL,id text NOT NULL,thread_id text NOT NULL,run_id text NOT NULL,dot_id text NOT NULL,
+      workflow_complete boolean NOT NULL,processed_job_id text,completed_at bigint NOT NULL,
+      PRIMARY KEY(owner_id,id),UNIQUE(owner_id,thread_id,run_id),
+      FOREIGN KEY(owner_id,thread_id,run_id) REFERENCES local_ai_runs(owner_id,thread_id,run_id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS memory_evidence_pending ON memory_evidence(owner_id,dot_id,completed_at) WHERE processed_job_id IS NULL;
     CREATE TABLE IF NOT EXISTS memory_checkpoints (
       owner_id text NOT NULL,thread_id text NOT NULL,id text NOT NULL,covered_count integer NOT NULL,value jsonb NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),
       PRIMARY KEY(owner_id,id),FOREIGN KEY(owner_id,thread_id) REFERENCES local_ai_threads(owner_id,id) ON DELETE CASCADE
