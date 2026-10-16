@@ -1,0 +1,675 @@
+{
+  "version": 1,
+  "status": "audition assets; runtime integration pending",
+  "character": "one plush Dot; body color does not change its sound identity",
+  "provenance": "Original deterministic procedural synthesis in scripts/generate-dot-sounds.py. No external samples.",
+  "format": {
+    "sampleRate": 48000,
+    "channels": 1,
+    "encoding": "PCM signed 16-bit WAV"
+  },
+  "events": [
+    {
+      "event": "appear",
+      "label": "Arrival",
+      "sound": "Soft fabric unfurl with a curious upward chirp",
+      "trigger": "Once on deliberate arrival",
+      "cooldownMs": 1200,
+      "peakDbfs": -12.04,
+      "variants": [
+        {
+          "file": "appear-01.wav",
+          "durationSeconds": 0.4461
+        },
+        {
+          "file": "appear-02.wav",
+          "durationSeconds": 0.4446
+        },
+        {
+          "file": "appear-03.wav",
+          "durationSeconds": 0.4561
+        }
+      ]
+    },
+    {
+      "event": "notice",
+      "label": "Noticing the pointer",
+      "sound": "Small questioning murmur",
+      "trigger": "Once on entering attention; not every pointer move",
+      "cooldownMs": 1800,
+      "peakDbfs": -15.39,
+      "variants": [
+        {
+          "file": "notice-01.wav",
+          "durationSeconds": 0.1667
+        },
+        {
+          "file": "notice-02.wav",
+          "durationSeconds": 0.1604
+        },
+        {
+          "file": "notice-03.wav",
+          "durationSeconds": 0.1584
+        }
+      ]
+    },
+    {
+      "event": "pat",
+      "label": "Click or gentle pat",
+      "sound": "Plush squeeze and a tiny contented chirp",
+      "trigger": "Once per accepted click",
+      "cooldownMs": 300,
+      "peakDbfs": -12.04,
+      "variants": [
+        {
+          "file": "pat-01.wav",
+          "durationSeconds": 0.2595
+        },
+        {
+          "file": "pat-02.wav",
+          "durationSeconds": 0.2432
+        },
+        {
+          "file": "pat-03.wav",
+          "durationSeconds": 0.2521
+        }
+      ]
+    },
+    {
+      "event": "pickup",
+      "label": "Picked up",
+      "sound": "Fabric lift and a brief surprised chirp",
+      "trigger": "Once when dragging starts",
+      "cooldownMs": 350,
+      "peakDbfs": -11.7,
+      "variants": [
+        {
+          "file": "pickup-01.wav",
+          "durationSeconds": 0.2639
+        },
+        {
+          "file": "pickup-02.wav",
+          "durationSeconds": 0.2745
+        },
+        {
+          "file": "pickup-03.wav",
+          "durationSeconds": 0.2781
+        }
+      ]
+    },
+    {
+      "event": "carry",
+      "label": "Carried around",
+      "sound": "Quiet fabric creak",
+      "trigger": "Only after meaningful drag movement",
+      "cooldownMs": 650,
+      "peakDbfs": -21.41,
+      "variants": [
+        {
+          "file": "carry-01.wav",
+          "durationSeconds": 0.2276
+        },
+        {
+          "file": "carry-02.wav",
+          "durationSeconds": 0.2339
+        },
+        {
+          "file": "carry-03.wav",
+          "durationSeconds": 0.237
+        }
+      ]
+    },
+    {
+      "event": "release",
+      "label": "Released",
+      "sound": "Small airy release",
+      "trigger": "Once when dragging ends",
+      "cooldownMs": 250,
+      "peakDbfs": -17.72,
+      "variants": [
+        {
+          "file": "release-01.wav",
+          "durationSeconds": 0.1532
+        },
+        {
+          "file": "release-02.wav",
+          "durationSeconds": 0.1567
+        },
+        {
+          "file": "release-03.wav",
+          "durationSeconds": 0.1522
+        }
+      ]
+    },
+    {
+      "event": "step",
+      "label": "Footstep",
+      "sound": "Tiny padded footfall",
+      "trigger": "At foot contact, matched to walking cadence",
+      "cooldownMs": 90,
+      "peakDbfs": -21.41,
+      "variants": [
+        {
+          "file": "step-01.wav",
+          "durationSeconds": 0.1031
+        },
+        {
+          "file": "step-02.wav",
+          "durationSeconds": 0.1056
+        },
+        {
+          "file": "step-03.wav",
+          "durationSeconds": 0.1046
+        }
+      ]
+    },
+    {
+      "event": "turn",
+      "label": "Turning",
+      "sound": "Short fabric shuffle",
+      "trigger": "On a planted turning step",
+      "cooldownMs": 350,
+      "peakDbfs": -23.1,
+      "variants": [
+        {
+          "file": "turn-01.wav",
+          "durationSeconds": 0.1927
+        },
+        {
+          "file": "turn-02.wav",
+          "durationSeconds": 0.1973
+        },
+        {
+          "file": "turn-03.wav",
+          "durationSeconds": 0.1929
+        }
+      ]
+    },
+    {
+      "event": "jump",
+      "label": "Jumping",
+      "sound": "Compressed plush spring and an upward swish",
+      "trigger": "At takeoff",
+      "cooldownMs": 350,
+      "peakDbfs": -13.15,
+      "variants": [
+        {
+          "file": "jump-01.wav",
+          "durationSeconds": 0.2533
+        },
+        {
+          "file": "jump-02.wav",
+          "durationSeconds": 0.2581
+        },
+        {
+          "file": "jump-03.wav",
+          "durationSeconds": 0.2504
+        }
+      ]
+    },
+    {
+      "event": "grab",
+      "label": "Grabbing a ledge",
+      "sound": "Soft contact with fabric tension",
+      "trigger": "At hand contact",
+      "cooldownMs": 180,
+      "peakDbfs": -15.92,
+      "variants": [
+        {
+          "file": "grab-01.wav",
+          "durationSeconds": 0.2052
+        },
+        {
+          "file": "grab-02.wav",
+          "durationSeconds": 0.2069
+        },
+        {
+          "file": "grab-03.wav",
+          "durationSeconds": 0.2056
+        }
+      ]
+    },
+    {
+      "event": "climb",
+      "label": "Climbing",
+      "sound": "Quiet cloth grip and padded movement",
+      "trigger": "At alternating hand or foot contacts",
+      "cooldownMs": 160,
+      "peakDbfs": -21.94,
+      "variants": [
+        {
+          "file": "climb-01.wav",
+          "durationSeconds": 0.1376
+        },
+        {
+          "file": "climb-02.wav",
+          "durationSeconds": 0.1427
+        },
+        {
+          "file": "climb-03.wav",
+          "durationSeconds": 0.1456
+        }
+      ]
+    },
+    {
+      "event": "pull_up",
+      "label": "Pulling onto a ledge",
+      "sound": "Brief effort murmur and settling fabric",
+      "trigger": "At the final pull onto a platform",
+      "cooldownMs": 650,
+      "peakDbfs": -15.39,
+      "variants": [
+        {
+          "file": "pull_up-01.wav",
+          "durationSeconds": 0.3751
+        },
+        {
+          "file": "pull_up-02.wav",
+          "durationSeconds": 0.3764
+        },
+        {
+          "file": "pull_up-03.wav",
+          "durationSeconds": 0.3751
+        }
+      ]
+    },
+    {
+      "event": "slip",
+      "label": "Losing a grip",
+      "sound": "Short cloth slip with a surprised squeak",
+      "trigger": "Once when support is lost",
+      "cooldownMs": 500,
+      "peakDbfs": -13.98,
+      "variants": [
+        {
+          "file": "slip-01.wav",
+          "durationSeconds": 0.1691
+        },
+        {
+          "file": "slip-02.wav",
+          "durationSeconds": 0.1725
+        },
+        {
+          "file": "slip-03.wav",
+          "durationSeconds": 0.1738
+        }
+      ]
+    },
+    {
+      "event": "fall",
+      "label": "Falling",
+      "sound": "Soft descending air movement",
+      "trigger": "Once per fall after meaningful downward motion",
+      "cooldownMs": 650,
+      "peakDbfs": -17.72,
+      "variants": [
+        {
+          "file": "fall-01.wav",
+          "durationSeconds": 0.513
+        },
+        {
+          "file": "fall-02.wav",
+          "durationSeconds": 0.507
+        },
+        {
+          "file": "fall-03.wav",
+          "durationSeconds": 0.4902
+        }
+      ]
+    },
+    {
+      "event": "land_soft",
+      "label": "Gentle landing",
+      "sound": "Cushioned low thump and body settling",
+      "trigger": "At a low-speed landing",
+      "cooldownMs": 120,
+      "peakDbfs": -12.4,
+      "variants": [
+        {
+          "file": "land_soft-01.wav",
+          "durationSeconds": 0.2769
+        },
+        {
+          "file": "land_soft-02.wav",
+          "durationSeconds": 0.2715
+        },
+        {
+          "file": "land_soft-03.wav",
+          "durationSeconds": 0.286
+        }
+      ]
+    },
+    {
+      "event": "land_hard",
+      "label": "Larger landing",
+      "sound": "Deeper plush thud with a small rebound",
+      "trigger": "At a larger landing; replaces gentle landing",
+      "cooldownMs": 200,
+      "peakDbfs": -8.4,
+      "variants": [
+        {
+          "file": "land_hard-01.wav",
+          "durationSeconds": 0.3509
+        },
+        {
+          "file": "land_hard-02.wav",
+          "durationSeconds": 0.358
+        },
+        {
+          "file": "land_hard-03.wav",
+          "durationSeconds": 0.3513
+        }
+      ]
+    },
+    {
+      "event": "bump",
+      "label": "Bumping an edge",
+      "sound": "Rounded cloth-covered knock",
+      "trigger": "At a new collision, scaled by normal impact speed",
+      "cooldownMs": 220,
+      "peakDbfs": -12.77,
+      "variants": [
+        {
+          "file": "bump-01.wav",
+          "durationSeconds": 0.1968
+        },
+        {
+          "file": "bump-02.wav",
+          "durationSeconds": 0.1991
+        },
+        {
+          "file": "bump-03.wav",
+          "durationSeconds": 0.1993
+        }
+      ]
+    },
+    {
+      "event": "sit",
+      "label": "Sitting",
+      "sound": "Soft fabric folding and a padded settle",
+      "trigger": "At the seat contacting the surface",
+      "cooldownMs": 650,
+      "peakDbfs": -19.17,
+      "variants": [
+        {
+          "file": "sit-01.wav",
+          "durationSeconds": 0.2935
+        },
+        {
+          "file": "sit-02.wav",
+          "durationSeconds": 0.2871
+        },
+        {
+          "file": "sit-03.wav",
+          "durationSeconds": 0.2976
+        }
+      ]
+    },
+    {
+      "event": "stand",
+      "label": "Standing up",
+      "sound": "Small cloth stretch",
+      "trigger": "During the rise",
+      "cooldownMs": 500,
+      "peakDbfs": -20.92,
+      "variants": [
+        {
+          "file": "stand-01.wav",
+          "durationSeconds": 0.2627
+        },
+        {
+          "file": "stand-02.wav",
+          "durationSeconds": 0.2682
+        },
+        {
+          "file": "stand-03.wav",
+          "durationSeconds": 0.2542
+        }
+      ]
+    },
+    {
+      "event": "stretch",
+      "label": "Stretching",
+      "sound": "Gentle elastic creak and breath",
+      "trigger": "Once during a stretch",
+      "cooldownMs": 1600,
+      "peakDbfs": -17.72,
+      "variants": [
+        {
+          "file": "stretch-01.wav",
+          "durationSeconds": 0.5051
+        },
+        {
+          "file": "stretch-02.wav",
+          "durationSeconds": 0.4797
+        },
+        {
+          "file": "stretch-03.wav",
+          "durationSeconds": 0.4959
+        }
+      ]
+    },
+    {
+      "event": "yawn",
+      "label": "Yawning",
+      "sound": "Sleepy rounded nonverbal breath",
+      "trigger": "Once per yawn",
+      "cooldownMs": 8000,
+      "peakDbfs": -17.08,
+      "variants": [
+        {
+          "file": "yawn-01.wav",
+          "durationSeconds": 0.7328
+        },
+        {
+          "file": "yawn-02.wav",
+          "durationSeconds": 0.7462
+        },
+        {
+          "file": "yawn-03.wav",
+          "durationSeconds": 0.7415
+        }
+      ]
+    },
+    {
+      "event": "sleep",
+      "label": "Settling to sleep",
+      "sound": "One soft exhale",
+      "trigger": "Once on entering sleep; no repeating snore loop",
+      "cooldownMs": 8000,
+      "peakDbfs": -22.5,
+      "variants": [
+        {
+          "file": "sleep-01.wav",
+          "durationSeconds": 0.6482
+        },
+        {
+          "file": "sleep-02.wav",
+          "durationSeconds": 0.6842
+        },
+        {
+          "file": "sleep-03.wav",
+          "durationSeconds": 0.681
+        }
+      ]
+    },
+    {
+      "event": "wake",
+      "label": "Waking up",
+      "sound": "Quiet inquisitive murmur and rustle",
+      "trigger": "Once on waking",
+      "cooldownMs": 1500,
+      "peakDbfs": -15.92,
+      "variants": [
+        {
+          "file": "wake-01.wav",
+          "durationSeconds": 0.3634
+        },
+        {
+          "file": "wake-02.wav",
+          "durationSeconds": 0.3841
+        },
+        {
+          "file": "wake-03.wav",
+          "durationSeconds": 0.3642
+        }
+      ]
+    }
+  ],
+  "preview": {
+    "file": "dot-sound-preview.wav",
+    "durationSeconds": 23.563,
+    "timeline": [
+      {
+        "atSeconds": 0.35,
+        "event": "appear",
+        "variant": 1
+      },
+      {
+        "atSeconds": 1.5,
+        "event": "notice",
+        "variant": 1
+      },
+      {
+        "atSeconds": 2.3,
+        "event": "pat",
+        "variant": 1
+      },
+      {
+        "atSeconds": 3.3,
+        "event": "pickup",
+        "variant": 1
+      },
+      {
+        "atSeconds": 4.1,
+        "event": "carry",
+        "variant": 1
+      },
+      {
+        "atSeconds": 4.85,
+        "event": "carry",
+        "variant": 2
+      },
+      {
+        "atSeconds": 5.6,
+        "event": "release",
+        "variant": 1
+      },
+      {
+        "atSeconds": 5.85,
+        "event": "fall",
+        "variant": 1
+      },
+      {
+        "atSeconds": 6.4,
+        "event": "land_soft",
+        "variant": 1
+      },
+      {
+        "atSeconds": 7.3,
+        "event": "step",
+        "variant": 1
+      },
+      {
+        "atSeconds": 7.65,
+        "event": "step",
+        "variant": 2
+      },
+      {
+        "atSeconds": 8.0,
+        "event": "step",
+        "variant": 3
+      },
+      {
+        "atSeconds": 8.35,
+        "event": "step",
+        "variant": 1
+      },
+      {
+        "atSeconds": 8.8,
+        "event": "turn",
+        "variant": 1
+      },
+      {
+        "atSeconds": 9.55,
+        "event": "jump",
+        "variant": 1
+      },
+      {
+        "atSeconds": 10.1,
+        "event": "grab",
+        "variant": 1
+      },
+      {
+        "atSeconds": 10.6,
+        "event": "climb",
+        "variant": 1
+      },
+      {
+        "atSeconds": 11.0,
+        "event": "climb",
+        "variant": 2
+      },
+      {
+        "atSeconds": 11.4,
+        "event": "climb",
+        "variant": 3
+      },
+      {
+        "atSeconds": 12.0,
+        "event": "pull_up",
+        "variant": 1
+      },
+      {
+        "atSeconds": 13.0,
+        "event": "bump",
+        "variant": 1
+      },
+      {
+        "atSeconds": 14.0,
+        "event": "slip",
+        "variant": 1
+      },
+      {
+        "atSeconds": 14.25,
+        "event": "fall",
+        "variant": 2
+      },
+      {
+        "atSeconds": 14.9,
+        "event": "land_hard",
+        "variant": 1
+      },
+      {
+        "atSeconds": 16.0,
+        "event": "sit",
+        "variant": 1
+      },
+      {
+        "atSeconds": 17.0,
+        "event": "stand",
+        "variant": 1
+      },
+      {
+        "atSeconds": 18.0,
+        "event": "stretch",
+        "variant": 1
+      },
+      {
+        "atSeconds": 19.2,
+        "event": "yawn",
+        "variant": 1
+      },
+      {
+        "atSeconds": 20.5,
+        "event": "sleep",
+        "variant": 1
+      },
+      {
+        "atSeconds": 22.2,
+        "event": "wake",
+        "variant": 1
+      }
+    ]
+  }
+}
