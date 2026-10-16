@@ -150,6 +150,7 @@ export interface SimulationFrame {
   displayId: string;
   support: Platform | null;
   grip: Grip | null;
+  climb: { wall: Wall; hand: Point } | null;
   pose: RigPose;
 }
 export interface PointerInput {
