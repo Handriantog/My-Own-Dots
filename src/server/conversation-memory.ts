@@ -39,6 +39,65 @@ export function unionEvidence(
     originDotId: guard.originDotId,
     spaceIds: [...new Set([...(a?.spaceIds ?? []), ...guard.spaceIds])].sort(),
     pageIds: [...new Set([...(a?.pageIds ?? []), ...guard.pageIds])].sort(),
+    ...Object.fromEntries(
+      ['memoryItemIds', 'memorySourceKeys'].flatMap((key) => {
+        const k = key as 'memoryItemIds' | 'memorySourceKeys';
+        const values = [
+          ...new Set([...(a?.[k] ?? []), ...(guard[k] ?? [])]),
+        ].sort();
+        return values.length ? [[key, values]] : [];
+      }),
+    ),
+  });
+}
+export function guardDependenciesAllowed(
+  workspace: WorkspaceStore,
+  guard: EvidenceGuard,
+  dotId: string,
+  memoryEnabled: boolean,
+  seen = new Set<string>(),
+): boolean {
+  if (
+    (guard.memoryItemIds?.length || guard.memorySourceKeys?.length) &&
+    (!memoryEnabled || !workspace.dot(dotId)?.memoryAllowed)
+  )
+    return false;
+  if (
+    guard.memorySourceKeys?.some((key) =>
+      workspace.memory.history.keySuppressed(key),
+    )
+  )
+    return false;
+  return (guard.memoryItemIds ?? []).every((id) => {
+    if (seen.has(id)) return true;
+    seen.add(id);
+    const item = workspace.memory.get(id);
+    if (!item || !['active', 'superseded'].includes(item.status)) return false;
+    if (item.scope.kind === 'dot' && item.scope.id !== dotId) return false;
+    if (
+      item.scope.kind === 'space' &&
+      !workspace.canAccessSpace(dotId, item.scope.id)
+    )
+      return false;
+    return item.sources.every(
+      (ref) =>
+        !workspace.memory.sourceSuppressed(ref) &&
+        ref.guard.spaceIds.every((space) =>
+          workspace.canAccessSpace(dotId, space),
+        ) &&
+        ref.guard.pageIds.every((page) =>
+          ref.guard.spaceIds.some((space) =>
+            workspace.pages.exists(space, page),
+          ),
+        ) &&
+        guardDependenciesAllowed(
+          workspace,
+          ref.guard,
+          dotId,
+          memoryEnabled,
+          seen,
+        ),
+    );
   });
 }
 export interface IndexCoverage {
@@ -85,6 +144,7 @@ export class ConversationMemory {
     readonly pg: MemoryDatabase,
     readonly ownerId: string,
     readonly workspace: WorkspaceStore,
+    readonly memoryEnabled: () => boolean = () => true,
   ) {}
   initialize() {
     return initializeConversationMemorySchema(this.pg);
@@ -100,11 +160,59 @@ export class ConversationMemory {
     if (!dot) return false;
     if (guard.spaceIds.some((id) => !this.workspace.canAccessSpace(dot.id, id)))
       return false;
-    return guard.pageIds.every((id) =>
-      guard.spaceIds.some((spaceId) =>
-        this.workspace.pages.exists(spaceId, id),
-      ),
+    return (
+      this.dependenciesAllowed(guard, dot.id) &&
+      guard.pageIds.every((id) =>
+        guard.spaceIds.some((spaceId) =>
+          this.workspace.pages.exists(spaceId, id),
+        ),
+      )
     );
+  }
+  dependenciesAllowed(guard: EvidenceGuard, dotId: string): boolean {
+    return guardDependenciesAllowed(
+      this.workspace,
+      guard,
+      dotId,
+      this.memoryEnabled(),
+    );
+  }
+  async modelMessages(
+    threadId: string,
+    messages: Message[],
+  ): Promise<Message[]> {
+    const binding = this.workspace.requireThread(threadId);
+    const runs = await this.pg.query<{ guard: EvidenceGuard; ids: string[] }>(
+      `SELECT evidence_guard AS guard,jsonb_path_query_array(evidence_messages,'$[*].id') AS ids FROM local_ai_runs WHERE owner_id=$1 AND thread_id=$2 AND evidence_guard IS NOT NULL`,
+      [this.ownerId, threadId],
+    );
+    const hidden = new Set<string>();
+    for (const run of runs.rows)
+      if (
+        run.guard.originDotId !== binding.dotId ||
+        !this.sourcesExist(run.guard)
+      )
+        for (const id of run.ids) hidden.add(id);
+    return this.workspace.memory
+      .maskMessages(threadId, messages)
+      .map((message) => {
+        if (!hidden.has(message.id)) return message;
+        return {
+          ...message,
+          content: '[Memory content withheld]',
+          ...(message.role === 'assistant'
+            ? {
+                toolCalls: message.toolCalls?.map((call) => ({
+                  ...call,
+                  function: {
+                    ...call.function,
+                    arguments: '{"memoryContentWithheld":true}',
+                  },
+                })),
+              }
+            : {}),
+        } as Message;
+      });
   }
   async indexRun(runId: string): Promise<void> {
     const rows = await this.pg.query<{
@@ -139,7 +247,15 @@ export class ConversationMemory {
           (message.role === 'assistant' && message.toolCalls?.length
             ? JSON.stringify(message.toolCalls)
             : '');
-        for (let start = 0; start < text.length; start += 4000) {
+        for (let start = 0; start < text.length;) {
+          let end = start,
+            bytes = 0;
+          for (const char of text.slice(start)) {
+            const size = Buffer.byteLength(char);
+            if (bytes + size > 4000) break;
+            bytes += size;
+            end += char.length;
+          }
           const source: SourceRef = {
             threadId: run.thread_id,
             runId,
@@ -147,7 +263,8 @@ export class ConversationMemory {
             contentHash: evidenceHash(message),
             guard: run.evidence_guard,
             start,
-            end: Math.min(text.length, start + 4000),
+            end,
+            messageLength: text.length,
           };
           chunks.push({
             id: evidenceHash([
@@ -160,7 +277,7 @@ export class ConversationMemory {
             messageId: message.id,
             hash: source.contentHash,
             start,
-            text: text.slice(start, start + 4000),
+            text: text.slice(start, end),
             toolName:
               message.role === 'tool'
                 ? [...run.input.messages, ...run.evidence_messages]
@@ -173,6 +290,7 @@ export class ConversationMemory {
             role: message.role,
             source,
           });
+          start = end;
         }
       }
       // One statement atomically inserts all chunks and the indexing receipt.
@@ -224,6 +342,7 @@ export class ConversationMemory {
   async saveCheckpoint(
     checkpoint: ContextCheckpoint,
     expectedPrefixHash: string,
+    lease?: { id: string; token: string; now: number },
   ): Promise<boolean> {
     const messages = await this.threadMessages(checkpoint.threadId);
     const prefix = messages.slice(0, checkpoint.sourceMessageIds.length);
@@ -237,8 +356,10 @@ export class ConversationMemory {
     )
       return false;
     const result = await this.pg.query(
-      `INSERT INTO memory_checkpoints(owner_id,thread_id,id,covered_count,value)
+      `WITH current_lease AS (SELECT id FROM memory_jobs WHERE owner_id=$1 AND id=$7 AND lease_token=$8 AND state='running' AND lease_until>$9::bigint FOR UPDATE)
+      INSERT INTO memory_checkpoints(owner_id,thread_id,id,covered_count,value)
       SELECT $1,$2,$3,$4::integer,$5::jsonb FROM local_ai_threads t WHERE t.owner_id=$1 AND t.id=$2
+      AND ($7::text IS NULL OR EXISTS(SELECT 1 FROM current_lease))
       AND (SELECT coalesce(jsonb_agg(m ORDER BY ordinal),'[]'::jsonb) FROM jsonb_array_elements(t.messages) WITH ORDINALITY AS x(m,ordinal) WHERE ordinal<=$4::integer)=$6::jsonb
       ON CONFLICT(owner_id,id) DO UPDATE SET value=excluded.value RETURNING id`,
       [
@@ -248,6 +369,9 @@ export class ConversationMemory {
         checkpoint.sourceMessageIds.length,
         JSON.stringify(checkpoint),
         JSON.stringify(prefix),
+        lease?.id ?? null,
+        lease?.token ?? null,
+        lease?.now ?? null,
       ],
     );
     return result.rowCount === 1;

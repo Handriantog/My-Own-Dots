@@ -1,3 +1,4 @@
+import { evidenceHash } from './conversation-memory.js';
 import type { SourceRef } from '../shared/memory.js';
 import { defineTool } from '@copilotkit/runtime/v2';
 import { z } from 'zod';
@@ -13,10 +14,34 @@ export function memoryTools(
     signal.throwIfAborted();
     check();
   };
-  const deliver = async <T extends { sources: SourceRef[] }>(
+  const deliver = async <
+    T extends {
+      sources: SourceRef[];
+      id?: string;
+      kind?: string;
+      memoryId?: string;
+    },
+  >(
     result: T,
   ): Promise<T> => {
-    for (const source of result.sources) await record?.(source.guard);
+    const memoryId =
+      result.memoryId ??
+      (result.kind && result.kind !== 'episode' ? result.id : undefined);
+    if (memoryId)
+      await record?.({
+        originDotId: dotId,
+        spaceIds: [],
+        pageIds: [],
+        memoryItemIds: [memoryId],
+      });
+    for (const source of result.sources)
+      await record?.({
+        ...source.guard,
+        memorySourceKeys: [
+          ...(source.guard.memorySourceKeys ?? []),
+          evidenceHash(source),
+        ],
+      });
     verify();
     return result;
   };

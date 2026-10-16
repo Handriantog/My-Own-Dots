@@ -36,6 +36,9 @@ export function explicitPreference(
 ): boolean {
   return (
     source.role === 'user' &&
+    (source.source.start ?? 0) === 0 &&
+    (source.source.end === undefined ||
+      source.source.end === source.source.messageLength) &&
     source.text.trim() === text.trim() &&
     /^(?:(?:remember(?: that)?|correction:)\s+)?I\s+(?:(?:now\s+)?prefer|want|always|never)\b/i.test(
       source.text.trim(),

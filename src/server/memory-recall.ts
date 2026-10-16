@@ -46,6 +46,7 @@ export interface RecallPage {
   nextCursor?: string;
 }
 export interface RecallExcerpt {
+  memoryId?: string;
   id: string;
   text: string;
   sources: SourceRef[];
@@ -259,14 +260,17 @@ export class MemoryRecall {
     if (!item) return this.readSource(dotId, id, cursor);
     if (!(await this.permitted(principal, item)))
       throw new Error('Memory access unavailable');
-    return this.excerpt(
-      principal,
-      id,
-      item.text,
-      item.sources,
-      String(item.revision),
-      cursor,
-    );
+    return {
+      ...this.excerpt(
+        principal,
+        id,
+        item.text,
+        item.sources,
+        String(item.revision),
+        cursor,
+      ),
+      memoryId: item.id,
+    };
   }
   async readSource(
     dotId: string,

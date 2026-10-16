@@ -102,6 +102,7 @@ export class MemoryMaintenance {
       this.pg,
       workspace.ownerId,
       workspace,
+      () => store.settings().memoryAllowed,
     );
     this.recall = new MemoryRecall(
       workspace.memory,
@@ -208,17 +209,61 @@ export class MemoryMaintenance {
     if (this.store.settings().paused) throw new Error('Workspace is paused');
     this.recall.access.forDot(dotId);
   }
+  private ensureJobAllowed(job: MemoryJob): void {
+    if (this.closing || this.store.settings().paused)
+      throw new Error('Maintenance paused');
+    const settings = this.workspace.memory.settings(job.dotId, this.clock());
+    if (job.kind === 'dream') this.ensureAllowed(job.dotId);
+    if (
+      job.origin === 'automatic' &&
+      (job.kind === 'compact'
+        ? !settings.autoCompact
+        : !settings.autoDream || !settings.learningEnabled)
+    )
+      throw new Error('Maintenance disabled');
+  }
+  private async blockedThreads(threads: string[]): Promise<Set<string>> {
+    const result = await this.pg.query<{ id: string }>(
+      `SELECT t.id FROM local_ai_threads t JOIN local_ai_runs r ON r.owner_id=t.owner_id AND r.thread_id=t.id AND r.run_id=t.last_run_id
+      WHERE t.owner_id=$1 AND t.id=ANY($2::text[]) AND r.status='finished'
+      AND EXISTS(SELECT 1 FROM jsonb_array_elements(t.messages) m CROSS JOIN LATERAL jsonb_array_elements(coalesce(m->'toolCalls','[]'::jsonb)) c
+        WHERE m->>'role'='assistant' AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(t.messages) answer WHERE answer->>'role'='tool' AND answer->>'toolCallId'=c->>'id'))`,
+      [this.workspace.ownerId, threads],
+    );
+    return new Set(result.rows.map((row) => row.id));
+  }
+  private async jobBlocked(job: MemoryJob): Promise<boolean> {
+    if (job.origin !== 'automatic') return false;
+    const threads = job.threadId
+      ? [job.threadId]
+      : (
+          await this.pg.query<{ thread_id: string }>(
+            'SELECT DISTINCT thread_id FROM memory_episode_chunks WHERE owner_id=$1 AND source_id=ANY($2::text[])',
+            [this.workspace.ownerId, job.sourceIds],
+          )
+        ).rows.map((row) => row.thread_id);
+    return (await this.blockedThreads(threads)).size > 0;
+  }
   private async indexPending(dotId?: string): Promise<void> {
     const threads = this.workspace
       .conversations()
       .filter((t) => !dotId || t.dotId === dotId)
       .map((t) => t.id);
+    const cursorKey = 'index:' + (dotId ?? 'all');
     const rows = await this.pg.query<{ run_id: string }>(
       `SELECT r.run_id FROM local_ai_runs r WHERE r.owner_id=$1 AND r.thread_id=ANY($2::text[]) AND r.status<>'running' AND r.provenance_complete=true
-      AND NOT EXISTS(SELECT 1 FROM memory_index_runs i WHERE i.owner_id=r.owner_id AND i.thread_id=r.thread_id AND i.run_id=r.run_id) ORDER BY r.created_at DESC LIMIT 5`,
-      [this.workspace.ownerId, threads],
+      AND r.run_id>$3 AND NOT EXISTS(SELECT 1 FROM memory_index_runs i WHERE i.owner_id=r.owner_id AND i.thread_id=r.thread_id AND i.run_id=r.run_id) ORDER BY r.run_id LIMIT 5`,
+      [
+        this.workspace.ownerId,
+        threads,
+        this.workspace.memory.scanCursor(cursorKey),
+      ],
     );
     for (const row of rows.rows) await this.repository.indexRun(row.run_id);
+    this.workspace.memory.saveScanCursor(
+      cursorKey,
+      rows.rows.length === 5 ? rows.rows.at(-1)!.run_id : '',
+    );
   }
   async requestCompact(
     threadId: string,
@@ -277,11 +322,22 @@ export class MemoryMaintenance {
         .conversations()
         .filter((t) => t.dotId === dotId)
         .map((t) => t.id);
+    const cursorKey = 'dream:' + dotId;
+    const blocked =
+      origin === 'automatic'
+        ? await this.blockedThreads(threads)
+        : new Set<string>();
     const rows = await this.pg.query<{ source_id: string }>(
       `SELECT c.source_id FROM memory_episode_chunks c JOIN memory_evidence e ON e.owner_id=c.owner_id AND e.thread_id=c.thread_id AND e.run_id=c.run_id
       LEFT JOIN memory_processed_sources p ON p.owner_id=c.owner_id AND p.source_id=c.source_id
-      WHERE c.owner_id=$1 AND e.dot_id=$2 AND e.completed_at>=$3 AND c.thread_id=ANY($4::text[]) AND p.source_id IS NULL ORDER BY e.completed_at,c.source_id LIMIT 40`,
-      [this.workspace.ownerId, dotId, since, threads],
+      WHERE c.owner_id=$1 AND e.dot_id=$2 AND e.completed_at>=$3 AND c.thread_id=ANY($4::text[]) AND p.source_id IS NULL AND c.source_id>$5 ORDER BY c.source_id LIMIT 40`,
+      [
+        this.workspace.ownerId,
+        dotId,
+        since,
+        threads,
+        this.workspace.memory.scanCursor(cursorKey),
+      ],
     );
     const sourceIds: string[] = [];
     let bytes = 0;
@@ -289,16 +345,31 @@ export class MemoryMaintenance {
       const source = await this.repository.sourceById(row.source_id);
       if (
         !source ||
+        blocked.has(source.source.threadId) ||
         !this.recall.access.canRead(this.recall.access.forDot(dotId), source)
-      )
+      ) {
+        this.workspace.memory.saveScanCursor(cursorKey, row.source_id);
         continue;
+      }
       const size = estimateTokens(
         JSON.stringify({ id: source.id, text: source.text, role: source.role }),
       );
+      if (size > 10000) {
+        this.workspace.memory.saveScanCursor(cursorKey, row.source_id);
+        continue;
+      }
       if (sourceIds.length >= 20 || bytes + size > 10000) break;
+      this.workspace.memory.saveScanCursor(cursorKey, row.source_id);
       sourceIds.push(source.id);
       bytes += size;
     }
+    if (
+      rows.rows.length < 40 &&
+      (!rows.rows.length ||
+        this.workspace.memory.scanCursor(cursorKey) ===
+          rows.rows.at(-1)!.source_id)
+    )
+      this.workspace.memory.saveScanCursor(cursorKey, '');
     if (!sourceIds.length && origin === 'automatic') return;
     const key = 'dream:' + dotId + ':' + evidenceHash(sourceIds);
     const existing = await this.jobs.find(key);
@@ -416,7 +487,8 @@ export class MemoryMaintenance {
             );
             boundary = {
               key,
-              blocked: pendingApproval(messages),
+              blocked:
+                row.last_status === 'finished' && pendingApproval(messages),
               bytes: estimateTokens(
                 JSON.stringify(
                   messages.slice(checkpoint?.sourceMessageIds.length ?? 0),
@@ -485,6 +557,8 @@ export class MemoryMaintenance {
     );
     timeout.unref();
     const tracked = async (options: AgentOptions): Promise<AgentResult> => {
+      this.ensureJobAllowed(job);
+      if (await this.jobBlocked(job)) throw new Error('Waiting for approval');
       await this.jobs.recordUsage(job.id, job.leaseToken!, { modelCalls: 1 });
       const began = this.clock();
       try {
@@ -504,8 +578,26 @@ export class MemoryMaintenance {
       this.scheduler,
     );
     try {
+      this.ensureJobAllowed(job);
+      if (await this.jobBlocked(job)) {
+        await this.jobs.defer(job.id, job.leaseToken!);
+        return;
+      }
       if (job.kind === 'compact') {
-        await new ContextCompaction(this.repository, inference).compact(
+        await new ContextCompaction(
+          this.repository,
+          inference,
+          async (checkpoint, hash) => {
+            this.ensureJobAllowed(job);
+            if (await this.jobBlocked(job))
+              throw new Error('Waiting for approval');
+            return this.repository.saveCheckpoint(checkpoint, hash, {
+              id: job.id,
+              token: job.leaseToken!,
+              now: this.clock(),
+            });
+          },
+        ).compact(
           job.threadId!,
           controller.signal,
           job.origin === 'manual' ? 'manual' : 'compact',
@@ -520,12 +612,19 @@ export class MemoryMaintenance {
             inference,
           ).analyze(job, controller.signal);
           controller.signal.throwIfAborted();
+          this.ensureJobAllowed(job);
+          if (await this.jobBlocked(job))
+            throw new Error('Waiting for approval');
           await this.publication.apply(
             job.id,
             proposal,
             job.publicationPolicy ?? 'review_all',
             job.dotId,
-            (work) => this.jobs.withLease(job.id, job.leaseToken!, work),
+            (work) =>
+              this.jobs.withLease(job.id, job.leaseToken!, () => {
+                this.ensureJobAllowed(job);
+                return work();
+              }),
           );
         }
         await this.jobs.acknowledge(job.id);
@@ -540,6 +639,10 @@ export class MemoryMaintenance {
         current?.state === 'running' &&
         current.leaseToken === job.leaseToken
       ) {
+        if (message === 'Waiting for approval') {
+          await this.jobs.defer(job.id, job.leaseToken!);
+          return;
+        }
         const disabled =
           this.closing || /disabled|paused|stopped/i.test(message);
         const retry =

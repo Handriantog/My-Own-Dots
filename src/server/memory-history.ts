@@ -20,6 +20,8 @@ export class MemoryHistory {
       CREATE TABLE IF NOT EXISTS memory_suppressions(ownerId TEXT NOT NULL,sourceKey TEXT NOT NULL,threadId TEXT NOT NULL,messageId TEXT NOT NULL,value TEXT NOT NULL,reason TEXT NOT NULL,PRIMARY KEY(ownerId,sourceKey,messageId));
       CREATE INDEX IF NOT EXISTS memory_suppressions_thread ON memory_suppressions(ownerId,threadId,messageId);
       CREATE TABLE IF NOT EXISTS memory_source_grants(ownerId TEXT NOT NULL,itemId TEXT NOT NULL,sourceKey TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(ownerId,itemId,sourceKey));
+      CREATE TABLE IF NOT EXISTS memory_suppression_claims(ownerId TEXT NOT NULL,sourceKey TEXT NOT NULL,messageId TEXT NOT NULL,eventId TEXT NOT NULL,PRIMARY KEY(ownerId,sourceKey,messageId,eventId));
+      INSERT OR IGNORE INTO memory_suppression_claims SELECT ownerId,sourceKey,messageId,'legacy' FROM memory_suppressions s WHERE NOT EXISTS(SELECT 1 FROM memory_suppression_claims c WHERE c.ownerId=s.ownerId AND c.sourceKey=s.sourceKey AND c.messageId=s.messageId);
       CREATE TABLE IF NOT EXISTS memory_restore_previews(ownerId TEXT NOT NULL,id TEXT NOT NULL,value TEXT NOT NULL,PRIMARY KEY(ownerId,id));`);
   }
   receipt(key: string): ApplyReceipt | undefined {
@@ -67,9 +69,14 @@ export class MemoryHistory {
         .get(this.ownerId)?.value ?? 0,
     );
   }
-  suppress(sources: SourceRef[], reason: string): void {
+  suppress(sources: SourceRef[], reason: string, eventId = 'legacy'): void {
     for (const source of sources)
-      for (const messageId of source.messageIds)
+      for (const messageId of source.messageIds) {
+        this.db
+          .prepare(
+            'INSERT OR IGNORE INTO memory_suppression_claims VALUES (?,?,?,?)',
+          )
+          .run(this.ownerId, evidenceHash(source), messageId, eventId);
         this.db
           .prepare(
             'INSERT OR IGNORE INTO memory_suppressions VALUES (?,?,?,?,?,?)',
@@ -82,6 +89,24 @@ export class MemoryHistory {
             JSON.stringify(source),
             reason,
           );
+      }
+    this.db
+      .prepare(
+        "INSERT INTO memory_meta VALUES (?,'suppression-generation','1') ON CONFLICT(ownerId,key) DO UPDATE SET value=CAST(value AS INTEGER)+1",
+      )
+      .run(this.ownerId);
+  }
+  releaseSuppression(eventId: string): void {
+    this.db
+      .prepare(
+        'DELETE FROM memory_suppression_claims WHERE ownerId=? AND eventId=?',
+      )
+      .run(this.ownerId, eventId);
+    this.db
+      .prepare(
+        'DELETE FROM memory_suppressions WHERE ownerId=? AND NOT EXISTS(SELECT 1 FROM memory_suppression_claims c WHERE c.ownerId=memory_suppressions.ownerId AND c.sourceKey=memory_suppressions.sourceKey AND c.messageId=memory_suppressions.messageId)',
+      )
+      .run(this.ownerId);
     this.db
       .prepare(
         "INSERT INTO memory_meta VALUES (?,'suppression-generation','1') ON CONFLICT(ownerId,key) DO UPDATE SET value=CAST(value AS INTEGER)+1",
@@ -104,6 +129,13 @@ export class MemoryHistory {
           );
         }),
     );
+  }
+  keySuppressed(key: string): boolean {
+    return !!this.db
+      .prepare(
+        'SELECT 1 FROM memory_suppressions WHERE ownerId=? AND sourceKey=? LIMIT 1',
+      )
+      .get(this.ownerId, key);
   }
   maskMessages(threadId: string, messages: Message[]): Message[] {
     const suppressed = this.db
@@ -138,8 +170,10 @@ export class MemoryHistory {
             '[Memory content withheld]' +
             text.slice(end);
         message.content = text;
-      } else if (message.role === 'assistant') {
+      } else {
         message.content = '[Memory content withheld]';
+      }
+      if (message.role === 'assistant') {
         message.toolCalls = message.toolCalls?.map((call) => ({
           ...call,
           function: {
@@ -155,7 +189,7 @@ export class MemoryHistory {
     this.db
       .prepare('DELETE FROM memory_source_grants WHERE ownerId=? AND itemId=?')
       .run(this.ownerId, item.id);
-    if (scope.kind === 'dot') return;
+    void scope;
     for (const ref of item.sources)
       this.db
         .prepare('INSERT INTO memory_source_grants VALUES (?,?,?,?)')

@@ -790,7 +790,10 @@ export function App() {
                 </p>
               </div>
               {view === 'memories' &&
-                workspace.setup.conversationBackend !== 'local' && (
+                !(
+                  workspace.setup.conversationBackend === 'local' &&
+                  workspace.setup.llmBackend === 'subscription'
+                ) && (
                   <button
                     className="primary"
                     onClick={() => setDialog({ type: 'memory' })}

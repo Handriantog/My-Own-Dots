@@ -197,8 +197,14 @@ export class MemoryJobs {
     automaticOnly = false,
   ): Promise<void> {
     await this.pg.query(
-      "UPDATE memory_jobs SET state='cancelled',error='Maintenance disabled' WHERE owner_id=$1 AND dot_id=$2 AND kind=$3 AND state='queued' AND ($4=false OR origin='automatic')",
+      "UPDATE memory_jobs SET state='cancelled',error='Maintenance disabled' WHERE owner_id=$1 AND dot_id=$2 AND kind=$3 AND state IN ('queued','running') AND ($4=false OR origin='automatic')",
       [this.ownerId, dotId, kind, automaticOnly],
+    );
+  }
+  async defer(id: string, lease: string): Promise<void> {
+    await this.pg.query(
+      "UPDATE memory_jobs SET state='queued',lease_token=NULL,lease_until=NULL,attempts=greatest(0,attempts-1),due_at=$4,error='Waiting for approval' WHERE owner_id=$1 AND id=$2 AND lease_token=$3 AND state='running'",
+      [this.ownerId, id, lease, this.clock() + 5000],
     );
   }
   async withLease<T>(id: string, lease: string, work: () => T): Promise<T> {

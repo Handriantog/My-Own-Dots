@@ -11,10 +11,13 @@ export const evidenceGuardSchema = z
     originDotId: memoryIdSchema,
     spaceIds: z.array(memoryIdSchema).max(100),
     pageIds: z.array(memoryIdSchema).max(1000),
+    memoryItemIds: z.array(memoryIdSchema).max(1000).optional(),
+    memorySourceKeys: z.array(memoryIdSchema).max(2000).optional(),
   })
   .strict();
 export const sourceRefSchema = z
   .object({
+    messageLength: z.number().int().nonnegative().optional(),
     start: z.number().int().nonnegative().optional(),
     end: z.number().int().nonnegative().optional(),
     threadId: memoryIdSchema,
@@ -142,6 +145,7 @@ export interface AppliedChange {
   after: MemoryItem;
 }
 export interface ApplyReceipt {
+  suppressionId?: string;
   id: string;
   jobId: string;
   dotId: string;

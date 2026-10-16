@@ -156,6 +156,14 @@ export class MemoryStore {
       principal.dotId,
       JSON.stringify(principal.spaceIds),
     ];
+    if (query.after !== undefined) {
+      clauses.push("json_extract(m.value,'$.createdAt')>=?");
+      args.push(query.after);
+    }
+    if (query.before !== undefined) {
+      clauses.push("json_extract(m.value,'$.createdAt')<=?");
+      args.push(query.before);
+    }
     if (query.kinds) {
       clauses.push('m.kind IN (SELECT value FROM json_each(?))');
       args.push(JSON.stringify(query.kinds));
@@ -193,6 +201,20 @@ export class MemoryStore {
     } finally {
       this.depth--;
     }
+  }
+  scanCursor(key: string): string {
+    return String(
+      this.db
+        .prepare('SELECT value FROM memory_meta WHERE ownerId=? AND key=?')
+        .get(this.ownerId, 'scan:' + key)?.value ?? '',
+    );
+  }
+  saveScanCursor(key: string, value: string): void {
+    this.db
+      .prepare(
+        'INSERT INTO memory_meta VALUES (?,?,?) ON CONFLICT(ownerId,key) DO UPDATE SET value=excluded.value',
+      )
+      .run(this.ownerId, 'scan:' + key, value);
   }
   generation(): number {
     return Number(

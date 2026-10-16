@@ -143,3 +143,41 @@ it('rejects pin overflow and immediately refreshes changed or disabled essential
     ),
   ).not.toContain('New preference');
 });
+it('rechecks a pinned record after asynchronous source validation', async () => {
+  const { publicationFixture } = await import('./fixtures/memory.js');
+  const f = await publicationFixture();
+  close.push(f.close);
+  const record = f.add('I prefer weekly reports.').record;
+  const item = f.workspace.memory.create({
+    scope: { kind: 'dot', id: f.dot.id },
+    title: 'Preference',
+    text: record.text,
+    pinned: true,
+    sources: [record.source],
+  });
+  const builder = new ContextBuilder(f.recall);
+  f.recall.episodes.readSource = async () => {
+    f.workspace.memory.edit(item.id, 1, { status: 'forgotten', pinned: false });
+    return record;
+  };
+  expect(await builder.essentials(f.dot.id)).toEqual([]);
+});
+it('does not return pinned context when source validation revokes memory permission', async () => {
+  const { publicationFixture } = await import('./fixtures/memory.js');
+  const f = await publicationFixture();
+  close.push(f.close);
+  const record = f.add('I prefer weekly reports.').record;
+  f.workspace.memory.create({
+    scope: { kind: 'dot', id: f.dot.id },
+    title: 'Preference',
+    text: record.text,
+    pinned: true,
+    sources: [record.source],
+  });
+  const builder = new ContextBuilder(f.recall);
+  f.recall.episodes.readSource = async () => {
+    f.store.updateSettings({ memoryAllowed: false });
+    return record;
+  };
+  await expect(builder.essentials(f.dot.id)).rejects.toThrow(/disabled/);
+});

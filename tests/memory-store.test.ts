@@ -139,3 +139,25 @@ it('text-only edits retain evidence, pending status, kind, pin, and expiry', () 
     sources: item.sources,
   });
 });
+it('applies inclusive date ranges to durable facts and skills across pages', () => {
+  const { memory } = setup();
+  memory.importLegacy([
+    { id: 'old', text: 'report preference', createdAt: 10 },
+    { id: 'within', text: 'report preference', createdAt: 20 },
+    { id: 'new', text: 'report preference', createdAt: 30 },
+  ]);
+  const principal = {
+    ownerId: 'owner',
+    dotId: 'dot',
+    spaceIds: [],
+    permissionGeneration: 'test',
+  };
+  const page = memory.search(
+    { query: 'report', after: 20, before: 20 },
+    principal,
+    undefined,
+    1,
+  );
+  expect(page.items.map((i) => i.id)).toEqual(['within']);
+  expect(page.nextCursor).toBeUndefined();
+});

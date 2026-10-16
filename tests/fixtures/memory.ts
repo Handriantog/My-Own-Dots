@@ -49,6 +49,7 @@ export async function publicationFixture() {
       guard: { originDotId: dot.id, spaceIds: [], pageIds: [] },
       start: 0,
       end: text.length,
+      messageLength: text.length,
     });
     const id = evidenceHash(['owner', 'thread', runId, message.id, 0]);
     const record = {

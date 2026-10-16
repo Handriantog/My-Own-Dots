@@ -178,8 +178,13 @@ export class DreamPublication {
             }),
           });
         }
+      const suppressionId = randomUUID();
       if (decision === 'reject')
-        this.memory.history.suppress(before.sources, 'Rejected proposal');
+        this.memory.history.suppress(
+          before.sources,
+          'Rejected proposal',
+          suppressionId,
+        );
       const after = this.memory.edit(id, expectedRevision, {
         status: decision === 'approve' ? 'active' : 'rejected',
         pinned,
@@ -188,6 +193,7 @@ export class DreamPublication {
       this.memory.history.saveReceipt({
         id: randomUUID(),
         jobId: 'review:' + randomUUID(),
+        suppressionId,
         dotId: dotId ?? '',
         createdAt: Date.now(),
         changes,
@@ -198,7 +204,12 @@ export class DreamPublication {
   forget(id: string, expectedRevision: number): void {
     this.memory.atomic(() => {
       const before = this.target(id, expectedRevision);
-      this.memory.history.suppress(before.sources, 'Forgotten memory');
+      const suppressionId = randomUUID();
+      this.memory.history.suppress(
+        before.sources,
+        'Forgotten memory',
+        suppressionId,
+      );
       const after = this.memory.edit(id, expectedRevision, {
         status: 'forgotten',
         pinned: false,
@@ -206,6 +217,7 @@ export class DreamPublication {
       this.memory.history.saveReceipt({
         id: randomUUID(),
         jobId: 'forget:' + randomUUID(),
+        suppressionId,
         dotId: before.scope.kind === 'dot' ? before.scope.id : '',
         createdAt: Date.now(),
         changes: [{ before, after }],
@@ -275,6 +287,10 @@ export class DreamPublication {
       throw new Error('Restore revision conflict');
     return this.memory.atomic(() => {
       const changes: AppliedChange[] = [];
+      const original = this.memory.history.receipt(preview.changeSetId)!;
+      const suppressionId = randomUUID();
+      if (original.suppressionId)
+        this.memory.history.releaseSuppression(original.suppressionId);
       for (const change of [...preview.changes].reverse()) {
         const before = this.target(
           change.after.id,
@@ -288,8 +304,15 @@ export class DreamPublication {
             (s) => !oldSources.has(JSON.stringify(s)),
           ),
           'Restored change set',
+          suppressionId,
         );
         const old = change.before;
+        if (old && ['forgotten', 'rejected'].includes(old.status))
+          this.memory.history.suppress(
+            old.sources,
+            'Restored suppressed state',
+            suppressionId,
+          );
         const patch: MemoryPatch = old
           ? {
               scope: old.scope,
@@ -308,10 +331,38 @@ export class DreamPublication {
           after: this.memory.edit(before.id, before.revision, patch),
         });
       }
-      const original = this.memory.history.receipt(preview.changeSetId)!;
+      // Rebase only targets restored by this same operation. Unrelated edits still conflict.
+      const restored = new Map(
+        changes.map((c) => [c.after.id, c.after.revision]),
+      );
+      for (const change of changes) {
+        const operation = this.memory.history.operation(change.after.id);
+        if (
+          change.after.status !== 'pending' ||
+          !operation ||
+          !('targetId' in operation)
+        )
+          continue;
+        const rebase = <
+          T extends { targetId: string; expectedRevision: number },
+        >(
+          target: T,
+        ): T => ({
+          ...target,
+          expectedRevision:
+            restored.get(target.targetId) ?? target.expectedRevision,
+        });
+        this.memory.history.saveOperation(change.after.id, {
+          ...rebase(operation),
+          ...(operation.kind === 'merge'
+            ? { duplicates: operation.duplicates.map(rebase) }
+            : {}),
+        });
+      }
       const receipt = {
         id: randomUUID(),
         jobId: 'restore:' + previewId,
+        suppressionId,
         dotId: original.dotId,
         createdAt: Date.now(),
         changes,

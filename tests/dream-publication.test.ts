@@ -188,3 +188,134 @@ it('allows forgetting imported legacy text beyond the manual-write size cap', as
     revision: 2,
   });
 });
+it('restores forget and reject suppression without clearing an independent forget', async () => {
+  const f = await setup();
+  const item = (
+    await f.publication.apply('restore-forget', f.proposal, 'hybrid', f.dot.id)
+  ).changes[0].after;
+  f.publication.forget(item.id, 1);
+  const forgot = f.workspace.memory.history.receipts()[0];
+  const preview = f.publication.previewRestore(forgot.id);
+  f.publication.restore(preview.id, preview.expectedRevisions);
+  expect((await f.recall.read(f.dot.id, item.id)).text).toBe(item.text);
+  const pending = (
+    await f.publication.apply(
+      'restore-reject',
+      f.proposal,
+      'review_all',
+      f.dot.id,
+    )
+  ).changes[0].after;
+  await f.publication.review(pending.id, 1, 'reject');
+  const rejected = f.publication.previewRestore(
+    f.workspace.memory.history.receipts()[0].id,
+  );
+  f.publication.restore(rejected.id, rejected.expectedRevisions);
+  expect((await f.publication.review(pending.id, 3, 'approve')).status).toBe(
+    'active',
+  );
+  f.publication.forget(item.id, 3);
+  f.publication.forget(pending.id, 4);
+  const second = f.publication.previewRestore(
+    f.workspace.memory.history.receipts()[0].id,
+  );
+  f.publication.restore(second.id, second.expectedRevisions);
+  await expect(f.recall.read(f.dot.id, pending.id)).rejects.toThrow(/access/);
+});
+it('restores a pending correction and its edited text with usable predecessor revisions', async () => {
+  const f = await setup();
+  const old = (
+    await f.publication.apply('old-review', f.proposal, 'hybrid', f.dot.id)
+  ).changes[0].after;
+  const source = f.add('I prefer weekly reports.', 'correction').record;
+  const change: DreamChange = {
+    ...f.change,
+    kind: 'supersede',
+    targetId: old.id,
+    expectedRevision: 1,
+    text: source.text,
+    sources: [source.source],
+    sourceIds: [source.id],
+  };
+  const item = (
+    await f.publication.apply(
+      'pending-correction',
+      { changes: [change], evidence: change.sources },
+      'review_all',
+      f.dot.id,
+    )
+  ).changes[0].after;
+  f.workspace.memory.edit(item.id, 1, {
+    text: 'Owner edited weekly preference',
+  });
+  await f.publication.review(item.id, 2, 'approve');
+  const preview = f.publication.previewRestore(
+    f.workspace.memory.history.receipts()[0].id,
+  );
+  f.publication.restore(preview.id, preview.expectedRevisions);
+  expect(f.workspace.memory.get(item.id)?.text).toBe(
+    'Owner edited weekly preference',
+  );
+  expect((await f.publication.review(item.id, 4, 'approve')).status).toBe(
+    'active',
+  );
+});
+it('shares selected source evidence directly to another Dot', async () => {
+  const f = await setup(),
+    other = f.workspace.createDot(f.dot.spaceId, 'Other', 'Help', true, true);
+  const item = (
+    await f.publication.apply('dot-share', f.proposal, 'hybrid', f.dot.id)
+  ).changes[0].after;
+  const privateSource = f.add('Private unrelated', 'private').record;
+  await f.publication.share(item.id, 1, { kind: 'dot', id: other.id });
+  expect(
+    (await f.recall.readSource(other.id, f.change.sourceIds[0])).text,
+  ).toBe(item.text);
+  await expect(f.recall.readSource(other.id, privateSource.id)).rejects.toThrow(
+    /access/,
+  );
+});
+it('keeps a preference quoted inside a partial message awaiting review', async () => {
+  const f = await setup();
+  const record = f.records.get(f.change.sourceIds[0])!;
+  record.source.start = 4000;
+  record.source.end = 4000 + record.text.length;
+  const item = (
+    await f.publication.apply('partial', f.proposal, 'hybrid', f.dot.id)
+  ).changes[0].after;
+  expect(item.status).toBe('pending');
+});
+it('withholds forgotten tool arguments even when assistant content is empty', async () => {
+  const f = await setup();
+  const { evidenceHash } = await import('../src/server/conversation-memory.js');
+  const message = {
+    id: 'call',
+    role: 'assistant' as const,
+    content: '',
+    toolCalls: [
+      {
+        id: 'tc',
+        type: 'function' as const,
+        function: {
+          name: 'read_memory',
+          arguments: '{"secret":"original value"}',
+        },
+      },
+    ],
+  };
+  f.workspace.memory.history.suppress(
+    [
+      {
+        threadId: 'thread',
+        runId: 'run',
+        messageIds: ['call'],
+        contentHash: evidenceHash(message),
+        guard: { originDotId: f.dot.id, spaceIds: [], pageIds: [] },
+      },
+    ],
+    'forgot',
+  );
+  const visible = f.workspace.memory.maskMessages('thread', [message]);
+  expect(JSON.stringify(visible)).not.toContain('original value');
+  expect(visible[0].id).toBe('call');
+});

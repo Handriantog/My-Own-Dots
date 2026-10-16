@@ -160,11 +160,16 @@ export class DotAgent extends AbstractAgent {
         const initialConnections = this.workspace.connections.fingerprint(
           dot.id,
         );
+        const sourcePages = new Map<string, string[]>();
         const check = () => {
           const settings = this.store.settings();
           const current = this.workspace.dot(dot.id);
           if (
             settings.paused ||
+            [...sourcePages].some(
+              ([id, spaces]) =>
+                !spaces.some((space) => this.workspace.pages.exists(space, id)),
+            ) ||
             (memoryGeneration !== undefined &&
               memoryGeneration !== this.workspace.memory.generation()) ||
             !current ||
@@ -377,17 +382,30 @@ export class DotAgent extends AbstractAgent {
                   ? async (payload, signal) => {
                       const essentials =
                         await this.memoryServices!.context.essentials(dot.id);
-                      for (const memory of essentials)
-                        for (const source of memory.sources)
+                      for (const memory of essentials) {
+                        await this.evidenceRecorder?.({
+                          originDotId: dot.id,
+                          spaceIds: [],
+                          pageIds: [],
+                          memoryItemIds: [memory.id],
+                        });
+                        for (const source of memory.sources) {
+                          for (const id of source.guard.pageIds)
+                            sourcePages.set(id, source.guard.spaceIds);
                           await this.evidenceRecorder?.({
                             ...source.guard,
                             originDotId: dot.id,
                           });
-                      return this.memoryServices!.context.project(
-                        payload,
-                        frame,
-                        signal,
-                      );
+                        }
+                      }
+                      const prepared =
+                        await this.memoryServices!.context.project(
+                          payload,
+                          frame,
+                          signal,
+                        );
+                      check();
+                      return prepared;
                     }
                   : undefined,
               })
@@ -401,6 +419,7 @@ export class DotAgent extends AbstractAgent {
           spaceIds: string[];
           pageIds: string[];
         }) => {
+          for (const id of guard.pageIds) sourcePages.set(id, guard.spaceIds);
           await this.evidenceRecorder?.({ ...guard, originDotId: this.dotId });
           check();
         };

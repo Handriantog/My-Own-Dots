@@ -1,7 +1,11 @@
 import type { MemoryItem, EvidenceGuard } from '../shared/memory.js';
 import type { Store } from './store.js';
 import type { WorkspaceStore } from './workspace.js';
-import { evidenceHash, type SourceRecord } from './conversation-memory.js';
+import {
+  evidenceHash,
+  guardDependenciesAllowed,
+  type SourceRecord,
+} from './conversation-memory.js';
 export interface RecallPrincipal {
   ownerId: string;
   dotId: string;
@@ -33,6 +37,12 @@ export class MemoryAccess {
   guardAllowed(principal: RecallPrincipal, guard: EvidenceGuard): boolean {
     try {
       return (
+        guardDependenciesAllowed(
+          this.workspace,
+          guard,
+          principal.dotId,
+          this.store.settings().memoryAllowed,
+        ) &&
         guard.spaceIds.every((id) =>
           this.workspace.canAccessSpace(principal.dotId, id),
         ) &&
@@ -68,6 +78,7 @@ export class MemoryAccess {
         this.guardAllowed(current, item.guard)
       );
     if (
+      this.workspace.memory.get(item.id)?.revision !== item.revision ||
       item.status !== 'active' ||
       (item.expiresAt !== null && item.expiresAt <= Date.now())
     )

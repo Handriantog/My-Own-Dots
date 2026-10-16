@@ -57,10 +57,27 @@ export class ContextCompaction {
   constructor(
     readonly repository: ConversationMemory,
     readonly inference: MemoryInference,
+    private publish?: (
+      checkpoint: ContextCheckpoint,
+      hash: string,
+    ) => Promise<boolean>,
   ) {}
-  private permissions(dotId: string): string {
+  private async permissions(
+    dotId: string,
+    threadId: string,
+    messages: Message[],
+  ): Promise<string> {
+    const visible = await this.repository.modelMessages(threadId, messages);
+    return this.permissionFingerprint(dotId, visible);
+  }
+  private permissionFingerprint(dotId: string, visible: Message[]): string {
     const dot = this.repository.workspace.dot(dotId);
-    return evidenceHash([dot?.spaceIds, dot?.memoryAllowed]);
+    return evidenceHash([
+      dot?.spaceIds,
+      dot?.memoryAllowed,
+      this.repository.memoryEnabled(),
+      visible,
+    ]);
   }
   async compact(
     threadId: string,
@@ -69,11 +86,10 @@ export class ContextCompaction {
   ): Promise<'updated' | 'no_change' | 'stale'> {
     signal.throwIfAborted();
     const binding = this.repository.workspace.requireThread(threadId);
-    const permissionGeneration = this.permissions(binding.dotId);
     const suppressionGeneration =
       this.repository.workspace.memory.suppressionGeneration();
     const messages = await this.repository.threadMessages(threadId);
-    const visibleMessages = this.repository.workspace.memory.maskMessages(
+    const visibleMessages = await this.repository.modelMessages(
       threadId,
       messages,
     );
@@ -82,7 +98,12 @@ export class ContextCompaction {
     if (end <= 0) return 'no_change';
     let previous = await this.repository.latestCheckpoint(threadId, messages);
     if (
-      previous?.permissionGeneration !== this.permissions(binding.dotId) ||
+      previous?.permissionGeneration !==
+        (await this.permissions(
+          binding.dotId,
+          threadId,
+          messages.slice(0, previous?.sourceMessageIds.length ?? 0),
+        )) ||
       previous?.suppressionGeneration !== suppressionGeneration
     )
       previous = undefined;
@@ -110,6 +131,17 @@ export class ContextCompaction {
         );
       const sourcePrefix = messages.slice(0, boundary);
       const evidence = visibleMessages.slice(start, boundary);
+      const permissionGeneration = await this.permissions(
+        binding.dotId,
+        threadId,
+        sourcePrefix,
+      );
+      if (
+        evidenceHash(
+          await this.repository.modelMessages(threadId, sourcePrefix),
+        ) !== evidenceHash(visibleMessages.slice(0, boundary))
+      )
+        return 'stale';
       const prompt = JSON.stringify({
         instruction:
           'Preserve the goal, exact user constraints and amounts, explicit corrections, decisions, completed actions, questions and next steps. A correction supersedes an earlier value. Do not infer success from an attempt. Cite original message IDs. A previous checkpoint is a fallible aid; originals take precedence.',
@@ -142,16 +174,16 @@ export class ContextCompaction {
       };
       signal.throwIfAborted();
       if (
-        permissionGeneration !== this.permissions(binding.dotId) ||
+        permissionGeneration !==
+          (await this.permissions(binding.dotId, threadId, sourcePrefix)) ||
         suppressionGeneration !==
           this.repository.workspace.memory.suppressionGeneration()
       )
         return 'stale';
       if (
-        !(await this.repository.saveCheckpoint(
-          checkpoint,
-          checkpoint.sourceHash,
-        ))
+        !(await (
+          this.publish ?? this.repository.saveCheckpoint.bind(this.repository)
+        )(checkpoint, checkpoint.sourceHash))
       )
         return 'stale';
       previous = checkpoint;
@@ -168,9 +200,36 @@ export class ContextCompaction {
       frame.threadId,
       frame.canonicalMessages,
     );
+    // Reauthorize originals and summary together after all storage awaits.
+    const visible = await this.repository.modelMessages(
+      frame.threadId,
+      frame.canonicalMessages,
+    );
+    const byId = new Map(visible.map((message) => [message.id, message]));
+    payload = {
+      ...payload,
+      messages: payload.messages.map((message) => {
+        const source = message.id ? byId.get(message.id) : undefined;
+        if (!source) return message;
+        return {
+          ...message,
+          content:
+            typeof source.content === 'string'
+              ? source.content
+              : message.content,
+          ...(source.role === 'assistant'
+            ? { toolCalls: source.toolCalls }
+            : {}),
+        };
+      }),
+    };
     if (
       !checkpoint ||
-      checkpoint.permissionGeneration !== this.permissions(frame.dotId) ||
+      checkpoint.permissionGeneration !==
+        this.permissionFingerprint(
+          frame.dotId,
+          visible.slice(0, checkpoint.sourceMessageIds.length),
+        ) ||
       checkpoint.suppressionGeneration !==
         this.repository.workspace.memory.suppressionGeneration()
     )

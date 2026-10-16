@@ -21,11 +21,11 @@ A manual Dream while learning is off is a one-time review-only pass. It does not
 
 ## What Dream may learn
 
-Dream consumes bounded batches of original evidence, can look up existing memory, and proposes changes. Hybrid publication automatically activates narrowly verified, direct first-person preferences using their original wording. Other supported facts and all procedures require review. Procedures need two distinct successful or explicitly endorsed episodes. Assistant guesses, quoted instructions, recalled memories, and unsuccessful tool attempts do not establish user preferences or successful procedures.
+Dream consumes bounded batches of original evidence, can look up existing memory, and proposes changes. Hybrid publication automatically activates narrowly verified, direct first-person preferences using their complete original message. A clipped or quoted fragment stays reviewable. Other supported facts and all procedures require review. Procedures need two distinct successful or explicitly endorsed episodes. Assistant guesses, quoted instructions, recalled memories, and unsuccessful tool attempts do not establish user preferences or successful procedures.
 
 Corrections supersede prior records. Owner-pinned records and concurrent manual edits are protected. Dream cannot edit role instructions, permissions, tool configuration, or arbitrarily broaden sharing. Sharing is an explicit owner action for the selected memory and its cited excerpts; it does not grant an entire private conversation. Current Space/page permissions still apply.
 
-Rejecting, forgetting, or reversing newly learned evidence suppresses its future recall and removes linked evidence from model projections. The original transcript and audit history remain available to the owner. **Forget is not physical deletion.** Deleting a source page makes its derived memory unavailable. Later genuinely new evidence may support a new proposal.
+Rejecting, forgetting, or reversing newly learned evidence suppresses its future recall and removes linked evidence from model projections. The original transcript and audit history remain available to the owner. **Forget is not physical deletion.** Known recalled copies and their dependent checkpoints are withheld too. An independently restated paraphrase without a recorded dependency may remain; this is not a promise of semantic erasure. Restoring a forget or rejection releases only that operation’s suppression; a separate forget remains effective. Deleting a source page makes its derived memory unavailable. Later genuinely new evidence may support a new proposal.
 
 ## Context and speed
 
@@ -37,7 +37,7 @@ Recall uses SQLite FTS5 and PostgreSQL full-text indexes without model calls or 
 
 Foreground chat reserves the app's inference scheduler and cancels background inference when necessary. The shared CLI can still be busy with another application outside Dots. Each maintenance job allows at most three model calls and five minutes, shared across up to two retries at 30 and 120 seconds. Limits and publication policy are snapshotted when admitted. Disabling learning or permissions cancels affected work. Startup schedules bounded work rather than replaying every missed interval.
 
-Maintenance checks at most 25 conversation boundaries per tick and caches unchanged boundaries. Indexing processes up to five guarded completed runs at a time. A very large individual run can still require substantial indexing work.
+Maintenance checks at most 25 conversation boundaries per tick and caches unchanged boundaries. Indexing processes up to five guarded completed runs at a time. Persisted scan positions advance past inaccessible evidence without marking it processed. Chunks are bounded by UTF-8 bytes, including CJK text. Automatic Dream skips evidence from approval-blocked conversations and rechecks this before execution. A very large individual run can still require substantial indexing work.
 
 ## Storage and recovery
 
@@ -55,16 +55,16 @@ October 17, 2026, Apple M3 Max, Node 24.20.0, local Docker PostgreSQL:
 
 | Local operation  | Cold p50 / p95 | Warm p50 / p95 |
 | ---------------- | -------------- | -------------- |
-| Recall           | 9.7 / 11.6 ms  | 0.8 / 1.2 ms   |
-| Context assembly | 12.3 / 20.5 ms | 3.5 / 4.0 ms   |
+| Recall           | 9.6 / 11.9 ms  | 0.8 / 1.5 ms   |
+| Context assembly | 14.7 / 30.7 ms | 5.9 / 7.9 ms   |
 
-The benchmark seeds 10,000 memories and 100,000 messages across 100 threads, with 1,000 messages in the active compacted thread. Thirty samples per category use actual application services. “Cold” creates a fresh service cache; OS/database caches are not flushed. One broad archived-message search took 51.4 ms. The 100 ms recall and 200 ms context targets passed for this dataset. These results exclude live provider latency and are not a guarantee for every archive or machine.
+The benchmark seeds 10,000 memories and 100,000 messages across 100 threads, with 1,000 messages in the active compacted thread. Thirty samples per category use actual application services. “Cold” creates a fresh service cache; OS/database caches are not flushed. One broad archived-message search took 56.9 ms. The 100 ms recall and 200 ms context targets passed for this dataset. These results exclude live provider latency and are not a guarantee for every archive or machine.
 
 Run `LOCAL_TEST_DATABASE_URL=... npm run benchmark:memory`. The script requires a database name containing `test`, rejects a URL matching `LOCAL_DATABASE_URL`, uses a randomized owner namespace and temporary SQLite files, and removes its own records afterward. Never point it at production.
 
 Timing instrumentation records bounded numeric samples for recall, context, provider queue, provider execution, tool-result round trips, and total turns. It does not retain prompts or memory content. Empty stages in a benchmark are reported as unmeasured, not zero latency.
 
-Automated tests use the real npm/Python subprocess and SSE transport with deterministic fixture inference. They cover short-chat learning, exact identifiers and Unicode, correction after restart, reviewed procedure recall, pending approval continuation after compaction, suppression, and an injected failure between publication and acknowledgement. Fixture final-answer checks establish data flow, not general model reasoning quality. Lexical paraphrase misses are explicitly tested and documented; embeddings are deferred.
+All 475 tests in 89 files pass. Type checking, lint, formatting, and the production build also pass. Automated tests use the real npm/Python subprocess and SSE transport with deterministic fixture inference. They cover short-chat learning, exact identifiers and Unicode, correction after restart, reviewed procedure recall, pending approval continuation after compaction, suppression, and an injected failure between publication and acknowledgement. Fixture final-answer checks establish data flow, not general model reasoning quality. Lexical paraphrase misses are explicitly tested and documented; embeddings are deferred.
 
 A separate tool-free live Codex Compact smoke returned schema-valid output in **6.49 seconds**, retaining `REQ-731`, the exact budget of `456`, and the approval constraint. This verifies the current installed Codex path only. Browser checks covered the memory and learning controls at desktop and 390-pixel widths. Other providers and long-running autonomous learning still need live evaluation.
 

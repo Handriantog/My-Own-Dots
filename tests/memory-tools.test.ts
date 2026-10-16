@@ -1,3 +1,4 @@
+import { evidenceHash } from '../src/server/conversation-memory.js';
 import { expect, it } from 'vitest';
 import { memoryTools } from '../src/server/memory-tools.js';
 import type { MemoryRecall } from '../src/server/memory-recall.js';
@@ -59,5 +60,38 @@ it('persists recalled provenance and rechecks access before returning evidence',
   await expect(
     tools.find((t) => t.name === 'read_memory')!.execute!({ id: 'm' } as never),
   ).rejects.toThrow('revoked');
-  expect(seen).toEqual([guard]);
+  expect(seen).toEqual([
+    { ...guard, memorySourceKeys: [evidenceHash(source)] },
+  ]);
+});
+
+it('records manual memory identity even when it has no conversation sources', async () => {
+  const seen: unknown[] = [];
+  const recall = {
+    read: async () => ({
+      id: 'manual',
+      memoryId: 'manual',
+      text: 'private preference',
+      sources: [],
+      sourceIds: [],
+    }),
+  } as unknown as MemoryRecall;
+  const tool = memoryTools(
+    recall,
+    'dot',
+    () => {},
+    new AbortController().signal,
+    async (guard) => {
+      seen.push(guard);
+    },
+  ).find((t) => t.name === 'read_memory')!;
+  await tool.execute!({ id: 'manual' } as never);
+  expect(seen).toEqual([
+    {
+      originDotId: 'dot',
+      spaceIds: [],
+      pageIds: [],
+      memoryItemIds: ['manual'],
+    },
+  ]);
 });

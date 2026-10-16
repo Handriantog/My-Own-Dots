@@ -94,7 +94,7 @@ export class ContextBuilder {
         ).some((source) => !source)
       )
         continue;
-      visible.push(item);
+      if (this.recall.access.canRead(principal, item)) visible.push(item);
     }
     return visible;
   }
@@ -158,6 +158,12 @@ export class ContextBuilder {
     }
     if (payloadTokens(projected) > this.limits.inputTokenLimit)
       throw new ContextCapacityError();
+    if (pinned.length) {
+      const current = this.recall.access.forDot(frame.dotId);
+      if (pinned.some((item) => !this.recall.access.canRead(current, item)))
+        throw new Error('Memory access changed during context preparation');
+    }
+    signal.throwIfAborted();
     this.estimates.set(frame.threadId, payloadTokens(projected));
     return projected;
   }
