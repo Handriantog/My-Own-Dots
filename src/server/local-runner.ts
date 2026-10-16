@@ -1,3 +1,5 @@
+import { memoryMetrics } from './memory-metrics.js';
+import type { EvidenceGuard } from '../shared/memory.js';
 import {
   AbstractAgent,
   EventType,
@@ -28,12 +30,18 @@ import {
   type ThreadLease,
 } from './local-conversations.js';
 
+interface EvidenceAgent extends AbstractAgent {
+  evidenceGuard?(threadId: string): EvidenceGuard;
+  setEvidenceRecorder?(record?: (guard: EvidenceGuard) => Promise<void>): void;
+}
 interface ActiveRun {
   runId: string;
   agent: AbstractAgent;
   subject: ReplaySubject<BaseEvent>;
   events: BaseEvent[];
   stopRequested: boolean;
+  activityController: AbortController;
+  toolStarts: Map<string, number>;
   storageFailed: boolean;
   pendingWrite?: Promise<BaseEvent>;
   done: Promise<void>;
@@ -57,7 +65,15 @@ export class LocalAgentRunner extends AgentRunner {
     { active?: ActiveRun; lease?: ThreadLease }
   >();
   private closed = false;
-  constructor(readonly store: LocalConversationStore) {
+  constructor(
+    readonly store: LocalConversationStore,
+    private activity?: {
+      enterForeground(
+        signal: AbortSignal,
+        threadId?: string,
+      ): Promise<() => void>;
+    },
+  ) {
     super();
   }
 
@@ -82,6 +98,8 @@ export class LocalAgentRunner extends AgentRunner {
       subject,
       events: [],
       stopRequested: false,
+      activityController: new AbortController(),
+      toolStarts: new Map(),
       storageFailed: false,
       done: Promise.resolve(),
     };
@@ -121,6 +139,29 @@ export class LocalAgentRunner extends AgentRunner {
                 'Conversation storage failed. This turn was stopped; unsaved output was not delivered.',
               );
             }
+            if (
+              persisted.type === EventType.TOOL_CALL_START &&
+              'toolCallId' in persisted
+            )
+              active.toolStarts.set(
+                String(persisted.toolCallId),
+                performance.now(),
+              );
+            if (
+              persisted.type === EventType.TOOL_CALL_RESULT &&
+              'toolCallId' in persisted
+            ) {
+              const key = String(persisted.toolCallId),
+                began = active.toolStarts.get(key);
+              if (began !== undefined) {
+                memoryMetrics.observe(
+                  'tools',
+                  performance.now() - began,
+                  false,
+                );
+                active.toolStarts.delete(key);
+              }
+            }
             active.events.push(structuredClone(persisted));
             if (!isTerminal(persisted)) active.subject.next(persisted);
             return persisted;
@@ -135,8 +176,10 @@ export class LocalAgentRunner extends AgentRunner {
   }
 
   private async execute(request: AgentRunnerRunRequest, active: ActiveRun) {
+    const turnStarted = performance.now();
     let lease: ThreadLease | null = null;
     let begun = false;
+    let releaseForeground: (() => void) | undefined;
     let failure: unknown;
     let binding: { active?: ActiveRun; lease?: ThreadLease } | undefined;
     const onStorageLost = () => {
@@ -147,6 +190,10 @@ export class LocalAgentRunner extends AgentRunner {
     try {
       if (request.threadId !== request.input.threadId)
         throw new Error('Conversation scope mismatch.');
+      releaseForeground = await this.activity?.enterForeground(
+        active.activityController.signal,
+        request.threadId,
+      );
       await this.store.getOrCreateThread({
         threadId: request.threadId,
         userId: this.store.ownerId,
@@ -177,7 +224,16 @@ export class LocalAgentRunner extends AgentRunner {
         request.persistedInputMessages ?? request.input.messages,
       );
       const input = { ...request.input, messages, state: snapshot.state };
-      await lease.beginRun(input);
+      const evidenceAgent = request.agent as EvidenceAgent;
+      await lease.beginRun(
+        input,
+        evidenceAgent.evidenceGuard?.(request.threadId),
+      );
+      evidenceAgent.setEvidenceRecorder?.(async (guard) => {
+        if (!lease?.addEvidenceGuard)
+          throw new Error('Evidence storage is unavailable');
+        await lease.addEvidenceGuard(guard);
+      });
       begun = true;
       if (active.stopRequested) throw new Error('Run stopped by user.');
       request.agent.threadId = request.threadId;
@@ -288,6 +344,7 @@ export class LocalAgentRunner extends AgentRunner {
         }
       }
     } finally {
+      (request.agent as EvidenceAgent).setEvidenceRecorder?.(undefined);
       if (binding?.active === active) {
         binding.active = undefined;
         binding.lease = undefined;
@@ -300,6 +357,8 @@ export class LocalAgentRunner extends AgentRunner {
           'Conversation storage connection could not be released.',
         );
       }
+      releaseForeground?.();
+      memoryMetrics.observe('turn', performance.now() - turnStarted, false);
       this.active.delete(request.threadId);
       if (failure) active.subject.next(runError(failure));
       else if (active.events.length) active.subject.next(active.events.at(-1)!);
@@ -379,6 +438,7 @@ export class LocalAgentRunner extends AgentRunner {
     )
       return false;
     active.stopRequested = true;
+    active.activityController.abort(new Error('Run stopped by user'));
     active.agent.abortRun();
     await active.agent.detachActiveRun();
     await active.done;

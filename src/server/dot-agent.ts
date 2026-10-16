@@ -1,3 +1,8 @@
+import type { InferenceScheduler } from './inference-scheduler.js';
+import type { MemoryRecall } from './memory-recall.js';
+import type { ContextBuilder, ContextFrame } from './context-builder.js';
+import { memoryTools } from './memory-tools.js';
+import type { EvidenceGuard } from '../shared/memory.js';
 import { parallelSources } from './parallel.js';
 import { pageReviewTool } from '../shared/page-review.js';
 import { ComputerService } from './computer-service.js';
@@ -37,6 +42,18 @@ const channelError = () => ({
     'OpenDots could not complete this request. Please check the app and try again.',
 });
 export class DotAgent extends AbstractAgent {
+  private evidenceRecorder?: (guard: EvidenceGuard) => Promise<void>;
+  evidenceGuard(threadId: string): EvidenceGuard {
+    const page = this.workspace.pages.forThread(threadId);
+    return {
+      originDotId: this.dotId,
+      spaceIds: page ? [page.spaceId] : [],
+      pageIds: page ? [page.id] : [],
+    };
+  }
+  setEvidenceRecorder(record?: (guard: EvidenceGuard) => Promise<void>) {
+    this.evidenceRecorder = record;
+  }
   private inner?: BuiltInAgent;
   private controller?: AbortController;
   constructor(
@@ -46,6 +63,11 @@ export class DotAgent extends AbstractAgent {
     private dotId: string,
     private channel = false,
     private setupTelemetry?: SetupTelemetry,
+    private memoryServices?: {
+      recall: MemoryRecall;
+      context: ContextBuilder;
+      scheduler?: InferenceScheduler;
+    },
   ) {
     super({ agentId: dotId });
   }
@@ -57,6 +79,7 @@ export class DotAgent extends AbstractAgent {
       this.dotId,
       this.channel,
       this.setupTelemetry,
+      this.memoryServices,
     );
   }
   abortRun() {
@@ -131,14 +154,24 @@ export class DotAgent extends AbstractAgent {
           );
         }
         const initialSettings = this.store.settings();
+        const memoryGeneration = this.memoryServices
+          ? this.workspace.memory.generation()
+          : undefined;
         const initialConnections = this.workspace.connections.fingerprint(
           dot.id,
         );
+        const sourcePages = new Map<string, string[]>();
         const check = () => {
           const settings = this.store.settings();
           const current = this.workspace.dot(dot.id);
           if (
             settings.paused ||
+            [...sourcePages].some(
+              ([id, spaces]) =>
+                !spaces.some((space) => this.workspace.pages.exists(space, id)),
+            ) ||
+            (memoryGeneration !== undefined &&
+              memoryGeneration !== this.workspace.memory.generation()) ||
             !current ||
             settings.researchAllowed !== initialSettings.researchAllowed ||
             settings.memoryAllowed !== initialSettings.memoryAllowed ||
@@ -326,15 +359,55 @@ export class DotAgent extends AbstractAgent {
         );
         const pageContext = pages.context();
         const memories =
-          initialSettings.memoryAllowed && dot.memoryAllowed
+          !this.memoryServices &&
+          initialSettings.memoryAllowed &&
+          dot.memoryAllowed
             ? this.store.memories().map((memory) => memory.text)
             : [];
+        const frame: ContextFrame = {
+          ownerId: this.workspace.ownerId,
+          dotId: dot.id,
+          threadId: input.threadId,
+          runId: input.runId,
+          canonicalMessages: input.messages,
+        };
         const adapter =
           this.config.llmBackend === 'subscription'
             ? subscriptionText({
                 provider: this.config.llmProvider,
                 model: this.config.subscriptionModel,
                 timeoutMs: turnTimeLimitMs,
+                scheduler: this.memoryServices?.scheduler,
+                prepare: this.memoryServices
+                  ? async (payload, signal) => {
+                      const essentials =
+                        await this.memoryServices!.context.essentials(dot.id);
+                      for (const memory of essentials) {
+                        await this.evidenceRecorder?.({
+                          originDotId: dot.id,
+                          spaceIds: [],
+                          pageIds: [],
+                          memoryItemIds: [memory.id],
+                        });
+                        for (const source of memory.sources) {
+                          for (const id of source.guard.pageIds)
+                            sourcePages.set(id, source.guard.spaceIds);
+                          await this.evidenceRecorder?.({
+                            ...source.guard,
+                            originDotId: dot.id,
+                          });
+                        }
+                      }
+                      const prepared =
+                        await this.memoryServices!.context.project(
+                          payload,
+                          frame,
+                          signal,
+                        );
+                      check();
+                      return prepared;
+                    }
+                  : undefined,
               })
             : openaiCompatibleText(this.config.model!, {
                 apiKey: this.config.apiKey!,
@@ -342,7 +415,20 @@ export class DotAgent extends AbstractAgent {
                 api: 'chat-completions',
                 maxRetries: 1,
               });
+        const recordPages = async (guard: {
+          spaceIds: string[];
+          pageIds: string[];
+        }) => {
+          for (const id of guard.pageIds) sourcePages.set(id, guard.spaceIds);
+          await this.evidenceRecorder?.({ ...guard, originDotId: this.dotId });
+          check();
+        };
         const start = async () => {
+          if (pageContext)
+            await recordPages({
+              spaceIds: [pageContext.spaceId],
+              pageIds: [pageContext.id],
+            });
           const appTools =
             this.config.composioApiKey &&
             initialSettings.appsAllowed &&
@@ -363,7 +449,18 @@ export class DotAgent extends AbstractAgent {
           const serverTools = [
             ...tools,
             ...appTools,
-            ...pageTools(pages),
+            ...pageTools(pages, recordPages),
+            ...(this.memoryServices &&
+            initialSettings.memoryAllowed &&
+            dot.memoryAllowed
+              ? memoryTools(
+                  this.memoryServices.recall,
+                  dot.id,
+                  check,
+                  controller.signal,
+                  recordPages,
+                )
+              : []),
             ...(computer.configured
               ? computerTools(computer, dot.id, check, controller.signal)
               : []),
@@ -391,9 +488,16 @@ export class DotAgent extends AbstractAgent {
                     message.role !== 'system' && message.role !== 'developer',
                 ),
               });
+              frame.canonicalMessages = ctx.input.messages;
+              const canonicalChat = ctx.input.messages.filter((m) =>
+                ['user', 'assistant', 'tool'].includes(m.role),
+              );
               return chat({
                 adapter,
-                messages: converted.messages,
+                messages: converted.messages.map((message, index) => ({
+                  ...message,
+                  id: canonicalChat[index]?.id,
+                })),
                 systemPrompts: [
                   prompt,
                   ...converted.systemPrompts,

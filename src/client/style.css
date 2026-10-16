@@ -2597,7 +2597,7 @@ h3 {
   flex-shrink: 0;
   padding: 24px 12px;
   background: #f5f5f1;
-  border-right: 1px solid var(--border);
+  border-right: 1px solid var(--line);
   overflow: auto;
 }
 .page-tree-heading {
@@ -4279,4 +4279,131 @@ h3 {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font-size: 11px;
+}
+
+/* Local memory controls share the workspace's existing typography and colors. */
+.memory-panel,
+.memory-details,
+.memory-add,
+.local-learning,
+.memory-restore {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+.memory-panel label,
+.memory-details > label,
+.memory-add > label,
+.memory-timing label,
+.local-learning > label:not(.permission-row) {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+.memory-panel input,
+.memory-panel textarea,
+.memory-panel select,
+.local-learning input:not([type='checkbox']),
+.local-learning select {
+  max-width: 100%;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: inherit;
+  background: var(--surface, #fff);
+  font: inherit;
+}
+.memory-panel textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+.memory-actions,
+.memory-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.memory-filters > label {
+  flex: 1 1 170px;
+}
+.memory-actions h2 {
+  flex: 1;
+  margin: 0;
+}
+.memory-panel button,
+.memory-activity button,
+.local-learning button {
+  padding: 8px 12px;
+  border-radius: 8px;
+}
+.memory-details,
+.memory-add,
+.memory-restore {
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.memory-source,
+.memory-card p,
+.memory-restore p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.memory-activity {
+  margin: 12px 0;
+  padding: 12px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 13px;
+  max-height: 50vh;
+  overflow: auto;
+}
+.memory-activity > summary,
+.memory-panel summary,
+.local-learning summary {
+  cursor: pointer;
+  padding: 6px 0;
+}
+.memory-activity > p {
+  margin: 12px 0;
+}
+.memory-job-list {
+  list-style: none;
+  margin: 14px 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.memory-job-list small {
+  display: block;
+}
+.memory-change-id {
+  overflow-wrap: anywhere;
+  display: block;
+}
+.memory-timing {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+.local-learning {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+@media (max-width: 640px) {
+  .memory-timing {
+    grid-template-columns: 1fr;
+  }
+  .memory-details,
+  .memory-add {
+    padding: 14px;
+  }
+  .memory-activity {
+    margin: 8px;
+    padding: 10px;
+  }
 }

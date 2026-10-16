@@ -1,3 +1,5 @@
+import { MemoryPanel } from './MemoryPanel';
+import { MemoryActivity } from './MemoryActivity';
 import { openPageLink } from './page-navigation';
 import { SpaceNav } from './SpaceNav';
 import { SpaceWorkspace } from './SpaceWorkspace';
@@ -624,6 +626,10 @@ export function App() {
                   dot={dot}
                   initialPrompt={pendingPrompt}
                   onConsumed={() => setPendingPrompt(undefined)}
+                  localMemory={
+                    workspace.setup.conversationBackend === 'local' &&
+                    workspace.setup.llmBackend === 'subscription'
+                  }
                   voiceReady={workspace.setup.voice}
                   calls={workspace.calls.filter(
                     (call) => call.threadId === thread.id,
@@ -783,60 +789,88 @@ export function App() {
                     : 'Scheduled turns run on the server in their original conversation.'}
                 </p>
               </div>
-              {view === 'memories' && (
-                <button
-                  className="primary"
-                  onClick={() => setDialog({ type: 'memory' })}
-                >
-                  <Plus size={15} />
-                  Add memory
-                </button>
-              )}
+              {view === 'memories' &&
+                !(
+                  workspace.setup.conversationBackend === 'local' &&
+                  workspace.setup.llmBackend === 'subscription'
+                ) && (
+                  <button
+                    className="primary"
+                    onClick={() => setDialog({ type: 'memory' })}
+                  >
+                    <Plus size={15} />
+                    Add memory
+                  </button>
+                )}
             </div>
             {view === 'memories' ? (
-              <>
-                <div className="memory-grid">
-                  {state.memories.map((memory) => (
-                    <article className="memory-card" key={memory.id}>
-                      <BookOpen size={18} />
-                      <p>{memory.text}</p>
-                      <div>
-                        <small>
-                          {state.settings.memoryAllowed
-                            ? 'Available to permitted Dots'
-                            : 'Memory use disabled'}
-                        </small>
-                        <button
-                          className="icon-button"
-                          aria-label="Edit memory"
-                          onClick={() => setDialog({ type: 'memory', memory })}
-                        >
-                          <MoreHorizontal size={17} />
-                        </button>
-                        <button
-                          className="icon-button"
-                          aria-label="Delete memory"
-                          onClick={() =>
-                            void mutate(`/memories/${memory.id}`, 'DELETE', {})
-                          }
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-                {!state.memories.length && (
-                  <div className="large-empty">
-                    <Mascot />
-                    <h2>A little context goes a long way.</h2>
-                    <p>
-                      Add a preference like “Keep my research briefs short.” You
-                      can change or remove it anytime.
-                    </p>
+              workspace.setup.conversationBackend === 'local' &&
+              workspace.setup.llmBackend === 'subscription' ? (
+                <>
+                  <MemoryPanel
+                    dotId={dot.id}
+                    dots={workspace.dots}
+                    spaces={workspace.spaces}
+                    onChanged={refresh}
+                  />
+                  <MemoryActivity
+                    dotId={dot.id}
+                    historicalThreads={workspace.conversations.filter(
+                      (t) => t.dotId === dot.id,
+                    )}
+                  />
+                </>
+              ) : (
+                <>
+                  <div className="memory-grid">
+                    {state.memories.map((memory) => (
+                      <article className="memory-card" key={memory.id}>
+                        <BookOpen size={18} />
+                        <p>{memory.text}</p>
+                        <div>
+                          <small>
+                            {state.settings.memoryAllowed
+                              ? 'Available to permitted Dots'
+                              : 'Memory use disabled'}
+                          </small>
+                          <button
+                            className="icon-button"
+                            aria-label="Edit memory"
+                            onClick={() =>
+                              setDialog({ type: 'memory', memory })
+                            }
+                          >
+                            <MoreHorizontal size={17} />
+                          </button>
+                          <button
+                            className="icon-button"
+                            aria-label="Delete memory"
+                            onClick={() =>
+                              void mutate(
+                                `/memories/${memory.id}`,
+                                'DELETE',
+                                {},
+                              )
+                            }
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </article>
+                    ))}
                   </div>
-                )}
-              </>
+                  {!state.memories.length && (
+                    <div className="large-empty">
+                      <Mascot />
+                      <h2>A little context goes a long way.</h2>
+                      <p>
+                        Add a preference like “Keep my research briefs short.”
+                        You can change or remove it anytime.
+                      </p>
+                    </div>
+                  )}
+                </>
+              )
             ) : (
               <>
                 <label className="search-box">

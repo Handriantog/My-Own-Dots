@@ -1,0 +1,15 @@
+export const memoryDefaults = Object.freeze({
+  inputTokenLimit: 24_000,
+  pinnedTokenLimit: 2_000,
+  compactThreshold: 0.75,
+  compactIdleMs: 120_000,
+  compactExchanges: 8,
+  compactNewTokens: 4_000,
+  dreamIntervalMs: 7_200_000,
+  dreamIdleMs: 300_000,
+  jobModelCalls: 3,
+  jobTimeoutMs: 300_000,
+  automaticJobsPerDay: 4,
+  retries: 2,
+  timeZone: 'UTC',
+});

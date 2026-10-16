@@ -518,3 +518,28 @@ it('rejects an invalid provider terminal before publishing it and saves an inter
   expect(events.some((e) => e.type === EventType.RUN_FINISHED)).toBe(false);
   expect((await store.getSnapshot()).messages.at(-1)?.content).toBe('Partial');
 });
+
+it('reserves foreground activity before the conversation lock and releases it after persistence', async () => {
+  const store = new MemoryStore();
+  const order: string[] = [];
+  const runner = new LocalAgentRunner(store, {
+    enterForeground: async () => {
+      expect(store.locked).toBe(false);
+      order.push('reserve');
+      return () => {
+        expect(store.locked).toBe(false);
+        order.push('release');
+      };
+    },
+  });
+  const events = await collect(
+    runner.run({
+      threadId: 'thread',
+      agent: new TestAgent(answer),
+      input: input(),
+    }),
+  );
+  expect(events.at(-1)?.type).toBe(EventType.RUN_FINISHED);
+  expect(store.snapshot.lastRun?.status).toBe('finished');
+  expect(order).toEqual(['reserve', 'release']);
+});

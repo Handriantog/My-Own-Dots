@@ -139,7 +139,13 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
         400,
       );
     }
-    return c.json(platform.workspace.updateDot(c.req.param('id'), data.data));
+    const updated = platform.workspace.updateDot(c.req.param('id'), data.data);
+    if (
+      current.memoryAllowed !== updated.memoryAllowed ||
+      JSON.stringify(current.spaceIds) !== JSON.stringify(updated.spaceIds)
+    )
+      await platform.memory?.permissionsChanged(updated.id);
+    return c.json(updated);
   });
   app.post('/conversations', async (c) => {
     const data = z

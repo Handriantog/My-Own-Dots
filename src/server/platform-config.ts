@@ -16,6 +16,8 @@ export interface LocalAiConfig {
   llmBackend?: 'subscription' | 'openai';
   llmProvider?: string;
   subscriptionModel?: string;
+  memoryInputTokenLimit?: number;
+  memoryPinnedTokenLimit?: number;
 }
 
 // Select backends explicitly. Old credentials must never trigger a cloud fallback.
@@ -34,7 +36,18 @@ export function localAiConfigFromEnv(
     localDatabaseUrl: env.LOCAL_DATABASE_URL?.trim() || undefined,
     llmProvider: env.LLM_PROVIDER?.trim() || 'codex',
     subscriptionModel: env.LLM_MODEL?.trim() || undefined,
+    memoryInputTokenLimit: memoryLimit(env.MEMORY_INPUT_TOKEN_LIMIT, 24000),
+    memoryPinnedTokenLimit: memoryLimit(env.MEMORY_PINNED_TOKEN_LIMIT, 2000),
   };
+}
+
+function memoryLimit(raw: string | undefined, fallback: number): number {
+  const value = raw?.trim() ? Number(raw) : fallback;
+  if (!Number.isSafeInteger(value) || value < 1 || value > 2_000_000)
+    throw new Error(
+      'Memory token limits must be positive integers no greater than 2000000.',
+    );
+  return value;
 }
 
 export function modelConfigured(

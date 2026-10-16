@@ -23,7 +23,8 @@
     "llm:check": "node --env-file-if-exists=.env node_modules/myown-llm-integrator/dist/cli.js check",
     "conversations:up": "docker compose -f compose.local.yml up -d --wait",
     "conversations:down": "docker compose -f compose.local.yml down",
-    "conversations:logs": "docker compose -f compose.local.yml logs -f conversations"
+    "conversations:logs": "docker compose -f compose.local.yml logs -f conversations",
+    "benchmark:memory": "node --import tsx scripts/benchmark-memory.mjs"
   },
   "keywords": [],
   "author": "Atai Barkai",

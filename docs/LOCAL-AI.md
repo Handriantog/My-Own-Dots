@@ -80,3 +80,7 @@ Use `npm run conversations:logs` for database startup errors. Ensure `LOCAL_DATA
 For missing CLI/Python errors, run `npm run setup:llm` and `npm run llm:check` in the same shell that starts the app. Ensure the provider CLI is on that shell's `PATH`, or set its explicit executable path. Log in to the CLI directly if authentication has expired. Provider failures appear in chat without fabricated replies.
 
 Automated tests use fake inference; they do not consume your subscription allowance. CI provisions PostgreSQL and the package's Python engine to exercise persistence, restart recovery, tools and approval continuation through the real npm/Python subprocess and SSE runtime. To run those tests locally, complete `npm run setup:llm`, then run `npm test` with `LOCAL_TEST_DATABASE_URL` pointing to a dedicated test database. Do not use a production database for tests.
+
+## Local memory and learning
+
+Local subscription mode includes retrieval-first memory, Compact checkpoints and opt-in Dream learning. Open **Memories** to pin essentials or inspect evidence; edit each Dot to enable learning and choose its review policy and automatic timing. `/compact`, `/dream`, `/dream-log`, and `/dream-restore <change-set-id>` are authenticated app commands. See [MEMORY.md](MEMORY.md) for limits, backup/recovery details and measured latency. Automatic compaction is enabled by default; persistent learning is off until enabled. Voice is outside this change.

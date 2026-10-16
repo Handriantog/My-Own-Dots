@@ -417,3 +417,51 @@ it('supports TanStack structured final responses using the supplied schema', asy
     required: ['title'],
   });
 });
+
+it('prepares every model step and rejects an oversized tool result before another provider call', async () => {
+  infer.mockResolvedValueOnce(
+    answer('', [{ name: 'create_page', argumentsJson: '{"title":"Notes"}' }]),
+  );
+  let prepared = 0;
+  const events = await collect(
+    chat({
+      adapter: subscriptionText({
+        ...config,
+        prepare: async (payload) => {
+          prepared++;
+          if (payload.messages.some((m) => m.role === 'tool'))
+            throw new Error('Context capacity exceeded');
+          return payload;
+        },
+      }),
+      messages,
+      tools: [pageTool([])],
+      agentLoopStrategy: maxIterations(3),
+    }),
+  );
+  expect(
+    events.some(
+      (e) => e.type === 'RUN_ERROR' && String(e.message).includes('capacity'),
+    ),
+  ).toBe(true);
+  expect(prepared).toBe(2);
+  expect(infer).toHaveBeenCalledTimes(1);
+});
+it('includes the output schema in structured-output preparation', async () => {
+  const adapter = subscriptionText({
+    ...config,
+    prepare: async (payload) => {
+      if (payload.responseSchema) throw new Error('Schema capacity exceeded');
+      return payload;
+    },
+  });
+  await expect(
+    chat({
+      adapter,
+      messages,
+      outputSchema: z.object({ text: z.string() }),
+      stream: false,
+    }),
+  ).rejects.toThrow(/Schema capacity/);
+  expect(infer).not.toHaveBeenCalled();
+});

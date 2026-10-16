@@ -64,7 +64,9 @@ const harness = vi.hoisted(() => {
     agent,
     agentSubscribers,
     copilotkit,
-    api: vi.fn(async () => null),
+    api: vi.fn<(path: string, ...args: unknown[]) => Promise<unknown>>(
+      async () => null,
+    ),
     useAgent: vi.fn(() => ({ agent, isReady: true })),
     useCopilotKit: vi.fn(() => ({ copilotkit })),
   };
@@ -407,4 +409,56 @@ it('does not treat an interrupted run as a successful recovery', async () => {
     await applySdkEvents(runFinished('interrupted-retry', 'interrupt'));
   });
   expect(alertText()).toContain('Previous run failed');
+});
+
+it('runs local Dream as an app command and preserves its draft on server failure', async () => {
+  harness.agent.addMessage.mockClear();
+  harness.copilotkit.runAgent.mockClear();
+  harness.api.mockImplementation(async (path: string) =>
+    path.endsWith('/memory-jobs')
+      ? { jobs: [], changes: [], coverage: { complete: true } }
+      : null,
+  );
+  await act(async () => {
+    root = create(createElement(Chat, { ...props, localMemory: true }));
+  });
+  const composer = () => root.root.findByProps({ className: 'chat-composer' });
+  const draft = () => composer().findByType('textarea');
+  await act(async () =>
+    draft().props.onChange({ target: { value: '/dream' } }),
+  );
+  harness.api.mockImplementation(async (path: string) => {
+    if (path.endsWith('/dream')) throw new Error('Storage unavailable');
+    return { jobs: [], changes: [], coverage: { complete: true } };
+  });
+  await act(async () => composer().props.onSubmit({ preventDefault() {} }));
+  expect(draft().props.value).toBe('/dream');
+  expect(harness.agent.addMessage).not.toHaveBeenCalled();
+  expect(harness.copilotkit.runAgent).not.toHaveBeenCalled();
+  harness.api.mockImplementation(async (path: string) =>
+    path.endsWith('/memory-jobs')
+      ? {
+          jobs: [
+            {
+              id: 'j',
+              kind: 'dream',
+              state: 'queued',
+              origin: 'manual',
+              modelCalls: 0,
+            },
+          ],
+          changes: [],
+          coverage: { complete: true },
+        }
+      : { id: 'j' },
+  );
+  await act(async () => composer().props.onSubmit({ preventDefault() {} }));
+  expect(draft().props.value).toBe('');
+  expect(JSON.stringify(root.toJSON())).toContain('Queued');
+  expect(harness.agent.addMessage).not.toHaveBeenCalled();
+  expect(harness.copilotkit.runAgent).not.toHaveBeenCalled();
+});
+it('does not show local memory controls in hosted chat', async () => {
+  await mountChat();
+  expect(JSON.stringify(root.toJSON())).not.toContain('Memory activity');
 });

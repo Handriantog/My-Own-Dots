@@ -141,7 +141,7 @@ Each conversation turn follows this flow:
 
 Scheduled turns and research summaries use the same subscription integration. Output arrives after each model step completes, rather than token by token. Stopping a turn propagates cancellation to the provider process. Provider restrictions are not an operating-system sandbox; see the [Local AI guide](docs/LOCAL-AI.md) for operational limits.
 
-The app, Python engine, and authenticated CLI run **on the host**, where the CLI can access its normal login profile. Docker runs PostgreSQL through [`compose.local.yml`](compose.local.yml). SQLite continues to hold pages, Dots, permissions, memories, and schedules. This independent local conversation backend replaces the persistence needed by this app; it does not reproduce Intelligence's managed Slack or Automatic Learning services.
+The app, Python engine, and authenticated CLI run **on the host**, where the CLI can access its normal login profile. Docker runs PostgreSQL through [`compose.local.yml`](compose.local.yml). SQLite continues to hold pages, Dots, permissions, memories, and schedules. This independent local conversation backend replaces the persistence needed by this app; it does not reproduce Intelligence's managed Slack service. Local retrieval, Compact, and Dream provide independent memory and learning; see [the memory guide](docs/MEMORY.md).
 
 After `npm run setup:local`, the relevant `.env` defaults are:
 
@@ -179,7 +179,7 @@ Set `LLM_PROVIDER` to choose another integrator provider and optionally set `LLM
 
 ## Data and privacy
 
-The local Docker volume stores conversations, tool results and run events. SQLite stores pages, settings, explicit memories and schedules. Back up both stores and keep `OWNER_ID` stable. Stopping Docker preserves its volume; deleting the volume deletes conversation history.
+The local Docker volume stores conversations, tool results and run events. SQLite stores pages, settings, curated memories, revisions, change receipts and schedules. PostgreSQL also stores memory evidence indexes, checkpoints and maintenance jobs. Back up both stores and keep `OWNER_ID` stable. Stopping Docker preserves its volume; deleting the volume deletes conversation history.
 
 The selected provider receives conversation context and authorized tool results. Web research is disabled by default. Explicitly selecting Parallel sends queries and selected URLs to that service. Composio, voice, managed Slack and computer services only apply when configured. Local mode disables telemetry by default with `DO_NOT_TRACK=1`.
 
@@ -187,21 +187,21 @@ Existing hosted conversation history is not automatically copied into the local 
 
 ## Features
 
-| Area                       | Included                                                                                                                           |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Spaces and Specialist Dots | Saved names, role instructions, and per-Dot research and memory permissions                                                        |
-| Pages                      | Searchable library, visual editor, slash commands, autosave, and revision checks                                                   |
-| Conversations              | React SDK chat and Threads integration, page-specific conversations, and source links                                              |
-| Slack                      | Optional Intelligence backend only: managed Channels with workspace and user allowlists                                            |
-| Calls                      | WebRTC speech, delegated compute, bounded sessions, hangup, and timeline receipts                                                  |
-| Background work            | Scheduled server-side turns in their original conversation, with pause and retry controls                                          |
-| Browser                    | Separate read-only public-page service with page capture and navigation limits                                                     |
-| Dot computers              | Per-Dot browser profiles, files, shell, takeover, permissions, and action records through OpenBot                                  |
-| Connections                | Per-Dot MCP servers, Composio connected apps, per-tool access, and owner approval for MCP write actions                            |
-| Appearance                 | System, light, and dark themes; dark colors are derived at build time from the light styles                                        |
-| Memory                     | User-managed preferences that permitted Dots can use                                                                               |
-| Automatic Learning         | Optional Intelligence backend only: per-Dot containers and published-skill delivery; see [setup](docs/SETUP.md#automatic-learning) |
-| Deployment                 | Host app and subscription CLI, Docker PostgreSQL, optional computer/browser containers                                             |
+| Area                       | Included                                                                                                                              |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| Spaces and Specialist Dots | Saved names, role instructions, and per-Dot research and memory permissions                                                           |
+| Pages                      | Searchable library, visual editor, slash commands, autosave, and revision checks                                                      |
+| Conversations              | React SDK chat and Threads integration, page-specific conversations, and source links                                                 |
+| Slack                      | Optional Intelligence backend only: managed Channels with workspace and user allowlists                                               |
+| Calls                      | WebRTC speech, delegated compute, bounded sessions, hangup, and timeline receipts                                                     |
+| Background work            | Scheduled server-side turns in their original conversation, with pause and retry controls                                             |
+| Browser                    | Separate read-only public-page service with page capture and navigation limits                                                        |
+| Dot computers              | Per-Dot browser profiles, files, shell, takeover, permissions, and action records through OpenBot                                     |
+| Connections                | Per-Dot MCP servers, Composio connected apps, per-tool access, and owner approval for MCP write actions                               |
+| Appearance                 | System, light, and dark themes; dark colors are derived at build time from the light styles                                           |
+| Memory                     | User-managed preferences that permitted Dots can use                                                                                  |
+| Automatic Learning         | Local opt-in Dream with review/restore and automatic Compact; [memory guide](docs/MEMORY.md). Intelligence learning remains optional. |
+| Deployment                 | Host app and subscription CLI, Docker PostgreSQL, optional computer/browser containers                                                |
 
 Scheduled tasks run in their original conversation. If a worker stops or its lease expires during a run, OpenDots marks that run **Interrupted** and waits for an explicit retry. Review its pages and computer actions, then use **Retry after review** when appropriate. Completed effects may already be present even when a run has no final result.
 
@@ -245,3 +245,7 @@ Web research is disabled by default. Set `WEB_SEARCH_PROVIDER=parallel` to expli
 `WEB_SEARCH_PROVIDER=browser` preserves the existing URL-only browser reader, and `WEB_SEARCH_PROVIDER=disabled` disables these research tools. Workspace and Dot research permissions, pause and cancellation controls still apply. Sample research remains fictional and does not contact a provider.
 
 Queries, requested URLs, a stable session identifier and the research objective are sent to `https://search.parallel.ai/mcp`. Memories and complete conversations are not automatically forwarded to Parallel. Model-selected objectives may still contain context from the conversation. The anonymous service is free for light use with provider-managed limits; set `PARALLEL_API_KEY` on the server for production or higher limits. Provider errors and empty results are reported rather than replaced with invented evidence. See [Parallel Search MCP documentation](https://docs.parallel.ai/integrations/mcp/search-mcp).
+
+### Local memory verification
+
+The local memory extension adds bounded essentials, on-demand recall, manual/automatic Compact and Dream, revision review and restore. See [MEMORY.md](docs/MEMORY.md) for defaults, storage, commands, measured latency and the distinction between deterministic fixture tests and the live Codex smoke. Voice changes are deferred.
