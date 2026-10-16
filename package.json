@@ -8,6 +8,10 @@
     "test": "tests"
   },
   "scripts": {
+    "desktop:build": "node scripts/build-desktop.mjs",
+    "desktop:start": "electron dist/desktop",
+    "desktop:dev": "npm run desktop:build && npm run desktop:start",
+    "desktop:preview": "node scripts/desktop-rig-preview.mjs",
     "dev": "concurrently -k \"cross-env NODE_ENV=development node --env-file-if-exists=.env --import tsx --watch src/server/index.ts\" \"vite\"",
     "build": "vite build && tsc -p tsconfig.server.json",
     "start": "node --env-file-if-exists=.env dist/server/server/index.js",

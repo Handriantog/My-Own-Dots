@@ -103,6 +103,7 @@ export class PlushRig {
     this.torso.addChild(this.mouthOpen);
   }
   static async create(assetBase: string): Promise<PlushRig> {
+    Assets.setPreferences({ preferWorkers: false });
     const response = await fetch(`${assetBase}/rig.json`);
     if (!response.ok)
       throw new Error(`Plush rig unavailable (${response.status})`);
