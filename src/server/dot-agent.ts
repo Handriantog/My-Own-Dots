@@ -1,3 +1,4 @@
+import type { EvidenceGuard } from '../shared/memory.js';
 import { parallelSources } from './parallel.js';
 import { pageReviewTool } from '../shared/page-review.js';
 import { ComputerService } from './computer-service.js';
@@ -37,6 +38,18 @@ const channelError = () => ({
     'OpenDots could not complete this request. Please check the app and try again.',
 });
 export class DotAgent extends AbstractAgent {
+  private evidenceRecorder?: (guard: EvidenceGuard) => Promise<void>;
+  evidenceGuard(threadId: string): EvidenceGuard {
+    const page = this.workspace.pages.forThread(threadId);
+    return {
+      originDotId: this.dotId,
+      spaceIds: page ? [page.spaceId] : [],
+      pageIds: page ? [page.id] : [],
+    };
+  }
+  setEvidenceRecorder(record?: (guard: EvidenceGuard) => Promise<void>) {
+    this.evidenceRecorder = record;
+  }
   private inner?: BuiltInAgent;
   private controller?: AbortController;
   constructor(
@@ -342,7 +355,18 @@ export class DotAgent extends AbstractAgent {
                 api: 'chat-completions',
                 maxRetries: 1,
               });
+        const recordPages = async (guard: {
+          spaceIds: string[];
+          pageIds: string[];
+        }) => {
+          await this.evidenceRecorder?.({ originDotId: this.dotId, ...guard });
+        };
         const start = async () => {
+          if (pageContext)
+            await recordPages({
+              spaceIds: [pageContext.spaceId],
+              pageIds: [pageContext.id],
+            });
           const appTools =
             this.config.composioApiKey &&
             initialSettings.appsAllowed &&
@@ -363,7 +387,7 @@ export class DotAgent extends AbstractAgent {
           const serverTools = [
             ...tools,
             ...appTools,
-            ...pageTools(pages),
+            ...pageTools(pages, recordPages),
             ...(computer.configured
               ? computerTools(computer, dot.id, check, controller.signal)
               : []),

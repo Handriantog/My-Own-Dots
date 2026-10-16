@@ -1,3 +1,6 @@
+import type { EvidenceGuard } from '../shared/memory.js';
+import { unionEvidence } from './conversation-memory.js';
+import { initializeConversationMemorySchema } from './conversation-memory-schema.js';
 import { isDeepStrictEqual } from 'node:util';
 import { Pool, type PoolClient } from 'pg';
 import {
@@ -33,7 +36,8 @@ export interface ConversationSnapshot {
 export interface ThreadLease {
   readonly signal: AbortSignal;
   read(): Promise<ConversationSnapshot>;
-  beginRun(input: RunAgentInput): Promise<void>;
+  beginRun(input: RunAgentInput, guard?: EvidenceGuard): Promise<void>;
+  addEvidenceGuard?(guard: EvidenceGuard): Promise<void>;
   appendEvent(event: BaseEvent): Promise<void>;
   finishRun(
     messages: Message[],
@@ -203,6 +207,7 @@ export class PostgresConversations implements LocalConversationStore {
         FOREIGN KEY (owner_id, thread_id) REFERENCES local_ai_threads(owner_id, id)
       );
     `);
+    await initializeConversationMemorySchema(this.pool);
     const stale = await this.pool.query<{ thread_id: string }>(
       "SELECT DISTINCT thread_id FROM local_ai_runs WHERE owner_id = $1 AND status = 'running'",
       [this.ownerId],
@@ -396,7 +401,7 @@ export class PostgresConversations implements LocalConversationStore {
               : undefined;
           return snapshot;
         },
-        beginRun: async (input) => {
+        beginRun: async (input, guard) => {
           if (input.threadId !== threadId)
             throw new Error('Conversation scope mismatch.');
           const exists = await query(
@@ -405,11 +410,32 @@ export class PostgresConversations implements LocalConversationStore {
           );
           if (exists.rowCount)
             throw new Error('This run ID has already been used.');
+          const previous = await query(
+            'SELECT t.messages,r.evidence_guard,r.provenance_complete FROM local_ai_threads t LEFT JOIN local_ai_runs r ON r.owner_id=t.owner_id AND r.thread_id=t.id AND r.run_id=t.last_run_id WHERE t.owner_id=$1 AND t.id=$2',
+            [this.ownerId, threadId],
+          );
+          const prior = previous.rows[0];
+          const inherited = guard
+            ? unionEvidence(prior?.evidence_guard ?? null, guard)
+            : null;
+          const complete =
+            !!guard &&
+            (!prior?.messages?.length || prior?.provenance_complete === true);
           await query('BEGIN');
           try {
             await query(
-              "INSERT INTO local_ai_runs(owner_id,thread_id,run_id,input,status) VALUES($1,$2,$3,$4,'running')",
-              [this.ownerId, threadId, input.runId, JSON.stringify(input)],
+              "INSERT INTO local_ai_runs(owner_id,thread_id,run_id,input,status,evidence_guard,prior_message_ids,provenance_complete) VALUES($1,$2,$3,$4,'running',$5,$6,$7)",
+              [
+                this.ownerId,
+                threadId,
+                input.runId,
+                JSON.stringify(input),
+                inherited ? JSON.stringify(inherited) : null,
+                JSON.stringify(
+                  (prior?.messages ?? []).map((m: Message) => m.id),
+                ),
+                complete,
+              ],
             );
             await query(
               'UPDATE local_ai_threads SET last_run_id=$3,messages=$4,state=$5,updated_at=now() WHERE owner_id=$1 AND id=$2',
@@ -427,6 +453,21 @@ export class PostgresConversations implements LocalConversationStore {
             await client.query('ROLLBACK').catch(() => {});
             throw error;
           }
+        },
+        addEvidenceGuard: async (guard) => {
+          if (!runId) throw new Error('No active conversation run.');
+          const current = await query(
+            'SELECT evidence_guard FROM local_ai_runs WHERE owner_id=$1 AND thread_id=$2 AND run_id=$3',
+            [this.ownerId, threadId, runId],
+          );
+          const combined = unionEvidence(
+            current.rows[0]?.evidence_guard ?? null,
+            guard,
+          );
+          await query(
+            'UPDATE local_ai_runs SET evidence_guard=$4 WHERE owner_id=$1 AND thread_id=$2 AND run_id=$3',
+            [this.ownerId, threadId, runId, JSON.stringify(combined)],
+          );
         },
         appendEvent: async (event) => {
           if (!runId) throw new Error('No active conversation run.');
@@ -451,13 +492,14 @@ export class PostgresConversations implements LocalConversationStore {
               ],
             );
             await query(
-              'UPDATE local_ai_runs SET status=$4,events=events || $5::jsonb WHERE owner_id=$1 AND thread_id=$2 AND run_id=$3',
+              "UPDATE local_ai_runs SET status=$4,events=events || $5::jsonb,evidence_messages=(SELECT coalesce(jsonb_agg(m),'[]'::jsonb) FROM jsonb_array_elements($6::jsonb) m WHERE NOT prior_message_ids ? (m->>'id')) WHERE owner_id=$1 AND thread_id=$2 AND run_id=$3",
               [
                 this.ownerId,
                 threadId,
                 runId,
                 status,
                 JSON.stringify(terminal ? [terminal] : []),
+                JSON.stringify(messages),
               ],
             );
             await query('COMMIT');

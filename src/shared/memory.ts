@@ -15,6 +15,8 @@ export const evidenceGuardSchema = z
   .strict();
 export const sourceRefSchema = z
   .object({
+    start: z.number().int().nonnegative().optional(),
+    end: z.number().int().nonnegative().optional(),
     threadId: memoryIdSchema,
     runId: memoryIdSchema,
     messageIds: z.array(memoryIdSchema).min(1).max(100),

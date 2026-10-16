@@ -1,3 +1,4 @@
+import type { EvidenceGuard } from '../shared/memory.js';
 import {
   AbstractAgent,
   EventType,
@@ -28,6 +29,10 @@ import {
   type ThreadLease,
 } from './local-conversations.js';
 
+interface EvidenceAgent extends AbstractAgent {
+  evidenceGuard?(threadId: string): EvidenceGuard;
+  setEvidenceRecorder?(record?: (guard: EvidenceGuard) => Promise<void>): void;
+}
 interface ActiveRun {
   runId: string;
   agent: AbstractAgent;
@@ -177,7 +182,16 @@ export class LocalAgentRunner extends AgentRunner {
         request.persistedInputMessages ?? request.input.messages,
       );
       const input = { ...request.input, messages, state: snapshot.state };
-      await lease.beginRun(input);
+      const evidenceAgent = request.agent as EvidenceAgent;
+      await lease.beginRun(
+        input,
+        evidenceAgent.evidenceGuard?.(request.threadId),
+      );
+      evidenceAgent.setEvidenceRecorder?.(async (guard) => {
+        if (!lease?.addEvidenceGuard)
+          throw new Error('Evidence storage is unavailable');
+        await lease.addEvidenceGuard(guard);
+      });
       begun = true;
       if (active.stopRequested) throw new Error('Run stopped by user.');
       request.agent.threadId = request.threadId;
@@ -288,6 +302,7 @@ export class LocalAgentRunner extends AgentRunner {
         }
       }
     } finally {
+      (request.agent as EvidenceAgent).setEvidenceRecorder?.(undefined);
       if (binding?.active === active) {
         binding.active = undefined;
         binding.lease = undefined;

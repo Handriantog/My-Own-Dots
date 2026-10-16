@@ -1,0 +1,249 @@
+import { createHash } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
+import type { Message } from '@ag-ui/core';
+import {
+  evidenceGuardSchema,
+  type EvidenceGuard,
+  type SourceRef,
+} from '../shared/memory.js';
+import type { WorkspaceStore } from './workspace.js';
+import {
+  initializeConversationMemorySchema,
+  type MemoryDatabase,
+} from './conversation-memory-schema.js';
+
+export const evidenceHash = (value: unknown) =>
+  createHash('sha256').update(JSON.stringify(value)).digest('hex');
+export function unionEvidence(
+  a: EvidenceGuard | null,
+  b: EvidenceGuard,
+): EvidenceGuard {
+  const guard = evidenceGuardSchema.parse(b);
+  if (a && a.originDotId !== guard.originDotId)
+    throw new Error('Evidence Dot scope mismatch');
+  return evidenceGuardSchema.parse({
+    originDotId: guard.originDotId,
+    spaceIds: [...new Set([...(a?.spaceIds ?? []), ...guard.spaceIds])].sort(),
+    pageIds: [...new Set([...(a?.pageIds ?? []), ...guard.pageIds])].sort(),
+  });
+}
+export interface IndexCoverage {
+  indexedRuns: number;
+  eligibleRuns: number;
+  complete: boolean;
+}
+export interface EpisodeQuery {
+  allowedThreadIds: string[];
+  query: string;
+  cursor?: string;
+  limit?: number;
+  after?: number;
+  before?: number;
+}
+export interface SourceRecord {
+  id: string;
+  ownerId: string;
+  source: SourceRef;
+  guard: EvidenceGuard;
+  text: string;
+  role: string;
+  createdAt: number;
+}
+export interface EpisodePage {
+  matches: SourceRecord[];
+  nextCursor?: string;
+  coverage: IndexCoverage;
+}
+interface SourceRow {
+  source_id: string;
+  source: SourceRef;
+  text: string;
+  role: string;
+  created_at: Date;
+}
+/** Bound threads are the authority. PG rows alone never establish a grant. */
+export class ConversationMemory {
+  constructor(
+    readonly pg: MemoryDatabase,
+    readonly ownerId: string,
+    readonly workspace: WorkspaceStore,
+  ) {}
+  initialize() {
+    return initializeConversationMemorySchema(this.pg);
+  }
+  private threads(dotId?: string) {
+    return this.workspace
+      .conversations()
+      .filter((t) => !dotId || t.dotId === dotId)
+      .map((t) => t.id);
+  }
+  sourcesExist(guard: EvidenceGuard): boolean {
+    const dot = this.workspace.dot(guard.originDotId);
+    if (!dot) return false;
+    if (guard.spaceIds.some((id) => !this.workspace.canAccessSpace(dot.id, id)))
+      return false;
+    return guard.pageIds.every((id) =>
+      guard.spaceIds.some((spaceId) =>
+        this.workspace.pages.exists(spaceId, id),
+      ),
+    );
+  }
+  async indexRun(runId: string): Promise<void> {
+    const rows = await this.pg.query<{
+      thread_id: string;
+      evidence_messages: Message[];
+      evidence_guard: EvidenceGuard;
+      created_at: Date;
+    }>(
+      `SELECT r.thread_id,r.evidence_messages,r.evidence_guard,r.created_at FROM local_ai_runs r
+       WHERE r.owner_id=$1 AND r.run_id=$2 AND r.thread_id=ANY($3::text[]) AND r.status<>'running'
+       AND r.evidence_guard IS NOT NULL AND r.provenance_complete=true
+       AND NOT EXISTS(SELECT 1 FROM memory_index_runs i WHERE i.owner_id=r.owner_id AND i.thread_id=r.thread_id AND i.run_id=r.run_id)`,
+      [this.ownerId, runId, this.threads()],
+    );
+    for (const run of rows.rows) {
+      const binding = this.workspace.requireThread(run.thread_id);
+      if (
+        binding.dotId !== run.evidence_guard.originDotId ||
+        !this.sourcesExist(run.evidence_guard)
+      )
+        continue;
+      const chunks: Record<string, unknown>[] = [];
+      for (const message of run.evidence_messages) {
+        if (message.role === 'system' || message.role === 'developer') continue;
+        const content =
+          typeof message.content === 'string'
+            ? message.content
+            : JSON.stringify(message.content ?? '');
+        const text =
+          content ||
+          (message.role === 'assistant' && message.toolCalls?.length
+            ? JSON.stringify(message.toolCalls)
+            : '');
+        for (let start = 0; start < text.length; start += 4000) {
+          const source: SourceRef = {
+            threadId: run.thread_id,
+            runId,
+            messageIds: [message.id],
+            contentHash: evidenceHash(message),
+            guard: run.evidence_guard,
+            start,
+            end: Math.min(text.length, start + 4000),
+          };
+          chunks.push({
+            id: evidenceHash([
+              this.ownerId,
+              run.thread_id,
+              runId,
+              message.id,
+              start,
+            ]),
+            messageId: message.id,
+            hash: source.contentHash,
+            start,
+            text: text.slice(start, start + 4000),
+            role: message.role,
+            source,
+          });
+        }
+      }
+      // One statement atomically inserts all chunks and the indexing receipt.
+      await this.pg.query(
+        `WITH inserted AS (
+        INSERT INTO memory_episode_chunks(owner_id,source_id,thread_id,run_id,message_id,content_hash,start_offset,text,role,source,created_at)
+        SELECT $1,c->>'id',$2,$3,c->>'messageId',c->>'hash',(c->>'start')::integer,c->>'text',c->>'role',c->'source',$5::timestamptz
+        FROM jsonb_array_elements($4::jsonb) c ON CONFLICT DO NOTHING
+      ) INSERT INTO memory_index_runs VALUES ($1,$2,$3,1) ON CONFLICT DO NOTHING`,
+        [
+          this.ownerId,
+          run.thread_id,
+          runId,
+          JSON.stringify(chunks),
+          run.created_at,
+        ],
+      );
+    }
+  }
+  async coverage(dotId?: string): Promise<IndexCoverage> {
+    const result = await this.pg.query<{ eligible: string; indexed: string }>(
+      `SELECT count(*) AS eligible,count(i.run_id) AS indexed FROM local_ai_runs r
+      LEFT JOIN memory_index_runs i USING(owner_id,thread_id,run_id) WHERE r.owner_id=$1 AND r.thread_id=ANY($2::text[]) AND r.status<>'running'`,
+      [this.ownerId, this.threads(dotId)],
+    );
+    const indexedRuns = Number(result.rows[0].indexed),
+      eligibleRuns = Number(result.rows[0].eligible);
+    return {
+      indexedRuns,
+      eligibleRuns,
+      complete: indexedRuns === eligibleRuns,
+    };
+  }
+  private record(row: SourceRow): SourceRecord {
+    return {
+      id: row.source_id,
+      ownerId: this.ownerId,
+      source: row.source,
+      guard: row.source.guard,
+      text: row.text,
+      role: row.role,
+      createdAt: row.created_at.getTime(),
+    };
+  }
+  async searchEpisodes(query: EpisodeQuery): Promise<EpisodePage> {
+    const allowed = new Set(this.threads());
+    const threads = query.allowedThreadIds.filter((id) => allowed.has(id));
+    const limit = Math.max(1, Math.min(10, query.limit ?? 10));
+    const offset = Number(query.cursor ?? 0);
+    if (!Number.isSafeInteger(offset) || offset < 0 || query.query.length > 500)
+      throw new Error('Invalid episode query');
+    const coverage = await this.coverage();
+    if (!/[\p{L}\p{N}]/u.test(query.query) || !threads.length)
+      return { matches: [], coverage };
+    const result = await this.pg.query<SourceRow>(
+      `SELECT source_id,source,text,role,created_at FROM memory_episode_chunks
+      WHERE owner_id=$1 AND thread_id=ANY($2::text[]) AND search @@ websearch_to_tsquery('simple',$3)
+      AND ($4::timestamptz IS NULL OR created_at >= $4) AND ($5::timestamptz IS NULL OR created_at <= $5)
+      ORDER BY created_at DESC,source_id LIMIT $6 OFFSET $7`,
+      [
+        this.ownerId,
+        threads,
+        query.query,
+        query.after == null ? null : new Date(query.after),
+        query.before == null ? null : new Date(query.before),
+        limit + 1,
+        offset,
+      ],
+    );
+    const visible = result.rows
+      .slice(0, limit)
+      .filter((row) => this.sourcesExist(row.source.guard));
+    return {
+      matches: visible.map((row) => this.record(row)),
+      coverage,
+      ...(result.rows.length > limit
+        ? { nextCursor: String(offset + limit) }
+        : {}),
+    };
+  }
+  async sourceById(id: string): Promise<SourceRecord | undefined> {
+    const result = await this.pg.query<SourceRow>(
+      'SELECT source_id,source,text,role,created_at FROM memory_episode_chunks WHERE owner_id=$1 AND source_id=$2 AND thread_id=ANY($3::text[])',
+      [this.ownerId, id, this.threads()],
+    );
+    const row = result.rows[0];
+    return row && this.sourcesExist(row.source.guard)
+      ? this.record(row)
+      : undefined;
+  }
+  async readSource(ref: SourceRef): Promise<SourceRecord | undefined> {
+    const id = evidenceHash([
+      this.ownerId,
+      ref.threadId,
+      ref.runId,
+      ref.messageIds[0],
+      ref.start ?? 0,
+    ]);
+    const record = await this.sourceById(id);
+    return record && isDeepStrictEqual(record.source, ref) ? record : undefined;
+  }
+}
