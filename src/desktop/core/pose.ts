@@ -66,14 +66,14 @@ export function samplePose(
     : climb
       ? 2.2
       : action === 'stretch'
-        ? -1.8
+        ? 1.8
         : -armSwing;
   const targetRight = held
     ? 0.14
     : climb
       ? -2.2
       : action === 'stretch'
-        ? 1.8
+        ? -1.8
         : -armSwing;
   const targetFoot = (side: -1 | 1, f: Point): Point =>
     walking
