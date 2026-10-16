@@ -167,10 +167,13 @@ export class CompanionSimulation {
     this.accumulator = 0;
   }
   resume(nowMs: number): void {
+    const firstArrival = this.lastTime === null;
     this.suspended = false;
     this.lastTime = nowMs;
     this.state.atMs = nowMs;
-    this.events = [];
+    this.events = firstArrival
+      ? this.events.map((event) => ({ ...event, atMs: nowMs }))
+      : [];
     this.accumulator = 0;
   }
   advance(nowMs: number): void {

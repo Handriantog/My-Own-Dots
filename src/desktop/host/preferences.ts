@@ -29,6 +29,22 @@ export function parsePreferences(value: unknown): Preferences {
   const parsed = schema.safeParse(value);
   return parsed.success ? parsed.data : { ...DEFAULT_PREFERENCES };
 }
+const changeSchema = schema
+  .pick({
+    color: true,
+    volume: true,
+    muted: true,
+    paused: true,
+    reducedMotion: true,
+  })
+  .partial()
+  .strict();
+export function parsePreferenceChange(
+  value: unknown,
+): Partial<Preferences> | null {
+  const parsed = changeSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
 export class PreferenceStore {
   private pending: Promise<void> = Promise.resolve();
   constructor(private directory: string) {}

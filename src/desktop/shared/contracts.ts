@@ -177,6 +177,7 @@ export interface PresentationFrame {
   preferences: Preferences;
   hovered: boolean;
   visible: boolean;
+  displayBounds: Rect;
 }
 export interface DesktopBridge {
   onFrame(callback: (frame: PresentationFrame) => void): () => void;

@@ -30,6 +30,7 @@ function frame(sequence: number): PresentationFrame {
     preferences: DEFAULT_PREFERENCES,
     hovered: false,
     visible: true,
+    displayBounds: display.bounds,
   };
 }
 describe('presentation sequencing', () => {

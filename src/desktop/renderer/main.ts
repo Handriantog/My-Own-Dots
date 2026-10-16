@@ -3,6 +3,7 @@ import { Application } from 'pixi.js';
 import 'pixi.js/unsafe-eval';
 import { PlushRig } from './rig.js';
 import { OPEN_HAND_CURSOR, PinchHand } from './hand.js';
+import { CompanionAudio } from './audio.js';
 import type {
   DesktopBridge,
   Point,
@@ -17,6 +18,7 @@ declare global {
       frame: PresentationFrame;
       renderMs: number;
       frames: number;
+      audio: ReturnType<CompanionAudio['stats']> | null;
     };
   }
 }
@@ -25,6 +27,8 @@ let latest: PresentationFrame | null = null;
 let captured: number | null = null;
 let previousGrip: Point | null = null;
 let frames = 0;
+let audio: CompanionAudio | null = null;
+let wasPaused = false;
 const hand = new PinchHand();
 const app = new Application();
 try {
@@ -40,11 +44,22 @@ try {
   });
   document.body.appendChild(app.canvas);
   const rig = await PlushRig.create('./desktop-dot');
+  try {
+    audio = new CompanionAudio();
+    await audio.load('./audio');
+  } catch (error) {
+    audio?.dispose();
+    audio = null;
+    window.dot.reportError(
+      `Audio: ${error instanceof Error ? error.message : 'Could not load effects'}`,
+    );
+  }
   app.stage.addChild(rig.container, hand.container);
   document.body.style.cursor = OPEN_HAND_CURSOR;
   app.canvas.addEventListener('webglcontextlost', (event) => {
     event.preventDefault();
     document.body.style.cursor = 'default';
+    audio?.suspend();
     window.dot.reportError('Graphics context lost');
   });
   const point = (event: PointerEvent): Point => ({
@@ -91,9 +106,14 @@ try {
   );
   window.addEventListener('pagehide', () => {
     document.body.style.cursor = 'default';
+    audio?.dispose();
   });
   window.dot.onFrame((frame) => {
     const started = performance.now();
+    if (app.renderer.resolution !== window.devicePixelRatio) {
+      app.renderer.resolution = window.devicePixelRatio;
+      app.renderer.resize(320, 320);
+    }
     latest = frame;
     const local = structuredClone(frame.simulation);
     local.root.x -= frame.origin.x;
@@ -133,10 +153,21 @@ try {
         : 'default';
     app.stage.visible = frame.visible;
     app.render();
+    const justPaused = frame.preferences.paused && !wasPaused;
+    if (!frame.visible || justPaused) audio?.suspend();
+    if (frame.visible)
+      audio?.consume(
+        justPaused ? [] : frame.events,
+        frame.simulation,
+        frame.preferences,
+        frame.displayBounds,
+      );
+    wasPaused = frame.preferences.paused;
     window.dotDiagnostics = {
       frame,
       renderMs: performance.now() - started,
       frames: ++frames,
+      audio: audio?.stats() ?? null,
     };
     window.dot.ack(frame.sequence);
   });

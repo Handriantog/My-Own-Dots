@@ -9,7 +9,9 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const artifactDirectory = path.join(root, 'artifacts/desktop');
 await mkdir(artifactDirectory, { recursive: true });
 const data = await mkdtemp(path.join(tmpdir(), 'dots-desktop-smoke-'));
-const executablePath = process.argv[2];
+const executablePath = process.argv[2]
+  ? path.resolve(process.argv[2])
+  : undefined;
 const app = await electron.launch({
   ...(executablePath
     ? { executablePath, args: [] }
@@ -38,9 +40,11 @@ try {
     require: typeof window.require,
     bridge: Object.keys(window.dot).sort(),
     color: window.dotDiagnostics.frame.preferences.color,
+    audio: window.dotDiagnostics.audio,
   }));
   assert.equal(state.node, 'undefined');
   assert.equal(state.require, 'undefined');
+  assert.equal(state.audio?.decoded, 69);
   assert.deepEqual(state.bridge, [
     'ack',
     'onFrame',

@@ -23,6 +23,14 @@ function resting(w: World, x = 400, y = 300) {
 }
 
 describe('continuous companion simulation', () => {
+  it('timestamps arrival at first presentation without replaying it after sleep', () => {
+    const sim = new CompanionSimulation(world([]), 1);
+    sim.resume(8000);
+    expect(sim.drainEvents().find((e) => e.name === 'appear')?.atMs).toBe(8000);
+    sim.suspend();
+    sim.resume(16000);
+    expect(sim.drainEvents()).toHaveLength(0);
+  });
   it('sweeps a fast fall onto the first platform and emits one landing', () => {
     const sim = resting(world(), 450, 130);
     run(sim, 16, 1800);

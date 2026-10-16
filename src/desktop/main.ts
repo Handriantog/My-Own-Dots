@@ -12,6 +12,7 @@ import {
   systemPreferences,
   Tray,
   type IpcMainEvent,
+  type IpcMainInvokeEvent,
   type MenuItemConstructorOptions,
 } from 'electron';
 import path from 'node:path';
@@ -20,7 +21,7 @@ import { CompanionSimulation } from './core/simulation.js';
 import { hitTestRig } from './core/rig-model.js';
 import { buildWorld } from './core/world.js';
 import { HelperSupervisor } from './host/helper.js';
-import { PreferenceStore } from './host/preferences.js';
+import { PreferenceStore, parsePreferenceChange } from './host/preferences.js';
 import { PresentationMailbox, validPointerInput } from './host/presentation.js';
 import type {
   DesktopDisplay,
@@ -79,14 +80,12 @@ async function start(): Promise<void> {
   const store = new PreferenceStore(app.getPath('userData'));
   let preferences = await store.load();
   const displays = (): DesktopDisplay[] =>
-    screen
-      .getAllDisplays()
-      .map((d) => ({
-        id: String(d.id),
-        bounds: d.bounds,
-        workArea: d.workArea,
-        scaleFactor: d.scaleFactor,
-      }));
+    screen.getAllDisplays().map((d) => ({
+      id: String(d.id),
+      bounds: d.bounds,
+      workArea: d.workArea,
+      scaleFactor: d.scaleFactor,
+    }));
   let currentDisplays = displays();
   let world = buildWorld(null, currentDisplays, performance.now());
   const savedDisplay = currentDisplays.find(
@@ -105,6 +104,8 @@ async function start(): Promise<void> {
       : undefined;
   let simulation = new CompanionSimulation(world, Date.now(), savedPoint);
   let overlay: BrowserWindow;
+  let settingsWindow: BrowserWindow | null = null;
+  let audioError = '';
   let rendererReady = false,
     userHidden = false,
     osSuspended = false,
@@ -266,6 +267,42 @@ async function start(): Promise<void> {
         enabled: false,
       },
       { type: 'separator' },
+      { label: 'Appearance & sound…', click: openSettings },
+      {
+        label: 'Body color',
+        submenu: [
+          ['Sky', '#45a7ff'],
+          ['Rose', '#f5a0be'],
+          ['Sage', '#b4e2b3'],
+          ['Lavender', '#b8a4ef'],
+          ['Cream', '#f4e9d3'],
+          ['Midnight', '#292b40'],
+        ].map(([label, color]) => ({
+          label,
+          type: 'radio',
+          checked: preferences.color === color,
+          click: () => changePreferences({ color }),
+        })),
+      },
+      {
+        label: 'Mute effects',
+        type: 'checkbox',
+        checked: preferences.muted,
+        click: () => changePreferences({ muted: !preferences.muted }),
+      },
+      {
+        label: 'Effects volume',
+        submenu: [0, 0.2, 0.4, 0.6, 0.8, 1].map((volume) => ({
+          label: `${volume * 100}%`,
+          type: 'radio',
+          checked: preferences.volume === volume,
+          click: () => changePreferences({ volume }),
+        })),
+      },
+      ...(audioError
+        ? [{ label: 'Sound unavailable · motion still active', enabled: false }]
+        : []),
+      { type: 'separator' },
       {
         label: preferences.paused ? 'Resume roaming' : 'Pause roaming',
         type: 'checkbox',
@@ -334,6 +371,10 @@ async function start(): Promise<void> {
       preferences: { ...preferences },
       hovered: hitTestRig(cursor, state),
       visible: show,
+      displayBounds: (
+        currentDisplays.find((d) => d.id === state.displayId) ??
+        currentDisplays[0]
+      ).bounds,
     };
   }
   function deliver(frame: PresentationFrame | null): void {
@@ -373,6 +414,45 @@ async function start(): Promise<void> {
       if (overlay.isDestroyed()) createOverlay();
       else void overlay.loadURL('dots://app/index.html');
     }, 300);
+  }
+  function settingsTrusted(event: IpcMainInvokeEvent): boolean {
+    return (
+      !!settingsWindow &&
+      !settingsWindow.isDestroyed() &&
+      event.sender.id === settingsWindow.webContents.id &&
+      event.senderFrame === settingsWindow.webContents.mainFrame &&
+      event.senderFrame.url === 'dots://app/settings.html'
+    );
+  }
+  function openSettings(): void {
+    if (settingsWindow && !settingsWindow.isDestroyed()) {
+      settingsWindow.show();
+      settingsWindow.focus();
+      return;
+    }
+    settingsWindow = new BrowserWindow({
+      width: 390,
+      height: 500,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      backgroundColor: '#202632',
+      title: 'Dot appearance & sound',
+      webPreferences: {
+        preload: path.join(__dirname, 'settings-preload.cjs'),
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+      },
+    });
+    settingsWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    settingsWindow.webContents.on('will-navigate', (event) =>
+      event.preventDefault(),
+    );
+    settingsWindow.on('closed', () => {
+      settingsWindow = null;
+    });
+    void settingsWindow.loadURL('dots://app/settings.html');
   }
   function createOverlay(): void {
     overlay = new BrowserWindow({
@@ -470,6 +550,11 @@ async function start(): Promise<void> {
   });
   ipcMain.on('dot:error', (event, message: unknown) => {
     if (!trusted(event) || typeof message !== 'string') return;
+    if (message.startsWith('Audio:')) {
+      audioError = message.slice(0, 200);
+      rebuildMenu();
+      return;
+    }
     assetError = message.slice(0, 200);
     rendererReady = false;
     syncVisibility();
@@ -477,6 +562,18 @@ async function start(): Promise<void> {
     if (message.includes('Graphics context lost')) recoverRenderer();
   });
   helper.start();
+  ipcMain.handle('dot:preferences:read', (event) => {
+    if (!settingsTrusted(event)) throw new Error('Invalid settings sender');
+    return preferences;
+  });
+  ipcMain.handle('dot:preferences:update', async (event, value: unknown) => {
+    if (!settingsTrusted(event)) throw new Error('Invalid settings sender');
+    const change = parsePreferenceChange(value);
+    if (!change) throw new Error('Invalid preferences');
+    changePreferences(change);
+    await savePreferences();
+    return preferences;
+  });
   let tickCount = 0;
   const ticker = setInterval(() => {
     const now = performance.now();
@@ -576,6 +673,7 @@ async function start(): Promise<void> {
     helper.stop();
     void savePreferences().finally(() => {
       tray.destroy();
+      settingsWindow?.destroy();
       overlay.destroy();
       app.exit(0);
     });

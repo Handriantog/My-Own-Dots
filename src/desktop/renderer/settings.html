@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Dot appearance & sound</title>
+  </head>
+  <body>
+    <main>
+      <div class="intro">
+        <img src="./desktop-dot/icon.png" alt="Blue plush Dot" />
+        <div>
+          <h1>Make Dot yours</h1>
+          <p>One little companion. Your colors.</p>
+        </div>
+      </div>
+      <label class="row"
+        >Body color <input id="color" type="color" aria-label="Body color"
+      /></label>
+      <label class="volume"
+        >Sound effects <output id="volume-label">40%</output
+        ><input
+          id="volume"
+          type="range"
+          min="0"
+          max="100"
+          aria-label="Sound effects volume"
+      /></label>
+      <label class="row"
+        >Mute effects <input id="muted" type="checkbox" role="switch"
+      /></label>
+      <label class="row"
+        >Pause roaming <input id="paused" type="checkbox" role="switch"
+      /></label>
+      <label class="row"
+        >Reduce motion <input id="reducedMotion" type="checkbox" role="switch"
+      /></label>
+      <p class="note">
+        Changes save automatically. The first sound collection is still being
+        softened.
+      </p>
+      <p id="error" role="status"></p>
+    </main>
+    <script type="module" src="./settings.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,81 @@
+:root {
+  color-scheme: dark;
+  font:
+    14px -apple-system,
+    BlinkMacSystemFont,
+    sans-serif;
+  color: #f0f3f9;
+  background: #202632;
+}
+body {
+  margin: 0;
+}
+main {
+  padding: 28px;
+}
+.intro {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin-bottom: 22px;
+}
+.intro img {
+  width: 58px;
+  height: 58px;
+  object-fit: contain;
+}
+h1 {
+  font-size: 20px;
+  font-weight: 650;
+  margin: 0 0 5px;
+  letter-spacing: -0.4px;
+}
+p {
+  margin: 0;
+  color: #aab7cc;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 0;
+  border-bottom: 1px solid #ffffff12;
+}
+input {
+  accent-color: #8cc9ff;
+}
+input[type='color'] {
+  border: 0;
+  background: transparent;
+  width: 46px;
+  height: 32px;
+  cursor: pointer;
+}
+input[type='checkbox'] {
+  width: 17px;
+  height: 17px;
+  cursor: pointer;
+}
+.volume {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 14px;
+  padding: 18px 0 8px;
+}
+.volume input {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+output {
+  font-variant-numeric: tabular-nums;
+  color: #bcdcff;
+}
+.note {
+  margin-top: 22px;
+}
+#error {
+  color: #ffb4b4;
+  margin-top: 10px;
+}

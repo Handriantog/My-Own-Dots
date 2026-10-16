@@ -6,6 +6,7 @@ import {
   DEFAULT_PREFERENCES,
   PreferenceStore,
   parsePreferences,
+  parsePreferenceChange,
 } from '../../src/desktop/host/preferences.js';
 
 const dirs: string[] = [];
@@ -15,6 +16,15 @@ afterEach(async () => {
   );
 });
 describe('desktop preferences', () => {
+  it('accepts only deliberate settings changes within supported ranges', () => {
+    expect(parsePreferenceChange({ color: '#ffaa99', volume: 0.3 })).toEqual({
+      color: '#ffaa99',
+      volume: 0.3,
+    });
+    expect(parsePreferenceChange({ volume: 7 })).toBeNull();
+    expect(parsePreferenceChange({ displayId: 'new' })).toBeNull();
+    expect(parsePreferenceChange({ color: 'url(http://other)' })).toBeNull();
+  });
   it('recovers corrupt/missing values without carrying native IDs', () => {
     expect(parsePreferences(null)).toEqual(DEFAULT_PREFERENCES);
     expect(parsePreferences({ version: 9, color: 'red', volume: 2 })).toEqual(
