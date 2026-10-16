@@ -1,3 +1,4 @@
+import { memoryRoutes } from './memory-routes.js';
 import { computerRoutes } from './computer-routes.js';
 import { connectionRoutes } from './connection-routes.js';
 import { Hono } from 'hono';
@@ -96,13 +97,24 @@ export function createApp({
       '/api',
       connectionRoutes(platform.workspace, platform.connections),
     );
+  if (platform?.memory) app.route('/api', memoryRoutes(platform));
+  const localMemory = platform?.memory ? platform.workspace.memory : undefined;
+  const legacyMemory = (item: {
+    id: string;
+    text: string;
+    createdAt: number;
+  }) => ({ id: item.id, text: item.text, createdAt: item.createdAt });
   const voice = platform ? new VoiceService(platform) : undefined;
   if (platform && voice) app.route('/api', workspaceRoutes(platform, voice));
   app.get('/api/state', (c) =>
     c.json({
       settings: store.settings(),
       tasks: store.tasks(),
-      memories: store.memories(),
+      memories: localMemory
+        ? localMemory
+            .listOwner({ status: 'active', limit: 100 })
+            .items.map(legacyMemory)
+        : store.memories(),
       mode: config.mode,
       configured: configured(config),
     }),
@@ -220,7 +232,18 @@ export function createApp({
         { error: 'Memory must be between 1 and 2,000 characters.' },
         400,
       );
-    return c.json(store.saveMemory(parsed.data.text), 201);
+    return c.json(
+      localMemory
+        ? legacyMemory(
+            localMemory.create({
+              scope: { kind: 'owner' },
+              title: parsed.data.text.slice(0, 120),
+              text: parsed.data.text,
+            }),
+          )
+        : store.saveMemory(parsed.data.text),
+      201,
+    );
   });
   app.put('/api/memories/:id', async (c) => {
     const parsed = z
@@ -232,15 +255,32 @@ export function createApp({
         { error: 'Memory must be between 1 and 2,000 characters.' },
         400,
       );
+    if (localMemory) {
+      const found = localMemory.get(c.req.param('id'));
+      if (!found) return c.json({ error: 'Memory not found.' }, 404);
+      return c.json(
+        legacyMemory(
+          localMemory.edit(found.id, found.revision, {
+            text: parsed.data.text,
+          }),
+        ),
+      );
+    }
     if (!store.memories().some((m) => m.id === c.req.param('id')))
       return c.json({ error: 'Memory not found.' }, 404);
     return c.json(store.saveMemory(parsed.data.text, c.req.param('id')));
   });
-  app.delete('/api/memories/:id', (c) =>
-    store.deleteMemory(c.req.param('id'))
+  app.delete('/api/memories/:id', (c) => {
+    if (localMemory) {
+      const found = localMemory.get(c.req.param('id'));
+      if (!found) return c.json({ error: 'Memory not found.' }, 404);
+      platform!.memory!.publication.forget(found.id, found.revision);
+      return c.json({ ok: true });
+    }
+    return store.deleteMemory(c.req.param('id'))
       ? c.json({ ok: true })
-      : c.json({ error: 'Memory not found.' }, 404),
-  );
+      : c.json({ error: 'Memory not found.' }, 404);
+  });
   app.onError((error, c) => {
     console.error('API request failed:', error.name);
     return c.json(
