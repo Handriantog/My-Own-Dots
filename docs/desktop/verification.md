@@ -14,6 +14,8 @@ The reported external-monitor issue was clarified as flickering between position
 - Thirty synthetic minutes with 20 scripted windows completed: maximum root displacement 6.77 logical pixels/frame, 4,717 interaction events, at most two policy voices, and 26.4 MiB final JavaScript heap. That dense layout has no eligible climb tops; separate single-window tests and the actual-rig preview exercise successful climbs and perches.
 - The actual Pixi rig was inspected in a 22-second motion preview, including timestamped walk frames, climbing contact, successful perch, and long-held expression. Reference sources and reproduction command are in [asset notes](asset-notes.md). No source imagery or sound was replaced.
 
+The refined arm64 app and ZIP were rebuilt from implementation commit `bb5a229`. Strict local code-sign verification and archive integrity passed. The packaged executable launched from outside the checkout with isolated preferences, one visible non-focusing always-on-top panel, all 69 sounds decoded, the ordinary cursor, and no renderer errors. A second launch yielded to the first instance, and preferences persisted on clean shutdown. This is a local ad-hoc build, not a notarized release.
+
 The historical measurements below belong to the initial delivery; they are not fresh live-soak measurements for this refinement.
 
 ## Initial delivery automated evidence
