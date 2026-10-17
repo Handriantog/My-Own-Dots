@@ -37,6 +37,10 @@ const app = await electron.launch({
 });
 const samples = [],
   errors = [];
+let completed = false;
+let disconnect = null;
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'])
+  process.on(signal, () => console.log('DRIVER_SIGNAL', signal, Date.now()));
 app
   .process()
   .on('exit', (code, signal) =>
@@ -48,6 +52,26 @@ app.process().stderr.on('data', (data) => {
     errors.push(message.trim());
 });
 const page = await app.firstWindow();
+await app.evaluate(({ app, BrowserWindow }) => {
+  for (const event of [
+    'before-quit',
+    'will-quit',
+    'window-all-closed',
+    'render-process-gone',
+    'child-process-gone',
+  ])
+    app.on(event, (_event, details) =>
+      console.log('APP_EVENT', event, details ?? '', Date.now()),
+    );
+  for (const window of BrowserWindow.getAllWindows()) {
+    for (const event of ['closed', 'close', 'unresponsive'])
+      window.on(event, () => console.log('WINDOW_EVENT', event, Date.now()));
+    window.webContents.on('render-process-gone', (_event, details) =>
+      console.log('RENDER_GONE', details, Date.now()),
+    );
+  }
+});
+app.on('console', (message) => console.log('HOST', message.text()));
 page.on('close', () => console.log('PAGE_CLOSED', Date.now()));
 page.on('crash', () => console.log('PAGE_CRASHED', Date.now()));
 page.on('pageerror', (error) => errors.push(error.message));
@@ -106,6 +130,27 @@ try {
     );
     await new Promise((resolve) => setTimeout(resolve, 5000));
   }
+  completed = true;
+} catch (error) {
+  disconnect = {
+    message: String(error),
+    processExitCode: app.process().exitCode,
+    processSignal: app.process().signalCode,
+  };
+  try {
+    disconnect.windows = await app.evaluate(({ BrowserWindow }) =>
+      BrowserWindow.getAllWindows().map((w) => ({
+        id: w.id,
+        visible: w.isVisible(),
+        destroyed: w.isDestroyed(),
+        rendererDestroyed: w.webContents.isDestroyed(),
+        url: w.webContents.getURL(),
+      })),
+    );
+  } catch (hostError) {
+    disconnect.hostError = String(hostError);
+  }
+  console.log('DISCONNECT', disconnect);
 } finally {
   const times = samples.map((s) => s.renderMs).sort((a, b) => a - b);
   const rss = samples.map(
@@ -115,6 +160,8 @@ try {
   );
   const report = {
     kind: 'live packaged application resource samples',
+    completed,
+    disconnect,
     durationMinutes: (Date.now() - started) / 60000,
     samples: samples.length,
     sampledRenderP95Ms: times[Math.floor(times.length * 0.95)] ?? null,
@@ -135,3 +182,4 @@ try {
   console.log(JSON.stringify(report, null, 2));
   await app.close();
 }
+if (!completed) process.exitCode = 1;

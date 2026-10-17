@@ -21,6 +21,7 @@ type Part = keyof RigDefinition['layers'];
 export class PlushRig {
   readonly container = new Container();
   private torso = new Container();
+  private headphones = new Container();
   private sprites = {} as Record<Part, Sprite>;
   private body: MeshPlane;
   private restVertices: Float32Array;
@@ -56,7 +57,10 @@ export class PlushRig {
       sprite.height = part.size.y;
       sprite.position.set(part.position.x, part.position.y);
       this.sprites[name] = sprite;
-      if (name !== 'body') this.torso.addChild(sprite);
+      if (name === 'headphones') {
+        this.headphones.addChild(sprite);
+        this.torso.addChild(this.headphones);
+      } else if (name !== 'body') this.torso.addChild(sprite);
     }
     const part = definition.layers.body;
     this.body = new MeshPlane({
@@ -93,7 +97,9 @@ export class PlushRig {
       .ellipse(-43, -62, 13, 22)
       .ellipse(43, -62, 13, 22)
       .fill(0xffffff);
-    this.torso.addChild(headphonesMask);
+    this.headphones.addChild(headphonesMask);
+    this.headphones.pivot.set(0, -76);
+    this.headphones.position.set(0, -76);
     this.sprites.headphones.mask = headphonesMask;
     this.mouthOpen
       .ellipse(0, 0, 3.2, 4.3)
@@ -129,8 +135,13 @@ export class PlushRig {
   update(frame: SimulationFrame, color: string): void {
     const p = frame.pose;
     this.container.position.set(frame.root.x, frame.root.y);
+    const arrival = Math.min(1, frame.actionAge / 0.65);
+    this.container.alpha =
+      frame.action === 'appear' ? arrival * arrival * (3 - 2 * arrival) : 1;
     this.torso.rotation = p.lean;
     this.torso.scale.set(p.squash, p.stretch);
+    // The plush deforms around a rigid accessory attached at the head center.
+    this.headphones.scale.set(1 / p.squash, 1 / p.stretch);
     for (const name of Object.keys(this.sprites) as Part[])
       this.sprites[name].tint = layerTint(this.definition.layers[name], color);
     this.body.tint = layerTint(this.definition.layers.body, color);

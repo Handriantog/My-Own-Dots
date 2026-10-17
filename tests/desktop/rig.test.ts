@@ -5,10 +5,12 @@ import {
   hitTestRig,
   layerTint,
   parseRig,
+  armTransform,
 } from '../../src/desktop/core/rig-model.js';
+import { rigPointToWorld } from '../../src/desktop/core/pose.js';
 import { CompanionSimulation } from '../../src/desktop/core/simulation.js';
 import { buildWorld } from '../../src/desktop/core/world.js';
-import { display } from './fixtures.js';
+import { display, snapshot, windowRect } from './fixtures.js';
 
 const rigData = () =>
   JSON.parse(
@@ -18,6 +20,51 @@ const rigData = () =>
     ),
   );
 describe('master plush asset contract', () => {
+  it('keeps the rendered gripping palm on its contact throughout climb and pull-up', () => {
+    const rig = parseRig(rigData());
+    const sim = new CompanionSimulation(
+      buildWorld(snapshot([windowRect(1, 200, 300, 700, 500)]), [display], 0),
+      5,
+      { x: 500, y: 850 },
+    );
+    sim.advance(0);
+    let contacts = 0;
+    let maxError = 0;
+    let pulled = false;
+    for (let time = 17; time < 60000; time += 17) {
+      sim.advance(time);
+      const frame = sim.frame();
+      if (!frame.climb) continue;
+      const side = frame.climb.wall.side === 1 ? -1 : 1;
+      const layer = rig.layers[side === -1 ? 'leftArm' : 'rightArm'];
+      const transform = armTransform(frame, side);
+      const x = (0.5 - layer.pivot.x) * layer.size.x;
+      const y = (1 - layer.pivot.y) * transform.height;
+      const palm = rigPointToWorld(
+        {
+          x:
+            layer.position.x +
+            x * Math.cos(transform.rotation) -
+            y * Math.sin(transform.rotation),
+          y:
+            layer.position.y +
+            x * Math.sin(transform.rotation) +
+            y * Math.cos(transform.rotation),
+        },
+        frame.root,
+        frame.pose,
+      );
+      maxError = Math.max(
+        maxError,
+        Math.hypot(palm.x - frame.climb.hand.x, palm.y - frame.climb.hand.y),
+      );
+      pulled ||= frame.action === 'pull_up';
+      contacts++;
+    }
+    expect(contacts).toBeGreaterThan(100);
+    expect(pulled).toBe(true);
+    expect(maxError).toBeLessThan(2);
+  });
   it('requires every separate layer with valid atlas bounds and pivots', () => {
     const data = rigData();
     expect(parseRig(data).layers.body.tint).toBe(true);

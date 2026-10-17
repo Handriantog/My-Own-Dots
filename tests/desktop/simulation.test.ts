@@ -23,6 +23,70 @@ function resting(w: World, x = 400, y = 300) {
 }
 
 describe('continuous companion simulation', () => {
+  it('restores the actual display when monitors overlap horizontally', () => {
+    const upper = {
+      ...display,
+      id: 'upper',
+      bounds: { ...display.bounds, y: -900 },
+      workArea: { ...display.workArea, y: -875 },
+    };
+    for (const monitors of [
+      [display, upper],
+      [upper, display],
+    ]) {
+      const w = buildWorld(null, monitors, 0);
+      const above = new CompanionSimulation(w, 5, { x: 400, y: -50 });
+      expect(above.frame().displayId).toBe('upper');
+      expect(above.frame().support?.id).toBe('floor:upper');
+      expect(
+        new CompanionSimulation(w, 5, { x: 400, y: 850 }).frame().displayId,
+      ).toBe('1');
+      expect(
+        new CompanionSimulation(w, 5, { x: 400, y: 0 }).frame().displayId,
+      ).toBe('1');
+    }
+  });
+  it('drops continuously if a foreground window covers an active pull-up destination', () => {
+    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 850 });
+    sim.advance(0);
+    let time = 0;
+    while (sim.frame().action !== 'pull_up' && time < 60000)
+      sim.advance((time += 17));
+    expect(sim.frame().action).toBe('pull_up');
+    const before = sim.frame();
+    const covered = world([
+      windowRect(2, 100, 200, 750, 150),
+      windowRect(1, 200, 300, 700, 500),
+    ]);
+    expect(
+      covered.walls.some(
+        (w) => w.windowKey === before.climb!.wall.windowKey && w.side === 1,
+      ),
+    ).toBe(true);
+    expect(
+      covered.platforms.some(
+        (p) => p.windowKey === before.climb!.wall.windowKey,
+      ),
+    ).toBe(false);
+    sim.setWorld(covered);
+    expect(sim.frame().root).toEqual(before.root);
+    expect(sim.frame().climb).toBeNull();
+    run(sim, time + 17, 1600);
+    const support = sim.frame().support;
+    if (support) expect(covered.platforms).toContainEqual(support);
+  });
+  it('refreshes a walking climb target before attaching to a moved window', () => {
+    const sim = new CompanionSimulation(world(), 8, { x: 500, y: 850 });
+    sim.advance(0);
+    run(sim, 17, 1000);
+    expect(sim.frame().action).toBe('walk');
+    const moved = world([windowRect(1, 260, 300, 700, 500)]);
+    sim.setWorld(moved);
+    let time = 1037;
+    while (!sim.frame().climb && time < 12000) sim.advance((time += 17));
+    expect(sim.frame().climb?.wall.x).toBe(960);
+    expect(Math.abs(sim.frame().root.x - 1012)).toBeLessThan(2);
+  });
   it('timestamps arrival at first presentation without replaying it after sleep', () => {
     const sim = new CompanionSimulation(world([]), 1);
     sim.resume(8000);

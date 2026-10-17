@@ -56,6 +56,7 @@ export class CompanionSimulation {
   private swayVelocity = 0;
   private pullFrom: Point | null = null;
   private pullTo: Platform | null = null;
+  private pullTarget: Point | null = null;
   private fallCuePlayed = false;
 
   constructor(world: World, seed = Date.now(), placement?: Point) {
@@ -68,7 +69,9 @@ export class CompanionSimulation {
         (d) =>
           placement &&
           placement.x >= d.bounds.x &&
-          placement.x <= d.bounds.x + d.bounds.width,
+          placement.x < d.bounds.x + d.bounds.width &&
+          placement.y >= d.bounds.y &&
+          placement.y < d.bounds.y + d.bounds.height,
       ) ?? world.displays[0];
     const floor = world.platforms.find((p) => p.id === `floor:${d.id}`)!;
     const root = placement
@@ -152,12 +155,37 @@ export class CompanionSimulation {
         this.detach();
       else this.state.climb.wall = wall;
     }
+    if (this.pullTo && this.pullTarget) {
+      const target = this.pullTarget;
+      const platform = world.platforms.find(
+        (p) =>
+          p.windowKey === this.pullTo!.windowKey &&
+          p.displayId === this.pullTo!.displayId &&
+          p.y === target.y &&
+          target.x >= p.x1 &&
+          target.x <= p.x2,
+      );
+      // Keep the existing trajectory and its exact destination. Replanning a
+      // pull mid-flight would snap the body; losing that footprint means fall.
+      if (!platform) this.detach();
+      else this.pullTo = platform;
+    }
     const intent = this.intention;
-    if (
-      intent?.kind === 'climb' &&
-      !world.walls.some((w) => w.id === intent.wall.id)
-    )
-      this.intention = null;
+    if (intent?.kind === 'climb') {
+      const wall = world.walls.find((w) => w.id === intent.wall.id);
+      const x = wall ? wall.x + (wall.side * BODY.width) / 2 : 0;
+      const support = this.state.support;
+      if (
+        !wall ||
+        (support &&
+          (x < support.x1 ||
+            x > support.x2 ||
+            wall.y1 >= this.state.root.y - 65 ||
+            wall.y2 < this.state.root.y - 215))
+      )
+        this.intention = null;
+      else this.intention = { kind: 'climb', wall, x };
+    }
   }
   suspend(): void {
     this.suspended = true;
@@ -347,6 +375,7 @@ export class CompanionSimulation {
     this.supportMotion = { x: 0, y: 0 };
     this.pullFrom = null;
     this.pullTo = null;
+    this.pullTarget = null;
     this.intention = null;
     if (!this.state.grip) this.action('fall', 'slip');
   }
@@ -584,22 +613,34 @@ export class CompanionSimulation {
     const s = this.state,
       contact = s.climb!,
       wall = contact.wall;
-    if (s.action === 'pull_up' && this.pullFrom && this.pullTo) {
+    if (
+      s.action === 'pull_up' &&
+      this.pullFrom &&
+      this.pullTo &&
+      this.pullTarget
+    ) {
       const t = clamp(s.actionAge / 1.4, 0, 1);
-      const xTarget =
-        wall.side === -1 ? this.pullTo.x1 + 5 : this.pullTo.x2 - 5;
       const smooth = (v: number) => v * v * (3 - 2 * v);
       s.root.y =
         this.pullFrom.y +
-        (this.pullTo.y - this.pullFrom.y) * smooth(Math.min(1, t / 0.65));
+        (this.pullTarget.y - this.pullFrom.y) * smooth(Math.min(1, t / 0.65));
       s.root.x =
         this.pullFrom.x +
-        (xTarget - this.pullFrom.x) * smooth(clamp((t - 0.3) / 0.7, 0, 1));
+        (this.pullTarget.x - this.pullFrom.x) *
+          smooth(clamp((t - 0.3) / 0.7, 0, 1));
+      // Once the shoulder crosses the corner, the palm slides inward along
+      // the same exposed top. Keeping it on the outside corner would tear the
+      // short plush arm away from its contact at the end of a pull-up.
+      contact.hand.x =
+        wall.side === 1
+          ? Math.min(wall.x, s.root.x)
+          : Math.max(wall.x, s.root.x);
       if (t === 1) {
         s.support = this.pullTo;
         s.climb = null;
         this.pullFrom = null;
         this.pullTo = null;
+        this.pullTarget = null;
         this.intention = null;
         this.intentionUntil = s.atMs + 700;
         this.action('idle');
@@ -611,12 +652,18 @@ export class CompanionSimulation {
         const top = this.world.platforms.find(
           (p) =>
             p.windowKey === wall.windowKey &&
+            p.displayId === wall.displayId &&
+            p.x2 - p.x1 >= 10 &&
             Math.abs(p.y - wall.y1) < 3 &&
             (wall.side === -1 ? p.x1 < wall.x + 80 : p.x2 > wall.x - 80),
         );
         if (top && !this.options.paused && !this.options.reducedMotion) {
           this.pullFrom = { ...s.root };
           this.pullTo = top;
+          this.pullTarget = {
+            x: wall.side === -1 ? top.x1 + 5 : top.x2 - 5,
+            y: top.y,
+          };
           this.action('pull_up', 'pull_up');
         } else {
           this.detach();

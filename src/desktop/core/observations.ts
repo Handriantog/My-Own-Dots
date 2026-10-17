@@ -45,7 +45,7 @@ const snapshot = z.object({
 /** Supervision, not an arbitrary incoming payload, authorizes a new helper session. */
 export class ObservationStream {
   private latest: GeometrySnapshot | null = null;
-  private receivedAt = -Infinity;
+  private clockOffset = Infinity;
   accept(value: unknown, receivedAtMs: number): GeometrySnapshot | null {
     if (!Number.isFinite(receivedAtMs)) return null;
     const parsed = snapshot.safeParse(value);
@@ -65,20 +65,30 @@ export class ObservationStream {
       new Set(next.displays.map((d) => d.id)).size !== next.displays.length
     )
       return null;
+    // Process clocks have different origins. The smallest observed transport
+    // offset maps helper uptime onto host monotonic time; queued output can
+    // never move that mapping forward and make an old scene fresh again.
+    const offset = Math.min(this.clockOffset, receivedAtMs - next.observedAtMs);
+    if (
+      receivedAtMs - (next.observedAtMs + offset) >
+      Math.max(500, 3 * next.pollIntervalMs)
+    )
+      return null;
+    this.clockOffset = offset;
     this.latest = next;
-    this.receivedAt = receivedAtMs;
     return next;
   }
   current(nowMs: number): GeometrySnapshot | null {
     if (
       !this.latest ||
-      nowMs - this.receivedAt > Math.max(500, 3 * this.latest.pollIntervalMs)
+      nowMs - (this.latest.observedAtMs + this.clockOffset) >
+        Math.max(500, 3 * this.latest.pollIntervalMs)
     )
       return null;
     return this.latest;
   }
   resetSession(): void {
     this.latest = null;
-    this.receivedAt = -Infinity;
+    this.clockOffset = Infinity;
   }
 }

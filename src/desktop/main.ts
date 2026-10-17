@@ -100,7 +100,6 @@ async function start(): Promise<void> {
   let rendererReady = false,
     userHidden = false,
     osSuspended = false,
-    sceneInvalid = false,
     visible = false,
     capturing = false,
     quitting = false;
@@ -111,6 +110,7 @@ async function start(): Promise<void> {
   let displayRevision = 0,
     worldKey = '',
     lastSaved = 0,
+    lastPresented = -Infinity,
     mode = '';
   let ignored = true;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -125,7 +125,6 @@ async function start(): Promise<void> {
     path.join(__dirname, 'native/desktop-observer'),
     {
       scene: (snapshot) => {
-        sceneInvalid = !snapshot.sceneValid;
         refreshWorld(snapshot);
         syncVisibility();
       },
@@ -133,6 +132,7 @@ async function start(): Promise<void> {
         setStatus(message);
         cancelCapture();
         refreshWorld(null);
+        syncVisibility();
       },
       pointer: (input) => {
         if (!capturing) return;
@@ -207,6 +207,7 @@ async function start(): Promise<void> {
     const key = `${snapshot?.helperSession ?? 'none'}:${snapshot?.seq ?? 0}:${displayRevision}`;
     if (key === worldKey) return;
     worldKey = key;
+    if (!snapshot && capturing) cancelCapture();
     world = buildWorld(
       snapshot,
       currentDisplays,
@@ -230,7 +231,7 @@ async function start(): Promise<void> {
       rendererReady &&
       !userHidden &&
       !osSuspended &&
-      !sceneInvalid &&
+      helper.current(performance.now())?.sceneValid !== false &&
       !assetError;
     if (next === visible || !overlay || overlay.isDestroyed()) return;
     visible = next;
@@ -569,14 +570,10 @@ async function start(): Promise<void> {
   const ticker = setInterval(() => {
     const now = performance.now();
     refreshWorld(helper.current(now));
-    if (
-      osSuspended ||
-      userHidden ||
-      !rendererReady ||
-      sceneInvalid ||
-      assetError
-    )
-      return;
+    // A live transition hides the panel; an expired/unavailable observation
+    // is floor-only mode. It must not leave a latched invisible companion.
+    syncVisibility();
+    if (!visible) return;
     if (mailbox.stalled(now)) {
       recoverRenderer();
       return;
@@ -588,6 +585,11 @@ async function start(): Promise<void> {
       atMs: now,
     });
     simulation.advance(now);
+    const resting = ['idle', 'sit', 'sleep'].includes(
+      simulation.frame().action,
+    );
+    if (resting && !capturing && now - lastPresented < 1000 / 30 - 2) return;
+    lastPresented = now;
     const frame = presentation();
     const shouldIgnore = !capturing && !frame.hovered;
     if (ignored !== shouldIgnore) {
@@ -638,7 +640,6 @@ async function start(): Promise<void> {
   };
   const resume = () => {
     osSuspended = false;
-    sceneInvalid = false;
     worldKey = '';
     refreshWorld(null);
     helper.command('refresh');

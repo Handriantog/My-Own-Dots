@@ -33,7 +33,7 @@ export function scene(overrides: Record<string, unknown> = {}) {
 }
 
 describe('native observation stream', () => {
-  it('accepts global logical coordinates and uses receipt time rather than another process clock', () => {
+  it('accepts global coordinates and maps the helper clock to the host clock', () => {
     const stream = new ObservationStream();
     expect(stream.accept(scene(), 8000)?.displays[0].bounds.x).toBe(-1440);
     expect(stream.current(8499)?.seq).toBe(1);
@@ -73,10 +73,49 @@ describe('native observation stream', () => {
     stream.accept(scene({ pollIntervalMs: 500 }), 10);
     expect(stream.current(1509)).not.toBeNull();
     expect(stream.current(1511)).toBeNull();
-    stream.accept(scene({ seq: 2, accessibility: false }), 2000);
+    stream.accept(
+      scene({ seq: 2, observedAtMs: 2490, accessibility: false }),
+      2000,
+    );
     expect(stream.current(2001)?.accessibility).toBe(false);
-    stream.accept(scene({ seq: 3, sceneValid: false }), 2010);
+    stream.accept(
+      scene({ seq: 3, observedAtMs: 2500, sceneValid: false }),
+      2010,
+    );
     expect(stream.current(2011)?.sceneValid).toBe(false);
+  });
+  it('does not revive queued observations after a host stall, but accepts a fresh sample', () => {
+    const stream = new ObservationStream();
+    stream.accept(scene({ observedAtMs: 1000 }), 0);
+    expect(stream.current(10000)).toBeNull();
+    expect(
+      stream.accept(scene({ seq: 2, observedAtMs: 1100 }), 10000),
+    ).toBeNull();
+    expect(stream.current(10000)).toBeNull();
+    expect(
+      stream.accept(scene({ seq: 3, observedAtMs: 11000 }), 10001)?.seq,
+    ).toBe(3);
+    expect(stream.current(10501)).toBeNull();
+  });
+  it('tightens the session clock offset when delivery gets faster, including idle cadence', () => {
+    const stream = new ObservationStream();
+    stream.accept(scene({ observedAtMs: 1000, pollIntervalMs: 500 }), 200);
+    stream.accept(
+      scene({ seq: 2, observedAtMs: 2000, pollIntervalMs: 500 }),
+      1000,
+    );
+    expect(stream.current(2501)).toBeNull();
+    expect(
+      stream.accept(
+        scene({ seq: 3, observedAtMs: 2100, pollIntervalMs: 500 }),
+        3000,
+      ),
+    ).toBeNull();
+    stream.resetSession();
+    expect(
+      stream.accept(scene({ helperSession: 'new', observedAtMs: 20 }), 3100)
+        ?.seq,
+    ).toBe(1);
   });
   it('rejects backward scene revisions, duplicate window identities and absurd geometry', () => {
     const stream = new ObservationStream();

@@ -1,0 +1,221 @@
+import type { EventEmitter } from 'node:events';
+import type { PassThrough } from 'node:stream';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DEFAULT_PREFERENCES } from '../../src/desktop/host/preferences.js';
+import { snapshot } from './fixtures.js';
+import type { PresentationFrame } from '../../src/desktop/shared/contracts.js';
+
+const host = vi.hoisted(() => ({
+  windows: [] as Array<{
+    visible: boolean;
+    webContents: EventEmitter & { id: number; mainFrame: { url: string } };
+  }>,
+  children: [] as EventEmitter[],
+  ipc: null as EventEmitter | null,
+  power: null as EventEmitter | null,
+  cursor: { x: 1200, y: 100 },
+  frame: null as PresentationFrame | null,
+}));
+vi.mock('electron', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { display } = await import('./fixtures.js');
+  const ipc = new EventEmitter();
+  host.ipc = ipc;
+  host.power = new EventEmitter();
+  class Window extends EventEmitter {
+    visible = false;
+    bounds = { x: 0, y: 0, width: 320, height: 320 };
+    webContents = Object.assign(new EventEmitter(), {
+      id: 1,
+      mainFrame: { url: 'dots://app/index.html' },
+      setWindowOpenHandler: vi.fn(),
+      send: (channel: string, frame: PresentationFrame) => {
+        if (channel === 'dot:frame') {
+          host.frame = frame;
+          ipc.emit('dot:ack', this.event(), frame.sequence);
+        }
+      },
+    });
+    constructor() {
+      super();
+      host.windows.push(this);
+    }
+    event() {
+      return {
+        sender: this.webContents,
+        senderFrame: this.webContents.mainFrame,
+      };
+    }
+    showInactive() {
+      this.visible = true;
+    }
+    hide() {
+      this.visible = false;
+    }
+    getBounds() {
+      return this.bounds;
+    }
+    setPosition(x: number, y: number) {
+      this.bounds = { ...this.bounds, x, y };
+    }
+    isDestroyed() {
+      return false;
+    }
+    setAlwaysOnTop() {}
+    setVisibleOnAllWorkspaces() {}
+    setIgnoreMouseEvents() {}
+    async loadURL() {}
+  }
+  return {
+    app: Object.assign(new EventEmitter(), {
+      setName: vi.fn(),
+      setPath: vi.fn(),
+      getPath: () => '/unused',
+      requestSingleInstanceLock: () => true,
+      whenReady: async () => {},
+      dock: { hide: vi.fn() },
+      quit: vi.fn(),
+    }),
+    BrowserWindow: Window,
+    ipcMain: Object.assign(ipc, { handle: vi.fn() }),
+    Menu: { buildFromTemplate: (items: unknown) => items },
+    nativeImage: { createFromPath: () => ({ resize: () => ({}) }) },
+    net: {},
+    powerMonitor: host.power,
+    protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
+    screen: Object.assign(new EventEmitter(), {
+      getAllDisplays: () => [display],
+      getCursorScreenPoint: () => host.cursor,
+    }),
+    shell: {},
+    systemPreferences: {
+      getAnimationSettings: () => ({ prefersReducedMotion: false }),
+    },
+    Tray: class {
+      setToolTip() {}
+      setContextMenu() {}
+    },
+  };
+});
+vi.mock('node:child_process', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { PassThrough } = await import('node:stream');
+  return {
+    spawn: () => {
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new PassThrough(),
+        stdin: new PassThrough(),
+        stderr: new PassThrough(),
+        kill: vi.fn(),
+      });
+      host.children.push(child);
+      return child;
+    },
+  };
+});
+vi.mock('../../src/desktop/host/preferences.js', async (original) => ({
+  ...(await original<typeof import('../../src/desktop/host/preferences.js')>()),
+  PreferenceStore: class {
+    async load() {
+      return { ...DEFAULT_PREFERENCES };
+    }
+    async save() {}
+  },
+}));
+
+beforeEach(async () => {
+  vi.resetModules();
+  host.windows = [];
+  host.children = [];
+  host.cursor = { x: 1200, y: 100 };
+  host.frame = null;
+  vi.useFakeTimers({
+    toFake: [
+      'setTimeout',
+      'clearTimeout',
+      'setInterval',
+      'clearInterval',
+      'performance',
+    ],
+  });
+  vi.stubGlobal('__dirname', '/test/desktop');
+  await import('../../src/desktop/main.js');
+  await vi.advanceTimersByTimeAsync(0);
+  const window = host.windows[0];
+  expect(window).toBeDefined();
+  host.ipc!.emit('dot:ready', {
+    sender: window.webContents,
+    senderFrame: window.webContents.mainFrame,
+  });
+  expect(window.visible).toBe(true);
+});
+afterEach(() => {
+  vi.clearAllTimers();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+function invalidScene() {
+  const child = host.children.at(-1) as EventEmitter & { stdout: PassThrough };
+  child.stdout.emit(
+    'data',
+    Buffer.from(
+      JSON.stringify(
+        snapshot([], { sceneValid: false, observedAtMs: performance.now() }),
+      ) + '\n',
+    ),
+  );
+  expect(host.windows[0].visible).toBe(false);
+}
+describe('host scene recovery', () => {
+  it('releases a held Dot when helper geometry expires during capture', async () => {
+    const child = host.children[0] as EventEmitter & { stdout: PassThrough };
+    child.stdout.emit('data', Buffer.from(JSON.stringify(snapshot()) + '\n'));
+    const window = host.windows[0];
+    const event = {
+      sender: window.webContents,
+      senderFrame: window.webContents.mainFrame,
+    };
+    host.cursor = {
+      x: host.frame!.simulation.root.x,
+      y: host.frame!.simulation.root.y - 70,
+    };
+    host.ipc!.emit('dot:pointer', event, {
+      kind: 'down',
+      point: host.cursor,
+      atMs: 0,
+    });
+    host.cursor = { ...host.cursor, y: host.cursor.y - 100 };
+    await vi.advanceTimersByTimeAsync(34);
+    expect(host.frame!.simulation.grip).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(520);
+    expect(host.frame!.simulation.grip).toBeNull();
+    expect(window.visible).toBe(true);
+  });
+  it('returns to visible floor mode after invalidation then helper failure, including exhausted retries', async () => {
+    invalidScene();
+    host.children[0].emit('exit', 1);
+    expect(host.windows[0].visible).toBe(true);
+    for (let i = 0; i < 5; i++) {
+      await vi.advanceTimersByTimeAsync(10000);
+      host.children.at(-1)!.emit('exit', 1);
+    }
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(host.children).toHaveLength(6);
+    expect(host.windows[0].visible).toBe(true);
+  });
+  it('returns to floor mode when an invalid scene expires without a helper exit', async () => {
+    invalidScene();
+    await vi.advanceTimersByTimeAsync(520);
+    expect(host.windows[0].visible).toBe(true);
+  });
+  it('keeps lock-screen hiding independent from native tracking recovery', async () => {
+    invalidScene();
+    host.power!.emit('lock-screen');
+    host.children[0].emit('exit', 1);
+    await vi.advanceTimersByTimeAsync(520);
+    expect(host.windows[0].visible).toBe(false);
+    host.power!.emit('unlock-screen');
+    expect(host.windows[0].visible).toBe(true);
+  });
+});

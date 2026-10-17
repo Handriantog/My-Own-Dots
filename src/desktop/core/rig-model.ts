@@ -118,9 +118,13 @@ export function armTransform(
     const hand = worldPointToRig(frame.climb.hand, frame.root, frame.pose);
     const dx = hand.x - side * 39,
       dy = hand.y + 45;
+    // Palm center is offset from the authored shoulder pivot in both axes.
+    // Aim that point, rather than the sprite's centerline, at the contact.
+    const palmX = side * 23 * 0.22;
+    const palmY = Math.sqrt(Math.max(0, dx * dx + dy * dy - palmX * palmX));
     return {
-      rotation: Math.atan2(-dx, dy),
-      height: Math.min(70, Math.hypot(dx, dy) / 0.86),
+      rotation: Math.atan2(dy, dx) - Math.atan2(palmY, palmX),
+      height: Math.min(70, palmY / 0.86),
     };
   }
   return {
