@@ -21,6 +21,7 @@ import { CompanionSimulation } from './core/simulation.js';
 import { hitTestRig } from './core/rig-model.js';
 import { buildWorld } from './core/world.js';
 import { HelperSupervisor } from './host/helper.js';
+import { DesktopDiagnostics } from './host/diagnostics.js';
 import {
   PreferenceStore,
   parsePreferenceChange,
@@ -55,14 +56,22 @@ app.setPath(
   process.env.DOTS_DESKTOP_DATA ||
     path.join(app.getPath('appData'), 'My Own Dots Desktop'),
 );
+const diagnosticsDirectory = path.join(app.getPath('userData'), 'diagnostics');
+const diagnostics = new DesktopDiagnostics(diagnosticsDirectory);
+process.on('uncaughtExceptionMonitor', (error) => {
+  diagnostics.captureException(error);
+});
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   void app
     .whenReady()
     .then(start)
-    .catch((error) => {
+    .catch(async (error) => {
       console.error('Desktop companion startup failed:', error);
+      await diagnostics.record('startup-failed', {
+        message: String(error).slice(0, 2000),
+      });
       app.quit();
     });
 }
@@ -85,6 +94,11 @@ async function start(): Promise<void> {
     return net.fetch(pathToFileURL(file).toString());
   });
   app.dock?.hide();
+  void diagnostics.record('startup', {
+    executable: process.execPath,
+    pid: process.pid,
+    accessibility: systemPreferences.isTrustedAccessibilityClient(false),
+  });
   const store = new PreferenceStore(app.getPath('userData'));
   let preferences = await store.load();
   const displays = (): DesktopDisplay[] =>
@@ -120,9 +134,11 @@ async function start(): Promise<void> {
     worldKey = '',
     lastSaved = 0,
     lastPresented = -Infinity,
+    lastDiagnostic = -Infinity,
     mode = '';
   let ignored = true;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  let healthySince: number | null = null;
   const mailbox = new PresentationMailbox();
   const tray = new Tray(
     nativeImage
@@ -160,6 +176,7 @@ async function start(): Promise<void> {
   function setStatus(next: string): void {
     if (status !== next) {
       status = next;
+      void diagnostics.record('status', { status });
       rebuildMenu();
     }
   }
@@ -242,6 +259,15 @@ async function start(): Promise<void> {
       !assetError;
     if (next === visible || !overlay || overlay.isDestroyed()) return;
     visible = next;
+    healthySince = null;
+    void diagnostics.record('visibility', {
+      visible,
+      rendererReady,
+      userHidden,
+      osSuspended,
+      assetError,
+      status,
+    });
     if (visible) {
       simulation.resume(performance.now());
       mailbox.reset();
@@ -355,6 +381,12 @@ async function start(): Promise<void> {
           ]
         : []),
       { label: 'Retry window tracking', click: () => helper.restart() },
+      {
+        label: 'Open diagnostic logs…',
+        click: () => {
+          void shell.openPath(diagnosticsDirectory);
+        },
+      },
       { type: 'separator' },
       {
         label: 'Quit My Own Dots',
@@ -402,7 +434,14 @@ async function start(): Promise<void> {
       event.senderFrame.url === 'dots://app/index.html'
     );
   }
-  function recoverRenderer(): void {
+  function recoverRenderer(reason = 'manual'): void {
+    // A renderer can report both unresponsive and gone for the same failure.
+    if (retryTimer) return;
+    healthySince = null;
+    void diagnostics.record('renderer-recovery', {
+      reason,
+      attempt: restarts + 1,
+    });
     rendererReady = false;
     cancelCapture();
     simulation.suspend();
@@ -500,14 +539,22 @@ async function start(): Promise<void> {
     overlay.setIgnoreMouseEvents(true, { forward: true });
     ignored = true;
     overlay.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    overlay.webContents.on('console-message', (details) => {
+      if (details.level === 'error')
+        void diagnostics.record('renderer-console-error', {
+          message: details.message.slice(0, 2000),
+        });
+    });
     overlay.webContents.on('will-navigate', (event) => event.preventDefault());
-    overlay.webContents.on('render-process-gone', () => {
-      if (!quitting) recoverRenderer();
+    overlay.webContents.on('render-process-gone', (_event, details) => {
+      void diagnostics.record('renderer-gone', { ...details });
+      if (!quitting) recoverRenderer('process-gone');
     });
     overlay.webContents.on('unresponsive', () => {
-      if (!quitting) recoverRenderer();
+      if (!quitting) recoverRenderer('unresponsive');
     });
     overlay.webContents.on('did-fail-load', (_event, _code, message) => {
+      void diagnostics.record('renderer-load-failed', { code: _code, message });
       assetError = message;
       rendererReady = false;
       syncVisibility();
@@ -528,14 +575,26 @@ async function start(): Promise<void> {
   ipcMain.on('dot:ready', (event) => {
     if (!trusted(event)) return;
     rendererReady = true;
+    void diagnostics.record('renderer-ready', {});
     assetError = '';
     refreshWorld(helper.current(performance.now()));
     syncVisibility();
     deliver(mailbox.offer(presentation()));
   });
   ipcMain.on('dot:ack', (event, seq: unknown) => {
-    if (trusted(event) && typeof seq === 'number' && Number.isSafeInteger(seq))
+    if (
+      trusted(event) &&
+      typeof seq === 'number' &&
+      Number.isSafeInteger(seq)
+    ) {
+      if (visible && mailbox.isAwaiting(seq)) {
+        const now = performance.now();
+        healthySince ??= now;
+        // Bound consecutive failures, not independent stalls over app lifetime.
+        if (now - healthySince >= 5000) restarts = 0;
+      }
       deliver(mailbox.ack(seq));
+    }
   });
   ipcMain.on('dot:pointer', (event, input: unknown) => {
     if (!trusted(event) || !visible || !validPointerInput(input)) return;
@@ -558,6 +617,9 @@ async function start(): Promise<void> {
   });
   ipcMain.on('dot:error', (event, message: unknown) => {
     if (!trusted(event) || typeof message !== 'string') return;
+    void diagnostics.record('renderer-error', {
+      message: message.slice(0, 2000),
+    });
     if (message.startsWith('Audio:')) {
       audioError = message.slice(0, 200);
       rebuildMenu();
@@ -567,7 +629,8 @@ async function start(): Promise<void> {
     rendererReady = false;
     syncVisibility();
     rebuildMenu();
-    if (message.includes('Graphics context lost')) recoverRenderer();
+    if (message.includes('Graphics context lost'))
+      recoverRenderer('graphics-context-lost');
   });
   helper.start();
   ipcMain.handle('dot:preferences:read', (event) => {
@@ -589,9 +652,29 @@ async function start(): Promise<void> {
     // A live transition hides the panel; an expired/unavailable observation
     // is floor-only mode. It must not leave a latched invisible companion.
     syncVisibility();
+    if (now - lastDiagnostic >= 5000) {
+      lastDiagnostic = now;
+      const state = simulation.frame();
+      void diagnostics.record('health', {
+        visible,
+        rendererReady,
+        userHidden,
+        osSuspended,
+        status,
+        assetError,
+        restarts,
+        action: state.action,
+        root: state.root,
+        displayId: state.displayId,
+        bounds: overlay.isDestroyed() ? null : overlay.getBounds(),
+        nativeVisible: !overlay.isDestroyed() && overlay.isVisible(),
+        appHidden: app.isHidden(),
+        accessibility: helper.current(now)?.accessibility ?? null,
+      });
+    }
     if (!visible) return;
     if (mailbox.stalled(now)) {
-      recoverRenderer();
+      recoverRenderer('frame-timeout');
       return;
     }
     const cursor = screen.getCursorScreenPoint();

@@ -108,7 +108,7 @@ Bring your agents into Slack with [Channels SDK](https://github.com/CopilotKit/c
 
 A separate desktop entry point runs one recolorable plush Dot above ordinary application windows. It supports continuous roaming, exposed window-edge physics, pinching pickup, local sound effects, and menu-bar appearance/sound controls. Window play uses a bundled Swift geometry observer and requires Accessibility; a clear floor-only mode remains available without permission.
 
-Run `npm run desktop:dev` to build and launch, or `npm run desktop:package` for a self-contained Apple Silicon `.app` and ZIP. The local build is ad-hoc signed and is not notarized. Desktop chat/voice/agent execution and Windows/Linux adapters remain future work. See the [desktop guide](docs/desktop/README.md), [artwork notes](docs/desktop/asset-notes.md), and [verification evidence and limits](docs/desktop/verification.md).
+Run `npm run desktop:dev` to build and launch, or `npm run desktop:package` for a self-contained Apple Silicon `.app` and ZIP. Packaging defaults to ad-hoc signing; set `DOTS_CODESIGN_IDENTITY` to an installed signing identity for stable permissions across rebuilds. The build is not notarized. Desktop chat/voice/agent execution and Windows/Linux adapters remain future work. See the [desktop guide](docs/desktop/README.md), [artwork notes](docs/desktop/asset-notes.md), and [verification evidence and limits](docs/desktop/verification.md).
 
 ## Architecture
 

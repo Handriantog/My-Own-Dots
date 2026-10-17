@@ -35,6 +35,22 @@ function frame(sequence: number): PresentationFrame {
   };
 }
 describe('presentation sequencing', () => {
+  it('never passes negative zero to the native integer position API', () => {
+    const negativeOriginDisplay = {
+      ...display,
+      bounds: { ...display.bounds, x: -400, y: -400 },
+    };
+    for (const [root, monitor, dragging] of [
+      [{ x: 159.6925468827576, y: 4893.614583333282 }, display, false],
+      [{ x: 159.7, y: 199.7 }, display, true],
+      [{ x: 159.7, y: 199.7 }, negativeOriginDisplay, false],
+    ] as const) {
+      const origin = overlayOrigin(root, monitor, dragging);
+      expect(Object.is(origin.x, -0)).toBe(false);
+      expect(Object.is(origin.y, -0)).toBe(false);
+      expect(origin.x).toBe(0);
+    }
+  });
   it('retains the whole grabbed body while its pointer crosses a display seam', () => {
     const right = {
       ...display,

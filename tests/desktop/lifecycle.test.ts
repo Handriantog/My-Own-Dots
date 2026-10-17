@@ -16,8 +16,28 @@ const host = vi.hoisted(() => ({
   cursor: { x: 1200, y: 100 },
   frame: null as PresentationFrame | null,
   accessibilityTrusted: false,
-  menu: [] as Array<{ label?: string }>,
+  menu: [] as Array<{ label?: string; click?: () => void }>,
+  loads: 0,
+  diagnosticEvents: [] as Array<{
+    event: string;
+    details: Record<string, unknown>;
+  }>,
 }));
+vi.mock('../../src/desktop/host/diagnostics.js', () => ({
+  DesktopDiagnostics: class {
+    captureException() {}
+    async record(event: string, details: Record<string, unknown>) {
+      host.diagnosticEvents.push({ event, details });
+    }
+  },
+}));
+const exceptionMonitors = new Set(
+  process.listeners('uncaughtExceptionMonitor'),
+);
+const platformDescriptor = Object.getOwnPropertyDescriptor(
+  process,
+  'platform',
+)!;
 vi.mock('electron', async () => {
   const { EventEmitter } = await import('node:events');
   const { display } = await import('./fixtures.js');
@@ -63,16 +83,22 @@ vi.mock('electron', async () => {
     isDestroyed() {
       return false;
     }
+    isVisible() {
+      return this.visible;
+    }
     setAlwaysOnTop() {}
     setVisibleOnAllWorkspaces() {}
     setIgnoreMouseEvents() {}
-    async loadURL() {}
+    async loadURL() {
+      host.loads++;
+    }
   }
   return {
     app: Object.assign(new EventEmitter(), {
       setName: vi.fn(),
       setPath: vi.fn(),
       getPath: () => '/unused',
+      isHidden: () => false,
       requestSingleInstanceLock: () => true,
       whenReady: async () => {},
       dock: { hide: vi.fn() },
@@ -129,6 +155,8 @@ vi.mock('../../src/desktop/host/preferences.js', async (original) => ({
 }));
 
 beforeEach(async () => {
+  // This suite models a macOS Electron host, including on Linux CI runners.
+  Object.defineProperty(process, 'platform', { value: 'darwin' });
   vi.resetModules();
   host.windows = [];
   host.children = [];
@@ -136,6 +164,8 @@ beforeEach(async () => {
   host.frame = null;
   host.accessibilityTrusted = false;
   host.menu = [];
+  host.diagnosticEvents = [];
+  host.loads = 0;
   vi.useFakeTimers({
     toFake: [
       'setTimeout',
@@ -156,7 +186,14 @@ beforeEach(async () => {
   });
   expect(window.visible).toBe(true);
 });
-afterEach(() => {
+afterEach(async () => {
+  Object.defineProperty(process, 'platform', platformDescriptor);
+  for (const listener of process.listeners('uncaughtExceptionMonitor'))
+    if (!exceptionMonitors.has(listener))
+      process.removeListener('uncaughtExceptionMonitor', listener);
+  const { app, ipcMain, powerMonitor, screen } = await import('electron');
+  for (const emitter of [app, ipcMain, powerMonitor, screen])
+    emitter.removeAllListeners();
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -175,6 +212,80 @@ function invalidScene() {
   expect(host.windows[0].visible).toBe(false);
 }
 describe('host scene recovery', () => {
+  function ready() {
+    const window = host.windows[0];
+    host.ipc!.emit('dot:ready', {
+      sender: window.webContents,
+      senderFrame: window.webContents.mainFrame,
+    });
+  }
+  it('recovers separate renderer failures after sustained acknowledged frames', async () => {
+    for (let i = 0; i < 4; i++) {
+      host.windows[0].webContents.emit('unresponsive');
+      await vi.advanceTimersByTimeAsync(350);
+      expect(host.loads).toBe(i + 2);
+      ready();
+      await vi.advanceTimersByTimeAsync(5500);
+      expect(host.windows[0].visible).toBe(true);
+    }
+  });
+  it('bounds consecutive failures and allows an explicit new recovery attempt', async () => {
+    for (let i = 0; i < 3; i++) {
+      host.windows[0].webContents.emit('unresponsive');
+      await vi.advanceTimersByTimeAsync(350);
+      if (i < 2) ready();
+    }
+    expect(host.loads).toBe(3);
+    expect(host.windows[0].visible).toBe(false);
+    expect(
+      host.menu.some((item) => item.label?.includes('Renderer unavailable')),
+    ).toBe(true);
+    host.menu.find((item) => item.label === 'Recover companion')!.click!();
+    await vi.advanceTimersByTimeAsync(350);
+    expect(host.loads).toBe(4);
+    ready();
+    expect(host.windows[0].visible).toBe(true);
+  });
+  it('counts duplicate failure notifications during a pending reload only once', async () => {
+    const contents = host.windows[0].webContents;
+    contents.emit('unresponsive');
+    contents.emit('render-process-gone', {}, { reason: 'crashed' });
+    contents.emit('unresponsive');
+    await vi.advanceTimersByTimeAsync(350);
+    expect(host.loads).toBe(2);
+    ready();
+    expect(host.windows[0].visible).toBe(true);
+    expect(
+      host.menu.some((item) => item.label?.includes('Renderer unavailable')),
+    ).toBe(false);
+    contents.emit('unresponsive');
+    await vi.advanceTimersByTimeAsync(350);
+    expect(host.loads).toBe(3);
+  });
+  it('records renderer failure and the resulting hidden state for diagnosis', () => {
+    const window = host.windows[0];
+    host.ipc!.emit(
+      'dot:error',
+      {
+        sender: window.webContents,
+        senderFrame: window.webContents.mainFrame,
+      },
+      'Unable to load character',
+    );
+    expect(window.visible).toBe(false);
+    expect(host.diagnosticEvents).toContainEqual({
+      event: 'renderer-error',
+      details: { message: 'Unable to load character' },
+    });
+    expect(
+      host.diagnosticEvents.findLast((entry) => entry.event === 'visibility')
+        ?.details,
+    ).toMatchObject({
+      visible: false,
+      rendererReady: false,
+      assetError: 'Unable to load character',
+    });
+  });
   it('explains how to renew an updated app grant while Accessibility is denied', () => {
     expect(
       host.menu.some((item) => item.label?.includes('remove and re-add')),

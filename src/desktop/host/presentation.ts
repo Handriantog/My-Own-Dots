@@ -43,6 +43,9 @@ export class PresentationMailbox {
     this.pending = null;
     return this.inFlight;
   }
+  isAwaiting(sequence: number): boolean {
+    return this.inFlight?.sequence === sequence;
+  }
   stalled(nowMs: number): boolean {
     return !!this.inFlight && nowMs - this.inFlight.sentAtMs > 500;
   }
@@ -62,6 +65,9 @@ export function overlayOrigin(
   dragging = false,
 ): Point {
   const area = display.bounds;
+  // V8's native integer conversion rejects -0, which Math.round produces
+  // while the panel crosses zero. Adding positive zero canonicalizes it.
+  const nativePixel = (value: number) => Math.round(value) + 0;
   // The pointer can enter a new screen before the off-center grabbed body.
   // Keep the previous root-centered capture surface through that handoff and
   // the bounded offscreen release recovery; never clip it to the pointer's screen.
@@ -72,11 +78,11 @@ export function overlayOrigin(
     root.y - BODY.height < area.y ||
     root.y > area.y + area.height
   )
-    return { x: Math.round(root.x - 160), y: Math.round(root.y - 200) };
+    return { x: nativePixel(root.x - 160), y: nativePixel(root.y - 200) };
   const clamp = (n: number, lo: number, hi: number) =>
     Math.max(lo, Math.min(hi, n));
   return {
-    x: Math.round(clamp(root.x - 160, area.x, area.x + area.width - 320)),
-    y: Math.round(clamp(root.y - 200, area.y, area.y + area.height - 320)),
+    x: nativePixel(clamp(root.x - 160, area.x, area.x + area.width - 320)),
+    y: nativePixel(clamp(root.y - 200, area.y, area.y + area.height - 320)),
   };
 }

@@ -2,6 +2,27 @@
 
 Machine: Apple M3 Max, 14 CPU cores, 36 GiB RAM, macOS 26.6.2 (25G83), arm64. Runtime: Electron 44.8.0, PixiJS 8.22.0. Native helper compiled with the installed Swift toolchain, deployment target macOS 14.
 
+## Accessibility disappearance fix — October 18
+
+The reported status was “Renderer unavailable; choose Recover companion.” The running old ad-hoc app's host, renderer and observer were alive, but the overlay was hidden and its simulation was below the display. Inspector capture and the native error dialog identified `BrowserWindow.setPosition` throwing a conversion error. The captured root x-coordinate was `159.6925468827576`: rounding `root.x - 160` produces JavaScript negative zero. A real Electron 44.8.0 probe confirmed `setPosition(-0, 700)` throws the exact error, while positive zero and negative one succeed. This is a confirmed coordinate-conversion failure; the timing of the Accessibility grant does not establish permission handling as its cause.
+
+All native overlay origins now normalize rounded zero to positive zero, including held/offscreen and display-contained placement. Simulation positions and motion remain unchanged. Regression fixtures include the captured live coordinates and both axes/placement branches. The existing below-screen recovery was observed returning the old instance to its floor after its blocked delivery was resumed; no speculative physics rewrite was made.
+
+A second reproduced bug counted renderer restarts across the whole app lifetime. Three 900 ms renderer stalls spaced 6.5 seconds apart permanently hid the old build. The new build resets the budget after five seconds of valid frame acknowledgements, coalesces duplicate errors during a pending reload, and still stops after consecutive failed recoveries. Manual recovery starts a fresh attempt. The same packaged stall probe now completes all three cycles with a visible companion and a fresh recovery budget each time.
+
+Bounded local diagnostic files record health/status events, renderer errors and recovery reasons. A synchronous last-exception file survives fatal process exit; failed diagnostics I/O does not interrupt Dot. Logs exclude other applications' window titles/content. The menu opens the log directory.
+
+- Full suite with certificate checks: **598 passed, 19 existing skips** across 96 passing and seven skipped files. Typecheck and lint passed; the existing Vite configuration warning remains.
+- Regressions failed before the signed-zero/recovery fixes and passed afterward. Independent review found no substantive issue and suggested an additional clamped-origin fixture, which was added.
+- Certificate packaging, strict deep signature verification, ZIP integrity, and the packaged smoke test passed. The smoke verified a visible non-focusing panel, all 69 decoded sounds, the sandboxed bridge, single-instance behavior and saved preferences, with no renderer errors.
+- Real native negative-zero rejection and repeated packaged recovery are verified. The exact macOS permission transition and physical multi-monitor drag remain owner acceptance checks; no privacy permission was changed by the agent.
+
+The corrected app replaces the old app in the default `release/My Own Dots-darwin-arm64/` location. Earlier bundles are retained as ZIP archives, avoiding several runnable copies with the same bundle ID. User preferences were backed up before replacement. This build uses the stable certificate identity introduced in the preceding feedback pass; the old ad-hoc Accessibility entry may need to be removed and this current app added once.
+
+After replacement, native app inspection visually confirmed the blue plush Dot on the desktop. Its own health log reports the renderer ready, native panel visible, zero recovery attempts and no asset error. Color and volume were preserved. The new identity currently reports Accessibility denied, so window play awaits the owner's renewed grant. No inspector listener remains open.
+
+For PR preparation, the owner subsequently reported the updated app working. The full suite, formatting, lint, typecheck and web production build were rerun successfully. A Linux-platform simulation exposed that the mocked host tests inherited the runner's operating system; their fixture now explicitly models macOS and restores the original platform afterward. All 11 lifecycle tests pass in that simulation. Actual Linux CI remains a separate check, and this does not add Linux companion support.
+
 ## October 17 second feedback pass
 
 This pass adds nearby pointer gaze, intentional rubbing/petting with bounded heart bubbles, seated sitting/sleeping, playful look/wave/groom/headphone/ledge-peek actions, and persistent category sound controls. It keeps the existing plush atlas and all 69 sound files. New gestures use continuous pose changes and a bounded noncontact arm speed. Grounded soles stay on their support during peeking and seated transitions.
