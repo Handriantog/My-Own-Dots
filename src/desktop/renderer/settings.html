@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Customize Dot</title>
+  </head>
+  <body>
+    <main>
+      <div class="intro">
+        <img src="./desktop-dot/icon.png" alt="Blue plush Dot" />
+        <div>
+          <h1>Make Dot yours</h1>
+          <p>One little companion. Your colors.</p>
+        </div>
+      </div>
+      <label class="row"
+        >Body color <input id="color" type="color" aria-label="Body color"
+      /></label>
+      <label class="volume"
+        >Master volume <output id="volume-label">40%</output
+        ><input
+          id="volume"
+          type="range"
+          min="0"
+          max="100"
+          aria-label="Master volume"
+      /></label>
+      <label class="row" for="sound-category">
+        Sound category
+        <select id="sound-category">
+          <option value="walking">Walking</option>
+          <option value="interactions">Interactions</option>
+          <option value="climbing">Climbing</option>
+          <option value="falls">Falls &amp; landings</option>
+          <option value="rest">Rest &amp; idle</option>
+        </select>
+      </label>
+      <label class="volume" for="category-volume">
+        <span id="category-volume-name">Walking volume</span>
+        <output id="category-volume-label" for="category-volume">100%</output>
+        <input
+          id="category-volume"
+          type="range"
+          min="0"
+          max="100"
+          value="100"
+        />
+      </label>
+      <label class="row"
+        >Mute effects <input id="muted" type="checkbox" role="switch"
+      /></label>
+      <label class="row"
+        >Pause roaming <input id="paused" type="checkbox" role="switch"
+      /></label>
+      <label class="row"
+        >Reduce motion <input id="reducedMotion" type="checkbox" role="switch"
+      /></label>
+      <p class="note">
+        Changes save automatically. The first sound collection is still being
+        softened.
+      </p>
+      <p id="error" role="status"></p>
+    </main>
+    <script type="module" src="./settings.ts"></script>
+  </body>
+</html>

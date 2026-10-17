@@ -104,6 +104,12 @@ https://github.com/user-attachments/assets/27d03a6c-a9e0-4c29-8d96-fafe0fbae20f
 
 Bring your agents into Slack with [Channels SDK](https://github.com/CopilotKit/channels-sdk). See the [managed Channels documentation](https://docs.copilotkit.ai/intelligence/channels) to connect them through CopilotKit Intelligence.
 
+## Desktop companion (macOS)
+
+A separate desktop entry point runs one recolorable plush Dot above ordinary application windows. It supports continuous roaming, exposed window-edge physics, pinching pickup, local sound effects, and menu-bar appearance/sound controls. Window play uses a bundled Swift geometry observer and requires Accessibility; a clear floor-only mode remains available without permission.
+
+Run `npm run desktop:dev` to build and launch, or `npm run desktop:package` for a self-contained Apple Silicon `.app` and ZIP. Packaging defaults to ad-hoc signing; set `DOTS_CODESIGN_IDENTITY` to an installed signing identity for stable permissions across rebuilds. The build is not notarized. Desktop chat/voice/agent execution and Windows/Linux adapters remain future work. See the [desktop guide](docs/desktop/README.md), [artwork notes](docs/desktop/asset-notes.md), and [verification evidence and limits](docs/desktop/verification.md).
+
 ## Architecture
 
 ### AG-UI connects the agent to the interface

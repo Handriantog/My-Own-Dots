@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "atlas": "plush-atlas.png",
+  "atlasWidth": 1254,
+  "atlasHeight": 1254,
+  "layers": {
+    "body": {
+      "frame": { "x": 24, "y": 60, "width": 448, "height": 472 },
+      "size": { "x": 92, "y": 98 },
+      "position": { "x": 0, "y": -7 },
+      "pivot": { "x": 0.5, "y": 1 },
+      "tint": true
+    },
+    "headphones": {
+      "frame": { "x": 469, "y": 95, "width": 486, "height": 369 },
+      "size": { "x": 112, "y": 69 },
+      "position": { "x": 0, "y": -111 },
+      "pivot": { "x": 0.5, "y": 0 },
+      "tint": false
+    },
+    "eyes": {
+      "frame": { "x": 977, "y": 272, "width": 252, "height": 123 },
+      "size": { "x": 46, "y": 23 },
+      "position": { "x": 0, "y": -63 },
+      "pivot": { "x": 0.5, "y": 0.5 },
+      "tint": false
+    },
+    "mouth": {
+      "frame": { "x": 1009, "y": 742, "width": 176, "height": 73 },
+      "size": { "x": 12, "y": 5 },
+      "position": { "x": 0, "y": -48 },
+      "pivot": { "x": 0.5, "y": 0.5 },
+      "tint": false
+    },
+    "leftArm": {
+      "frame": { "x": 101, "y": 615, "width": 228, "height": 289 },
+      "size": { "x": 23, "y": 34 },
+      "position": { "x": -39, "y": -45 },
+      "pivot": { "x": 0.72, "y": 0.14 },
+      "tint": true
+    },
+    "rightArm": {
+      "frame": { "x": 608, "y": 618, "width": 224, "height": 286 },
+      "size": { "x": 23, "y": 34 },
+      "position": { "x": 39, "y": -45 },
+      "pivot": { "x": 0.28, "y": 0.14 },
+      "tint": true
+    },
+    "leftFoot": {
+      "frame": { "x": 90, "y": 1011, "width": 291, "height": 163 },
+      "size": { "x": 27, "y": 15 },
+      "position": { "x": -20, "y": 0 },
+      "pivot": { "x": 0.5, "y": 1 },
+      "tint": true
+    },
+    "rightFoot": {
+      "frame": { "x": 568, "y": 1014, "width": 287, "height": 163 },
+      "size": { "x": 27, "y": 15 },
+      "position": { "x": 20, "y": 0 },
+      "pivot": { "x": 0.5, "y": 1 },
+      "tint": true
+    },
+    "tuft": {
+      "frame": { "x": 1028, "y": 961, "width": 161, "height": 226 },
+      "size": { "x": 9, "y": 13 },
+      "position": { "x": 0, "y": -90 },
+      "pivot": { "x": 0.5, "y": 0.08 },
+      "tint": true
+    }
+  }
+}
