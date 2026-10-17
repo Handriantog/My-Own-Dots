@@ -21,7 +21,7 @@
 - Window observation contains geometry/ordering/capability only, no titles or screen contents. Authorization failure, stale observations, and helper failure degrade to honest floor-only mode. Use public APIs only.
 - Surface identity includes native owner and lifetime generation. Occluded edges cannot support the body; window interiors are passable. Removed or abruptly moved support causes a fall from the current position.
 - Sounds remain provisional. Default volume 40%, at most four voices, deduplication, cooldowns, no immediate variant repeats, canceled fall cue on landing/pickup. Mute and resting are quiet.
-- Existing web commands and data remain intact. Runtime needs no external Node, Python, Docker, backend, or network. Local unsigned arm64 app is distinct from a notarized public release; Intel and older macOS support require their own verification.
+- Existing web commands and data remain intact. Runtime needs no external Node, Python, Docker, backend, or network. Local ad-hoc signed arm64 app is distinct from a notarized public release; Intel and older macOS support require their own verification.
 - Work only in this feature worktree, preserve the user's reference screenshot and unrelated branches. Record native evidence separately from synthetic test coverage.
 
 ## Review Focus
@@ -93,7 +93,7 @@
 
 - [x] Write tests for duplicate IDs, four-voice cap and priority, cooldowns, nonrepeat variants, fall cancellation on pickup/landing, mute/suspend stale-event discard, and bounded history. Run `npm test -- tests/desktop/audio.test.ts`. Expected: missing implementation failure.
 - [x] Bundle all 69 sounds/manifest, predecode and schedule WebAudio against frame time, fade cancellations, pan gently, surface decode failure without stopping motion. Add tray color swatches/custom picker and volume/mute controls persisted atomically. Respect macOS reduced motion and explicit pause.
-- [x] Package current-architecture standalone `.app` and zip with Electron/helper/assets; keep development/build/web commands separate and document installation, permissions, shortcuts/control behavior and unsigned-release limitation. App resources exclude backend/dev source and secrets.
+- [x] Package current-architecture standalone `.app` and zip with Electron/helper/assets; keep development/build/web commands separate and document installation, permissions, shortcuts/control behavior and local-signing limitation. App resources exclude backend/dev source and secrets.
 - [x] Run `npm test -- tests/desktop` and `npm run desktop:package`. Expected: passing tests, self-contained arm64 app/zip. Commit `feat(desktop): add sounds controls and macOS packaging`.
 
 ### Task 7: Native acceptance, soak, documentation, and final review

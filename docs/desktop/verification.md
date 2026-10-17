@@ -15,6 +15,8 @@ Machine: Apple M3 Max, 14 CPU cores, 36 GiB RAM, macOS 26.6.2 (25G83), arm64. Ru
 
 The first launch found Pixi's dynamic-uniform and worker-loading defaults incompatible with the strict CSP. The renderer now uses Pixi's static uniform implementation and main-thread asset decoding. CSP remains without `unsafe-eval`, and workers remain disabled.
 
+A final suite invocation was interrupted by a 704-second macOS maintenance sleep, recorded in `pmset -g log` at 09:17:14–09:28:58. Six existing non-desktop tests consequently hit their timeouts after roughly 702 seconds. The final recorded pass used `caffeinate -i` around the test command only; no test timeouts or persistent power settings were changed. The interrupted log is retained in the local artifacts.
+
 ## Motion and visual inspection
 
 `node scripts/desktop-rig-preview.mjs` renders the actual Pixi rig across idle, walking, pickup, climbing, sleep, stretch, fall, sitting, yawn, and click poses, plus five body colors. The final contact sheet was inspected. Hanging foot attachment, outward arm stretch, and pull-up palm contact were corrected. The headphones retain rigid dimensions during body deformation. Arrival fades in, and resting presentation reduces its cadence. Eyes, smile, plush texture, proportions, and cream headphones remain the same master assets. Runtime silhouette masks suppress disconnected atlas debris; source atlas and provenance remain in the repo. The settings page was also rendered and inspected at its intended content size; controls and explanatory text remain visible.
@@ -52,6 +54,8 @@ The **final packaged application completed a ten-minute live run** with roaming 
 Working-set/RSS sums can count shared pages more than once. Electron and `ps` CPU measurements are reported separately rather than added across different measurement methods. JavaScript work does not measure compositor frame delivery, input latency, or physical audio output latency. No universal CPU/memory guarantee is claimed.
 
 Two earlier instrumented runs of the preceding package lost their Playwright target after 35.6 seconds and 8.15 minutes. Neither is counted as a completed soak; their cause remains unestablished. A separate three-minute diagnostic run and the final ten-minute run completed normally. A full 30-minute native soak is therefore **not accepted**; the 30-minute result above is explicitly synthetic. Reports preserve the incomplete-run evidence instead of attributing it to either the app or harness without proof.
+
+The power log places idle sleep at 07:53:56, five seconds after the eight-minute probe's target closed. That timing is useful environmental evidence, but does not by itself establish whether the app, instrumentation, or a preceding OS transition closed the target.
 
 ## Reproduce
 
