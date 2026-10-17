@@ -2,7 +2,21 @@
 
 Machine: Apple M3 Max, 14 CPU cores, 36 GiB RAM, macOS 26.6.2 (25G83), arm64. Runtime: Electron 44.8.0, PixiJS 8.22.0. Native helper compiled with the installed Swift toolchain, deployment target macOS 14.
 
-## Automated evidence
+## October 17 owner-feedback pass
+
+The menu now says **Customize Dot**. Pickup uses the ordinary pointer, no drawn hand, and a sustained awed face. Walking has a shorter stride, opposite arm swings, and planted soles that remain level during body deformation. Climbing uses a smooth initial reach, repeated planted-palm pulls, mild effort, a secure top destination, and a 2.8-second settling interval. Hops use the gravity-consistent flight duration and an inset destination to avoid overshooting the end of a perch.
+
+The reported external-monitor issue was clarified as flickering between positions on the left side. The former root-centered 320-pixel native window could straddle the display edge; autonomous placement now keeps it inside the active work area. Dragging and partially offscreen recovery retain a root-centered surface so an off-center grab can cross monitors intact. Tests cover negative, vertically offset, and mixed-scale display layouts. **The exact physical flicker is not verified as resolved:** this pass has only the built-in Retina display, and the native helper reports Accessibility false.
+
+- Full suite: **529 passed, 19 existing skips**; desktop subset **73 passed** across ten files. Type checking, lint, web build, and diff whitespace checks pass.
+- Regressions were observed failing for edge placement, missing climb destinations, sliding grips, immediate departure after pull-up, long-held expression, overwide gait, abrupt arm contact, stroke clock catch-up, cross-monitor clipping, pause during the first reach, and resuming a paused climb from mid-wall.
+- Independent review reproduced three interruption regressions; each was fixed and rechecked. The final review found no remaining important issue in those fixes. See [review resolutions](review.md).
+- Thirty synthetic minutes with 20 scripted windows completed: maximum root displacement 6.77 logical pixels/frame, 4,717 interaction events, at most two policy voices, and 26.4 MiB final JavaScript heap. That dense layout has no eligible climb tops; separate single-window tests and the actual-rig preview exercise successful climbs and perches.
+- The actual Pixi rig was inspected in a 22-second motion preview, including timestamped walk frames, climbing contact, successful perch, and long-held expression. Reference sources and reproduction command are in [asset notes](asset-notes.md). No source imagery or sound was replaced.
+
+The historical measurements below belong to the initial delivery; they are not fresh live-soak measurements for this refinement.
+
+## Initial delivery automated evidence
 
 - Existing baseline before implementation: 456 passed, 19 skipped.
 - Final combined suite: **516 passed, 19 existing skips**, across 92 passing and seven skipped test files. The desktop subset has 60 tests across ten files.

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   PresentationMailbox,
+  overlayOrigin,
   validPointerInput,
 } from '../../src/desktop/host/presentation.js';
 import { CompanionSimulation } from '../../src/desktop/core/simulation.js';
@@ -34,6 +35,69 @@ function frame(sequence: number): PresentationFrame {
   };
 }
 describe('presentation sequencing', () => {
+  it('retains the whole grabbed body while its pointer crosses a display seam', () => {
+    const right = {
+      ...display,
+      id: '2',
+      bounds: { ...display.bounds, x: 1440 },
+      workArea: { ...display.workArea, x: 1440 },
+      scaleFactor: 1,
+    };
+    const sim = new CompanionSimulation(
+      buildWorld(null, [display, right], 0),
+      1,
+      { x: 1380, y: 850 },
+    );
+    sim.pointer({ kind: 'down', point: { x: 1425, y: 795 }, atMs: 0 });
+    sim.pointer({ kind: 'move', point: { x: 1445, y: 795 }, atMs: 17 });
+    expect(sim.frame().displayId).toBe('2');
+    const held = sim.frame();
+    for (const dragging of [true, false]) {
+      const origin = overlayOrigin(held.root, right, dragging);
+      expect(held.root.x - origin.x).toBeGreaterThanOrEqual(52);
+      expect(held.root.x - origin.x).toBeLessThanOrEqual(268);
+    }
+  });
+  it('keeps one compact surface within offset and mixed-scale monitor work areas', () => {
+    for (const scaleFactor of [1, 1.5, 2]) {
+      for (const offset of [
+        { x: -1920, y: -180 },
+        { x: 1440, y: 200 },
+        { x: 0, y: -1080 },
+      ]) {
+        const monitor = {
+          id: 'external',
+          scaleFactor,
+          bounds: { ...offset, width: 1920, height: 1080 },
+          workArea: {
+            x: offset.x,
+            y: offset.y + 25,
+            width: 1920,
+            height: 1020,
+          },
+        };
+        for (const x of [offset.x + 52, offset.x + 1868]) {
+          for (const y of [offset.y + 140, offset.y + 1045]) {
+            const root = { x, y },
+              origin = overlayOrigin(root, monitor);
+            expect(origin.x).toBeGreaterThanOrEqual(monitor.workArea.x);
+            expect(origin.x + 320).toBeLessThanOrEqual(
+              monitor.workArea.x + 1920,
+            );
+            expect(origin.y).toBeGreaterThanOrEqual(monitor.workArea.y);
+            expect(origin.y + 320).toBeLessThanOrEqual(
+              monitor.workArea.y + 1020,
+            );
+            // The body stays inside the canvas without changing the world root.
+            expect(root.x - origin.x).toBeGreaterThanOrEqual(52);
+            expect(root.x - origin.x).toBeLessThanOrEqual(268);
+            expect(root.y - origin.y).toBeGreaterThanOrEqual(112);
+            expect(root.y - origin.y).toBeLessThanOrEqual(320);
+          }
+        }
+      }
+    }
+  });
   it('keeps one in-flight frame and merges events into the freshest pending state', () => {
     const box = new PresentationMailbox();
     expect(box.offer(frame(1))?.sequence).toBe(1);

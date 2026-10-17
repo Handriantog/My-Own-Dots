@@ -7,6 +7,55 @@ import {
 } from '../../src/desktop/core/pose.js';
 
 describe('continuous rig pose', () => {
+  it('keeps a gentle wide-eyed awe expression throughout a long pickup', () => {
+    let pose = initialPose();
+    for (let n = 0; n < 600; n++)
+      pose = samplePose(
+        pose,
+        {
+          action: 'held',
+          age: n / 120,
+          speed: 0,
+          distance: 0,
+          facing: 1,
+          time: n / 120 + 1,
+          sway: 0,
+          reducedMotion: false,
+        },
+        1 / 120,
+      );
+    expect(pose.mouth).toBeGreaterThan(0.9);
+    expect(pose.eyeOpen).toBeGreaterThan(1.05);
+  });
+  it('keeps little walking feet beneath the body and counter-swings the arms', () => {
+    let pose = initialPose();
+    let maxReach = 0,
+      oppositeSwing = 0;
+    for (let n = 0; n < 480; n++) {
+      pose = samplePose(
+        pose,
+        {
+          action: 'walk',
+          age: n / 120,
+          speed: 60,
+          distance: n / 2,
+          facing: 1,
+          time: n / 120 + 1,
+          sway: 0,
+          reducedMotion: false,
+        },
+        1 / 120,
+      );
+      maxReach = Math.max(
+        maxReach,
+        Math.abs(pose.leftFoot.x),
+        Math.abs(pose.rightFoot.x),
+      );
+      if (pose.leftArm * pose.rightArm < -0.005) oppositeSwing++;
+    }
+    expect(maxReach).toBeLessThanOrEqual(33);
+    expect(oppositeSwing).toBeGreaterThan(100);
+  });
   it('blends pickup from the current pose instead of resetting it', () => {
     const pose = { ...initialPose(), lean: 0.2, leftArm: 0.6 };
     const next = samplePose(
@@ -41,7 +90,10 @@ describe('continuous rig pose', () => {
     };
     const p1 = samplePose(initialPose(), input, 1);
     const p2 = samplePose(p1, { ...input, distance: 7 }, 1 / 60);
-    expect(100 + p1.leftFoot.x).toBeCloseTo(101 + p2.leftFoot.x, 3);
+    expect(rigPointToWorld(p1.leftFoot, { x: 100, y: 0 }, p1).x).toBeCloseTo(
+      rigPointToWorld(p2.leftFoot, { x: 101, y: 0 }, p2).x,
+      3,
+    );
   });
   it('round-trips a grip through bounded rotation and stretch', () => {
     const pose = { ...initialPose(), lean: 0.2, stretch: 1.1, squash: 0.95 };

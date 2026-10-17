@@ -26,6 +26,7 @@ export class PlushRig {
   private body: MeshPlane;
   private restVertices: Float32Array;
   private mouthOpen = new Graphics();
+  private brows = new Graphics();
   private bodyMask: Graphics;
   private legs: Sprite[] = [];
   private constructor(
@@ -107,6 +108,13 @@ export class PlushRig {
       .ellipse(0, 2, 1.9, 1)
       .fill(0xb77d78);
     this.torso.addChild(this.mouthOpen);
+    this.brows
+      .moveTo(-20, -79)
+      .quadraticCurveTo(-15, -81, -9, -77)
+      .moveTo(20, -79)
+      .quadraticCurveTo(15, -81, 9, -77)
+      .stroke({ color: 0x46332c, width: 1.7, cap: 'round' });
+    this.torso.addChild(this.brows);
   }
   static async create(assetBase: string): Promise<PlushRig> {
     Assets.setPreferences({ preferWorkers: false });
@@ -179,6 +187,9 @@ export class PlushRig {
     this.sprites.mouth.alpha = 1 - p.mouth;
     this.mouthOpen.position.set(p.facing * 3, -48);
     this.mouthOpen.alpha = p.mouth;
+    this.mouthOpen.scale.set(1 - p.effort * 0.25, 1 - p.effort * 0.4);
+    this.brows.x = p.facing * 3;
+    this.brows.alpha = p.effort;
     const vertices = this.body.geometry.getAttribute('aPosition').buffer;
     const part = this.definition.layers.body;
     for (let i = 0; i < this.restVertices.length; i += 2) {

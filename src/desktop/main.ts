@@ -26,7 +26,11 @@ import {
   parsePreferenceChange,
   restorePlacement,
 } from './host/preferences.js';
-import { PresentationMailbox, validPointerInput } from './host/presentation.js';
+import {
+  PresentationMailbox,
+  validPointerInput,
+  overlayOrigin,
+} from './host/presentation.js';
 import type {
   DesktopDisplay,
   GeometrySnapshot,
@@ -259,7 +263,7 @@ async function start(): Promise<void> {
         enabled: false,
       },
       { type: 'separator' },
-      { label: 'Appearance & sound…', click: openSettings },
+      { label: 'Customize Dot', click: openSettings },
       {
         label: 'Body color',
         submenu: [
@@ -351,13 +355,13 @@ async function start(): Promise<void> {
   function presentation(show = visible): PresentationFrame {
     const state = simulation.frame();
     const cursor = screen.getCursorScreenPoint();
+    const display =
+      currentDisplays.find((d) => d.id === state.displayId) ??
+      currentDisplays[0];
     return {
       sequence: ++sequence,
       sentAtMs: performance.now(),
-      origin: {
-        x: Math.floor(state.root.x - 160),
-        y: Math.floor(state.root.y - 200),
-      },
+      origin: overlayOrigin(state.root, display, !!state.grip),
       simulation: state,
       events: simulation.drainEvents(),
       preferences: { ...preferences },
@@ -429,7 +433,7 @@ async function start(): Promise<void> {
       minimizable: false,
       maximizable: false,
       backgroundColor: '#202632',
-      title: 'Dot appearance & sound',
+      title: 'Customize Dot',
       webPreferences: {
         preload: path.join(__dirname, 'settings-preload.cjs'),
         sandbox: true,

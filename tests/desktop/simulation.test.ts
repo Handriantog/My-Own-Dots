@@ -23,6 +23,116 @@ function resting(w: World, x = 400, y = 300) {
 }
 
 describe('continuous companion simulation', () => {
+  it('does not start a climb with no usable top above the window', () => {
+    for (const windows of [
+      [windowRect(1, 200, 33, 700, 800)],
+      [windowRect(2, 150, 200, 800, 120), windowRect(1, 200, 300, 700, 500)],
+    ]) {
+      const w = world(windows);
+      const sim = resting(w, 700, 850);
+      const intents = Array.from({ length: 100 }, () =>
+        chooseIntention(sim.frame(), w, () => 0.1),
+      );
+      expect(intents.some((i) => i.kind === 'climb')).toBe(false);
+    }
+  });
+  it('plants a climb hand during the body pull instead of sliding it up the wall', () => {
+    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 850 });
+    sim.advance(0);
+    let time = 0;
+    while (sim.frame().action !== 'climb' && time < 60000)
+      sim.advance((time += 17));
+    let planted = 0;
+    for (let n = 0; n < 120; n++) {
+      const before = sim.frame();
+      sim.advance((time += 17));
+      const after = sim.frame();
+      if (
+        before.climb &&
+        after.climb &&
+        after.action === 'climb' &&
+        Math.abs(after.climb.hand.y - before.climb.hand.y) < 0.01 &&
+        after.root.y < before.root.y - 0.1
+      )
+        planted++;
+    }
+    expect(planted).toBeGreaterThan(30);
+  });
+  it('settles securely on a window after pulling up across fresh observations', () => {
+    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 850 });
+    sim.advance(0);
+    let time = 0;
+    while (sim.frame().action !== 'pull_up' && time < 60000)
+      sim.advance((time += 17));
+    expect(sim.frame().action).toBe('pull_up');
+    while (sim.frame().action === 'pull_up' && time < 65000) {
+      sim.setWorld(world());
+      sim.advance((time += 17));
+    }
+    const perch = sim.frame().support;
+    expect(perch?.windowKey).toBeTruthy();
+    for (let n = 0; n < 140; n++) {
+      sim.setWorld(world());
+      sim.advance((time += 17));
+      expect(sim.frame().support?.windowKey).toBe(perch!.windowKey);
+      expect(sim.frame().root.y).toBe(perch!.y);
+    }
+  });
+  it('lands a hop back on the narrow end of its window perch', () => {
+    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 850 });
+    sim.advance(0);
+    let time = 0;
+    while (sim.frame().action !== 'pull_up' && time < 60000)
+      sim.advance((time += 17));
+    while (sim.frame().action !== 'jump' && time < 70000)
+      sim.advance((time += 17));
+    expect(sim.frame().action).toBe('jump');
+    while (!sim.frame().support && time < 72000) sim.advance((time += 17));
+    expect(sim.frame().support?.windowKey).toBe('a:42:1:1');
+    expect(sim.frame().root.y).toBe(300);
+  });
+  it('resumes an unfinished climbing stroke without catching up a suspended clock', () => {
+    for (const suspend of [false, true]) {
+      const sim = new CompanionSimulation(world(), 5, { x: 500, y: 850 });
+      sim.advance(0);
+      let time = 0;
+      while (
+        !(sim.frame().action === 'climb' && sim.frame().actionAge > 0.65) &&
+        time < 60000
+      )
+        sim.advance((time += 17));
+      const before = sim.frame();
+      if (suspend) {
+        sim.suspend();
+        sim.resume(time + 10000);
+      } else sim.advance(time + 10000);
+      sim.advance(time + 10017);
+      const after = sim.frame();
+      expect(Math.abs(after.root.y - before.root.y)).toBeLessThan(2);
+      expect(Math.abs(after.climb!.hand.y - before.climb!.hand.y)).toBeLessThan(
+        4,
+      );
+    }
+  });
+  it('continues a mid-wall climb after a brief pause instead of pulling to a distant top', () => {
+    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 850 });
+    sim.advance(0);
+    let time = 0;
+    while (
+      !(sim.frame().action === 'climb' && sim.frame().actionAge > 1) &&
+      time < 60000
+    )
+      sim.advance((time += 17));
+    sim.setOptions({ paused: true, reducedMotion: false });
+    sim.advance((time += 17));
+    expect(sim.frame().action).toBe('hang');
+    expect(sim.frame().climb!.hand.y).toBeGreaterThan(600);
+    sim.setOptions({ paused: false, reducedMotion: false });
+    while (sim.frame().action === 'hang' && time < 65000)
+      sim.advance((time += 17));
+    expect(sim.frame().action).toBe('climb');
+    expect(sim.frame().climb!.hand.y).toBeGreaterThan(600);
+  });
   it('restores the actual display when monitors overlap horizontally', () => {
     const upper = {
       ...display,

@@ -26,9 +26,9 @@ This is a **local ad-hoc signed build**, without Developer ID signing or notariz
 ## Interaction and preferences
 
 - Click the body for a small acknowledgment. Move at least four logical pixels while pressing to pick it up.
-- A drawn thumb-and-finger pinch gathers the actual grabbed fur point. The body stretches slightly, limbs dangle, and movement gives it bounded sway. Release lets the current motion flow into falling and landing.
+- Pickup gathers the actual grabbed fur point using the ordinary pointer, with no drawn hand. Dot keeps a wide-eyed, round-mouth expression while held. The body stretches slightly, limbs dangle, and movement gives it bounded sway. Release lets the current motion flow into falling and landing.
 - The transparent area around Dot passes clicks to the application underneath. The ambient panel does not take keyboard focus.
-- Use the menu-bar icon for **Appearance & sound**, color presets, volume, mute, pause, reduced motion, hide/show, recovery, tracking status, and Quit. The custom color picker and volume slider save automatically.
+- Use the menu-bar icon for **Customize Dot**, color presets, volume, mute, pause, reduced motion, hide/show, recovery, tracking status, and Quit. The custom color picker and volume slider save automatically.
 - A second launch reuses the existing companion. The app respects macOS reduced motion and can also suppress automatic roaming through its own controls.
 
 Preferences are separate from web-workspace data, in `~/Library/Application Support/My Own Dots Desktop/preferences.json`. They include color, sound, motion, and a display-relative placement. Native window IDs and active grips are never persisted.
@@ -47,7 +47,7 @@ Automatic exploration stays on the current monitor. Dragging can transfer Dot to
 
 The existing 23 sound families each have three original variants. The runtime predecodes the local pack, deduplicates events, honors cooldowns, limits the audible mix to four voices, and cancels falling sounds on pickup or landing. Default effects volume is 40%. The owner has deferred refinement of rough effects; these sounds remain provisional.
 
-The character uses a shared layered plush atlas and a small mesh/limb rig, with a separate original hand cursor. See [asset notes](asset-notes.md) for source provenance and color protection. Very dark body choices retain a minimum material brightness so fur detail remains visible.
+The character uses a shared layered plush atlas and a small mesh/limb rig. See [asset notes](asset-notes.md) for source provenance and color protection. Very dark body choices retain a minimum material brightness so fur detail remains visible.
 
 ## Development checks
 

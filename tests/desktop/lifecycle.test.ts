@@ -168,6 +168,14 @@ function invalidScene() {
   expect(host.windows[0].visible).toBe(false);
 }
 describe('host scene recovery', () => {
+  it('keeps the compact overlay inside its monitor at the left and bottom edges', async () => {
+    await vi.advanceTimersByTimeAsync(34);
+    const origin = host.frame!.origin;
+    expect(origin.x).toBeGreaterThanOrEqual(0);
+    expect(origin.y).toBeGreaterThanOrEqual(25);
+    expect(origin.x + 320).toBeLessThanOrEqual(1440);
+    expect(origin.y + 320).toBeLessThanOrEqual(850);
+  });
   it('releases a held Dot when helper geometry expires during capture', async () => {
     const child = host.children[0] as EventEmitter & { stdout: PassThrough };
     child.stdout.emit('data', Buffer.from(JSON.stringify(snapshot()) + '\n'));

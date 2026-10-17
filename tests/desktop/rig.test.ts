@@ -20,6 +20,74 @@ const rigData = () =>
     ),
   );
 describe('master plush asset contract', () => {
+  it('finishes the reaching arm smoothly when pause or reduced motion interrupts pickup of a wall', () => {
+    for (const options of [
+      { paused: true, reducedMotion: false },
+      { paused: false, reducedMotion: true },
+    ]) {
+      const sim = new CompanionSimulation(
+        buildWorld(snapshot([windowRect(1, 200, 300, 700, 500)]), [display], 0),
+        5,
+        { x: 500, y: 850 },
+      );
+      sim.advance(0);
+      let time = 0;
+      while (
+        !(sim.frame().action === 'climb' && sim.frame().actionAge > 0.05) &&
+        time < 60000
+      )
+        sim.advance((time += 17));
+      const before = sim.frame(),
+        side = -before.climb!.wall.side as -1 | 1;
+      const armBefore = armTransform(before, side);
+      sim.setOptions(options);
+      sim.advance(time + 17);
+      const armAfter = armTransform(sim.frame(), side);
+      expect(Math.abs(armAfter.rotation - armBefore.rotation)).toBeLessThan(
+        0.35,
+      );
+      expect(Math.abs(armAfter.height - armBefore.height)).toBeLessThan(5);
+    }
+  });
+  it('eases the gripping arm into and out of a climb without a limb pop', () => {
+    const w = buildWorld(
+      snapshot([windowRect(1, 200, 300, 700, 500)]),
+      [display],
+      0,
+    );
+    const sim = new CompanionSimulation(w, 5, { x: 500, y: 850 });
+    sim.advance(0);
+    let previous = sim.frame(),
+      transitions = 0;
+    const palm = (frame: ReturnType<typeof sim.frame>, side: -1 | 1) => {
+      const arm = armTransform(frame, side);
+      const x = side * 23 * 0.22,
+        y = arm.height * 0.86;
+      return rigPointToWorld(
+        {
+          x:
+            side * 39 + x * Math.cos(arm.rotation) - y * Math.sin(arm.rotation),
+          y: -45 + x * Math.sin(arm.rotation) + y * Math.cos(arm.rotation),
+        },
+        frame.root,
+        frame.pose,
+      );
+    };
+    for (let time = 17; time < 60000; time += 17) {
+      sim.advance(time);
+      const next = sim.frame();
+      if (!!next.climb !== !!previous.climb) {
+        const wall = (next.climb ?? previous.climb)!.wall;
+        const side = -wall.side as -1 | 1;
+        const a = palm(previous, side),
+          b = palm(next, side);
+        expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeLessThan(10);
+        transitions++;
+      }
+      previous = next;
+    }
+    expect(transitions).toBeGreaterThanOrEqual(2);
+  });
   it('keeps the rendered gripping palm on its contact throughout climb and pull-up', () => {
     const rig = parseRig(rigData());
     const sim = new CompanionSimulation(
@@ -34,7 +102,8 @@ describe('master plush asset contract', () => {
     for (let time = 17; time < 60000; time += 17) {
       sim.advance(time);
       const frame = sim.frame();
-      if (!frame.climb) continue;
+      if (!frame.climb || (frame.action === 'climb' && frame.actionAge < 0.55))
+        continue;
       const side = frame.climb.wall.side === 1 ? -1 : 1;
       const layer = rig.layers[side === -1 ? 'leftArm' : 'rightArm'];
       const transform = armTransform(frame, side);

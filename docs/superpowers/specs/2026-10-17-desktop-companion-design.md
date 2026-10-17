@@ -12,7 +12,7 @@ The owner confirmed these requirements during the design discussion:
 - Preserve the existing furry plush appearance. Use the blue character in `public/dots/blue.png` as the master visual reference, including its face, proportions, feet, arms, and headphones.
 - Freely explore the available desktop surfaces; do not restrict autonomous activity to a home corner.
 - Treat other applications' windows as physical playground surfaces. Support standing on their top edges, climbing their sides, and falling when support disappears.
-- Allow the user to click and drag Dot with a visible pinching-hand pickup: grasp the plush fur, lift the body, and let its limbs dangle. The owner's reference shows a cat held at the upper back, with its body suspended below the grip.
+- Allow the user to click and drag Dot by its plush fur, lifting the body with dangling limbs. The owner’s October 17 test feedback supersedes the earlier drawn-hand requirement: keep the ordinary pointer and show an awed face throughout pickup.
 - Maintain a continuous body and identity. Ordinary movement must not teleport, snap between unrelated poses, slide planted feet, or restart animations unpredictably.
 - Provide appropriate sound for meaningful interactions and physical events, including falls and bumps. Keep the current audition assets provisional; improve their roughness later.
 - Design for Windows and Linux eventually, while shipping and validating macOS first.
@@ -27,7 +27,7 @@ Launching the desktop application starts a single instance and introduces Dot wi
 
 The main experience is the character itself. It chooses reachable destinations, looks toward them, travels, and takes short breaks. Free roaming includes the middle of the screen through climbs, jumps, and falls; it does not mean walking unsupported through empty space. The screen's usable bottom edge is the fallback floor. With no eligible windows, Dot explores that floor and performs idle activities.
 
-Dot notices a nearby pointer and pauses destination selection so it is easy to interact with. It completes a safe stopping motion instead of freezing halfway through an unsupported jump. Clicking produces a brief acknowledgment. Pressing and moving beyond a small drag threshold closes a hand cursor into a visible pinch, gathers the fur at the grip, and lifts Dot into a dangling pose. Releasing it in midair resumes gravity. A drag does not also trigger the click reaction.
+Dot notices a nearby pointer and pauses destination selection so it is easy to interact with. It completes a safe stopping motion instead of freezing halfway through an unsupported jump. Clicking produces a brief acknowledgment. Pressing and moving beyond a small drag threshold gathers the fur at the actual grip and lifts Dot into a dangling pose with a sustained awed expression. Releasing it in midair resumes gravity. A drag does not also trigger the click reaction.
 
 The menu-bar utility provides color selection, effects volume, mute, pause/resume roaming, visibility/recovery, tracking status, and Quit. This is an operational control surface; the character's future assistant popup is deferred. Resume or recovery does not summon an already visible Dot to a different position. A hidden or offscreen Dot returns through a visible arrival sequence.
 
@@ -83,21 +83,13 @@ Use a compact window around the character rather than capturing input over the e
 
 The drag threshold starts at 4 logical pixels. Preserve the point where the user grabbed the body so pickup does not jump to its center. While held, the pointer controls the pinch anchor; the torso and limbs respond beneath that anchor rather than moving as a rigid image. On release, use bounded recent pointer velocity, then gravity. Release over a reachable support may settle directly when contact is valid. Losing capture safely releases Dot once. Native capture behavior and inactive-window clicks must be demonstrated on macOS before the interaction is accepted.
 
-### Pinching hand and suspended body
+### Pickup and suspended body
 
-The pickup should read as a hand lifting a soft creature by a small fold of its upper-body fur, matching the posture of the owner's cat reference. Use an original small hand graphic as the interaction cursor, with an open/reaching pose and a closed thumb-and-finger pinch. The reference guides the gesture and suspended posture; it is not an application asset.
+The owner's October 17 test feedback removes the visible hand graphic and custom hand cursor. Preserve the actual grabbed fur point, local fold, slight body stretch, dangling limbs, and damped sway. Use the ordinary system pointer throughout; never hide it to draw a replacement hand. Dot keeps wide eyes and a small round mouth while held, including a long stationary carry.
 
-Use this continuous sequence:
+Pickup starts from the current pose and actual grab location. Off-center grabs preserve their anchor without snapping the body or warping the pointer. Keep rotation and deformation bounded and headphones rigid. On release, ease the fold back and carry the current bounded velocity into gravity and landing. A drag must not also produce a click. Capture loss, hide, screen lock, renderer failure, and quit release the anchor safely.
 
-1. **Approach:** over the draggable silhouette, show the open hand and keep the ordinary desktop pointer outside it. Make the upper-body fur the visually preferred grip region, without requiring a precise pixel hit.
-2. **Pinch:** once dragging is recognized, close the fingers around the actual grabbed point. Gather a small local fur fold between the fingertips and add slight compression around it. Keep the contact point attached to the cursor throughout the transition. Begin this pose from the current action rather than resetting Dot upright.
-3. **Lift:** transfer support from the floor or window to the pinch anchor. Stretch the soft body slightly below the grip; arms and feet relax into a hanging pose, with a brief surprised expression. Keep the face, headphones, and overall proportions recognizable. Fingers visually overlap the gripped fur to make the contact legible.
-4. **Carry:** hold the fur patch firmly at the pointer while the body lags, tilts, and swings gently beneath it in response to movement. Limbs have smaller secondary movement. When the pointer stops, oscillation decays into a relaxed hanging pose. The body does not remain in its walking or standing animation while carried.
-5. **Release:** open the fingers, ease the fur fold back to its rest shape, and restore the appropriate cursor. The body's current pose and bounded velocity flow into settling or falling, followed by the existing landing recovery.
-
-The upper-body grip produces the reference's upright dangling posture. Off-center grabs must preserve their actual contact point and adapt the pose; do not teleport the body or warp the OS pointer to a canonical upper-back hotspot. Keep deformation and rotation within authored limits so an unusual grip does not tear the mesh, invert the face, stretch the headphones, or make the character unrecognizable. Pickup/release pose blends start around 100–160 ms, and carry sway is damped and bounded; these are tuning defaults, not delays before responding to pointer movement.
-
-Display one visible pointer representation during the interaction. A rendered animated hand must replace the arrow only within the companion's interaction/capture lifetime. It must not block clicks on other apps when no drag is active. Release, canceled capture, hide, screen lock, renderer failure, and quit all restore the normal system cursor and clear the hand overlay. Test cursor restoration and the fingertip hotspot at Retina/non-Retina scale and across monitors. If native animated cursors cannot express the gesture reliably, render the hand alongside Dot during capture while keeping the same anchor contract; do not silently reduce the interaction to a generic move cursor.
+The compact overlay stays within the active monitor's work area at its edges; the renderer subtracts the actual native origin from the unchanged world position. This avoids straddling display/DPI seams during autonomous edge movement. Held and partially offscreen recovery poses retain the root-centered capture surface so an off-center grip can cross monitors without clipping the body. Physical mixed-monitor acceptance remains necessary.
 
 ## Native observations and playground surfaces
 
@@ -177,7 +169,7 @@ Each event includes a unique identifier, action/contact identity, simulation tim
 
 Use a bounded four-voice mix with direct interaction and collision sounds above routine steps and rustles. Soft and hard landing clips are mutually exclusive, selected and scaled from impact strength. Fade interrupted sounds instead of cutting them abruptly. A falling cue starts once, is canceled on landing or pickup, and does not restart for each falling frame. Carry rustles require meaningful movement; attention and repeated contacts have cooldowns. Sleep has one settling breath and no repeating snore.
 
-For the pinching interaction, emit the existing pickup effect once when the grip becomes established, movement-dependent carry rustles during suspension, and the release effect once when the grip opens. Hand animation frames and a stationary held pose do not retrigger those sounds. Use the provisional pack for timing; soften the grip and carry effects during the already deferred sound-refinement pass.
+For the pinching interaction, emit the existing pickup effect once when the grip becomes established, movement-dependent carry rustles during suspension, and the release effect once when the grip opens. Animation frames and a stationary held pose do not retrigger those sounds. Use the provisional pack for timing; soften the grip and carry effects during the already deferred sound-refinement pass.
 
 Position sound gently across the stereo field according to the character's location on its current monitor. Smooth gain and pan changes. Clear pending events during sleep, pause, hidden state, shutdown, and invalid-scene recovery so stale sounds cannot play afterward. Muting does not affect behavior. Measure synchronization on the actual output device; Bluetooth latency is outside a zero-latency guarantee.
 
@@ -243,3 +235,8 @@ Performance goals are unmeasured targets: 60 fps active presentation, p95 render
 Implement in demonstrable slices: first establish the macOS overlay and native tracking with a diagnostic body; then complete surfaces, dragging, and continuous physics; then build and validate the master plush rig and its transitions; then integrate provisional sounds, customization, recovery, and packaging. The diagnostic body is not the final visual deliverable. The subsequent implementation plan must include native evidence and asset production, not only application scaffolding.
 
 The owner approved this design and authorized the [implementation plan](../plans/2026-10-17-desktop-companion.md) and subsequent build without another approval checkpoint. Sound refinement remains deferred.
+
+
+## Owner feedback refinement, October 17
+
+The menu entry is **Customize Dot**. Climb routes require an exposed usable top; an edge with no headroom is not a destination. Repeated reaches establish a palm before the body pull. On completion, plant the feet and settle for 2.8 seconds before choosing the next activity. Hops use the gravity-consistent flight duration and leave a margin from platform ends. Walking uses a shorter stride and opposite arm swings, with grounded feet independent of soft body deformation. Climbing shows mild effort. These changes preserve the same plush master and color customization; reference provenance is in [asset notes](../../desktop/asset-notes.md).

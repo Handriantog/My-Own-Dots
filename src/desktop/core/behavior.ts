@@ -1,3 +1,4 @@
+import { climbTop } from './world.js';
 import {
   BODY,
   type SimulationFrame,
@@ -35,6 +36,7 @@ export function chooseIntention(
   const walls = world.walls.filter(
     (w) =>
       w.displayId === frame.displayId &&
+      !!climbTop(world, w) &&
       w.windowKey !== support.windowKey &&
       w.y1 < frame.root.y - 65 &&
       w.y2 >= frame.root.y - 65 - 150 &&
@@ -57,11 +59,15 @@ export function chooseIntention(
   }
   if (roll < 0.76) {
     const direction = random() < 0.5 ? -1 : 1;
+    const margin = Math.min(15, (support.x2 - support.x1) / 3);
     return {
       kind: 'jump',
       x: Math.min(
-        support.x2,
-        Math.max(support.x1, frame.root.x + direction * (40 + random() * 100)),
+        support.x2 - margin,
+        Math.max(
+          support.x1 + margin,
+          frame.root.x + direction * (40 + random() * 100),
+        ),
       ),
     };
   }

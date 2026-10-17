@@ -131,10 +131,13 @@ export interface RigPose {
   gait: number;
   leftArm: number;
   rightArm: number;
+  leftArmLength: number;
+  rightArmLength: number;
   leftFoot: Point;
   rightFoot: Point;
   eyeOpen: number;
   mouth: number;
+  effort: number;
   pinch: number;
   facing: number;
   breathing: number;

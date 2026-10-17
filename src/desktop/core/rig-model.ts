@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { Point, SimulationFrame } from '../shared/contracts.js';
+import type { Point, RigPose, SimulationFrame } from '../shared/contracts.js';
 import { worldPointToRig } from './pose.js';
 
 const point = z.object({ x: z.number().finite(), y: z.number().finite() });
@@ -110,25 +110,42 @@ export function hitTestRig(point: Point, frame: SimulationFrame): boolean {
   );
 }
 
+/** The renderer and hit-test share the already blended, authoritative limb pose. */
 export function armTransform(
   frame: SimulationFrame,
   side: -1 | 1,
 ): { rotation: number; height: number } {
-  if (frame.climb && side === -frame.climb.wall.side) {
-    const hand = worldPointToRig(frame.climb.hand, frame.root, frame.pose);
-    const dx = hand.x - side * 39,
-      dy = hand.y + 45;
-    // Palm center is offset from the authored shoulder pivot in both axes.
-    // Aim that point, rather than the sprite's centerline, at the contact.
-    const palmX = side * 23 * 0.22;
-    const palmY = Math.sqrt(Math.max(0, dx * dx + dy * dy - palmX * palmX));
-    return {
-      rotation: Math.atan2(dy, dx) - Math.atan2(palmY, palmX),
-      height: Math.min(70, palmY / 0.86),
-    };
-  }
   return {
     rotation: side === -1 ? frame.pose.leftArm : frame.pose.rightArm,
-    height: 34,
+    height: side === -1 ? frame.pose.leftArmLength : frame.pose.rightArmLength,
   };
+}
+
+export function applyClimbContact(
+  frame: SimulationFrame,
+  previous: RigPose,
+  dt: number,
+): void {
+  if (!frame.climb) return;
+  const side = -frame.climb.wall.side;
+  const hand = worldPointToRig(frame.climb.hand, frame.root, frame.pose);
+  const dx = hand.x - side * 39,
+    dy = hand.y + 45;
+  // Account for the off-center authored shoulder pivot when solving the palm.
+  const palmX = side * 23 * 0.22;
+  const palmY = Math.sqrt(Math.max(0, dx * dx + dy * dy - palmX * palmX));
+  const target = Math.atan2(dy, dx) - Math.atan2(palmY, palmX);
+  const rotation = side === -1 ? 'leftArm' : 'rightArm';
+  const height = side === -1 ? 'leftArmLength' : 'rightArmLength';
+  const angle = Math.atan2(
+    Math.sin(target - previous[rotation]),
+    Math.cos(target - previous[rotation]),
+  );
+  const blend =
+    frame.action === 'climb' && frame.actionAge < 0.55
+      ? 1 - Math.exp(-dt / 0.12)
+      : 1;
+  frame.pose[rotation] = previous[rotation] + angle * blend;
+  frame.pose[height] =
+    previous[height] + (Math.min(70, palmY / 0.86) - previous[height]) * blend;
 }

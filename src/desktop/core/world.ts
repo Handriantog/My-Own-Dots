@@ -5,6 +5,7 @@ import {
   type NativeWindow,
   type Platform,
   type World,
+  type Wall,
 } from '../shared/contracts.js';
 
 type Interval = [number, number];
@@ -154,5 +155,17 @@ export function supportAt(
         x <= p.x2 + 0.01 &&
         Math.abs(p.y - y) <= tolerance,
     ) ?? null
+  );
+}
+
+/** A climb must finish on an exposed, body-clear top on the same display. */
+export function climbTop(world: World, wall: Wall): Platform | undefined {
+  return world.platforms.find(
+    (p) =>
+      p.windowKey === wall.windowKey &&
+      p.displayId === wall.displayId &&
+      p.x2 - p.x1 >= 10 &&
+      Math.abs(p.y - wall.y1) < 3 &&
+      (wall.side === -1 ? p.x1 < wall.x + 80 : p.x2 > wall.x - 80),
   );
 }

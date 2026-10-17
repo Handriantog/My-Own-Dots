@@ -2,7 +2,6 @@ import { Application } from 'pixi.js';
 // Pixi's static uniform/UBO implementations support CSP without unsafe-eval.
 import 'pixi.js/unsafe-eval';
 import { PlushRig } from './rig.js';
-import { OPEN_HAND_CURSOR, PinchHand } from './hand.js';
 import { CompanionAudio } from './audio.js';
 import type {
   DesktopBridge,
@@ -25,11 +24,9 @@ declare global {
 
 let latest: PresentationFrame | null = null;
 let captured: number | null = null;
-let previousGrip: Point | null = null;
 let frames = 0;
 let audio: CompanionAudio | null = null;
 let wasPaused = false;
-const hand = new PinchHand();
 const app = new Application();
 try {
   await app.init({
@@ -54,8 +51,8 @@ try {
       `Audio: ${error instanceof Error ? error.message : 'Could not load effects'}`,
     );
   }
-  app.stage.addChild(rig.container, hand.container);
-  document.body.style.cursor = OPEN_HAND_CURSOR;
+  app.stage.addChild(rig.container);
+  document.body.style.cursor = 'default';
   app.canvas.addEventListener('webglcontextlost', (event) => {
     event.preventDefault();
     document.body.style.cursor = 'default';
@@ -127,30 +124,6 @@ try {
       local.climb.hand.y -= frame.origin.y;
     }
     rig.update(local, frame.preferences.color);
-    const grip = frame.simulation.grip;
-    if (grip) previousGrip = { ...grip.anchor };
-    hand.container.visible =
-      frame.visible &&
-      (!!grip ||
-        (!!previousGrip &&
-          frame.hovered &&
-          frame.simulation.pose.pinch > 0.04));
-    if (previousGrip && hand.container.visible) {
-      hand.container.position.set(
-        previousGrip.x - frame.origin.x,
-        previousGrip.y - frame.origin.y,
-      );
-      hand.update(frame.simulation.pose.pinch);
-    }
-    if (!frame.visible || (!grip && !frame.hovered)) {
-      previousGrip = null;
-      hand.container.visible = false;
-    }
-    document.body.style.cursor = hand.container.visible
-      ? 'none'
-      : frame.hovered
-        ? OPEN_HAND_CURSOR
-        : 'default';
     app.stage.visible = frame.visible;
     app.render();
     const justPaused = frame.preferences.paused && !wasPaused;

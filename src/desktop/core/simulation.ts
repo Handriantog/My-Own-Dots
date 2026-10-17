@@ -17,7 +17,8 @@ import {
   samplePose,
   worldPointToRig,
 } from './pose.js';
-import { supportAt } from './world.js';
+import { applyClimbContact } from './rig-model.js';
+import { climbTop, supportAt } from './world.js';
 
 const STEP = 1 / 120,
   GRAVITY = 850,
@@ -58,6 +59,12 @@ export class CompanionSimulation {
   private pullTo: Platform | null = null;
   private pullTarget: Point | null = null;
   private fallCuePlayed = false;
+  private climbStroke: {
+    elapsed: number;
+    rootY: number;
+    handY: number;
+    reach: number;
+  } | null = null;
 
   constructor(world: World, seed = Date.now(), placement?: Point) {
     if (!world.displays.length)
@@ -177,6 +184,7 @@ export class CompanionSimulation {
       const support = this.state.support;
       if (
         !wall ||
+        !climbTop(world, wall) ||
         (support &&
           (x < support.x1 ||
             x > support.x2 ||
@@ -372,6 +380,7 @@ export class CompanionSimulation {
   private detach(): void {
     this.state.support = null;
     this.state.climb = null;
+    this.climbStroke = null;
     this.supportMotion = { x: 0, y: 0 };
     this.pullFrom = null;
     this.pullTo = null;
@@ -394,6 +403,7 @@ export class CompanionSimulation {
     } else if (s.climb) this.climbing(dt);
     else if (s.support) this.grounded(dt);
     else this.airborne(dt);
+    const previousPose = s.pose;
     s.pose = samplePose(
       s.pose,
       {
@@ -408,6 +418,7 @@ export class CompanionSimulation {
       },
       dt,
     );
+    applyClimbContact(s, previousPose, dt);
     if (s.grip) this.updateHeldRoot();
   }
   private grounded(dt: number): void {
@@ -464,7 +475,7 @@ export class CompanionSimulation {
     const dx = s.velocity.x * dt;
     s.root.x += dx;
     this.distance += Math.abs(dx);
-    if (this.distance - this.lastStep >= 30) {
+    if (this.distance - this.lastStep >= 20) {
       this.emit('step', 0.45);
       this.lastStep = this.distance;
     }
@@ -504,7 +515,7 @@ export class CompanionSimulation {
     if (intent.kind === 'jump') {
       s.support = null;
       s.velocity = {
-        x: clamp((intent.x - s.root.x) / 0.85, -170, 170),
+        x: clamp((intent.x - s.root.x) / ((2 * 390) / GRAVITY), -170, 170),
         y: -390,
       };
       this.action('jump', 'jump');
@@ -606,6 +617,7 @@ export class CompanionSimulation {
       wall,
       hand: { x: wall.x, y: clamp(s.root.y - 65, wall.y1, wall.y2) },
     };
+    this.climbStroke = null;
     this.action('climb', 'grab', ['fall']);
     this.nextClimbSound = s.atMs + 500;
   }
@@ -642,21 +654,22 @@ export class CompanionSimulation {
         this.pullTo = null;
         this.pullTarget = null;
         this.intention = null;
-        this.intentionUntil = s.atMs + 700;
-        this.action('idle');
+        this.intentionUntil = s.atMs + 2800;
+        this.action('land');
+        this.emit('land_soft', 0.3);
       }
       return;
     }
     if (s.action === 'hang') {
       if (s.actionAge > 0.8) {
-        const top = this.world.platforms.find(
-          (p) =>
-            p.windowKey === wall.windowKey &&
-            p.displayId === wall.displayId &&
-            p.x2 - p.x1 >= 10 &&
-            Math.abs(p.y - wall.y1) < 3 &&
-            (wall.side === -1 ? p.x1 < wall.x + 80 : p.x2 > wall.x - 80),
-        );
+        const atTop = contact.hand.y <= wall.y1 + 1 && s.root.y <= wall.y1 + 66;
+        if (!atTop && !this.options.paused && !this.options.reducedMotion) {
+          // A pause can leave us hanging midway through a stroke. Finish that
+          // same stroke rather than treating a distant ledge as a pull-up.
+          this.action('climb');
+          return;
+        }
+        const top = atTop ? climbTop(this.world, wall) : undefined;
         if (top && !this.options.paused && !this.options.reducedMotion) {
           this.pullFrom = { ...s.root };
           this.pullTo = top;
@@ -672,16 +685,37 @@ export class CompanionSimulation {
       }
       return;
     }
+    // Finish establishing the first grip even if roaming is paused mid-reach.
+    // Switching to hang sooner would replace the blended arm with instant IK.
+    if (s.actionAge < 0.55) return;
     if (this.options.paused || this.options.reducedMotion) {
       this.action('hang');
       return;
     }
-    s.root.y -= 48 * dt;
-    contact.hand.y = Math.max(wall.y1, s.root.y - 65);
-    if (s.atMs >= this.nextClimbSound) {
-      this.emit('climb', 0.5);
-      this.nextClimbSound = s.atMs + 650;
+    // Reach while the body waits, then pull against a planted palm. A new
+    // stroke starts from the exact previous endpoint, including the last short
+    // reach to the ledge; neither the body nor the hand resets between cycles.
+    this.climbStroke ??= {
+      elapsed: 0,
+      rootY: s.root.y,
+      handY: contact.hand.y,
+      reach: Math.min(28, Math.max(0, contact.hand.y - wall.y1)),
+    };
+    const stroke = this.climbStroke;
+    stroke.elapsed += dt;
+    const t = clamp(stroke.elapsed / 0.8, 0, 1);
+    const smooth = (v: number) => v * v * (3 - 2 * v);
+    contact.hand.y =
+      stroke.handY - stroke.reach * smooth(Math.min(1, t / 0.28));
+    s.root.y =
+      stroke.rootY - stroke.reach * smooth(clamp((t - 0.28) / 0.62, 0, 1));
+    if (s.atMs >= this.nextClimbSound && t > 0.28) {
+      this.emit('climb', 0.4);
+      this.nextClimbSound = s.atMs + 800;
     }
-    if (contact.hand.y <= wall.y1) this.action('hang');
+    if (t === 1) {
+      this.climbStroke = null;
+      if (contact.hand.y <= wall.y1) this.action('hang');
+    }
   }
 }

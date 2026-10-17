@@ -49,6 +49,7 @@ try {
     action: window.dotDiagnostics.frame.simulation.action,
     position: window.dotDiagnostics.frame.simulation.root,
     frames: window.dotDiagnostics.frames,
+    cursor: getComputedStyle(document.body).cursor,
     renderMs: window.dotDiagnostics.renderMs,
     node: typeof window.process,
     require: typeof window.require,
@@ -57,6 +58,7 @@ try {
     volume: window.dotDiagnostics.frame.preferences.volume,
     audio: window.dotDiagnostics.audio,
   }));
+  assert.equal(state.cursor, 'default');
   assert.equal(state.node, 'undefined');
   assert.equal(state.require, 'undefined');
   assert.equal(state.audio?.decoded, 69);

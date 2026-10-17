@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import type { PointerInput, PresentationFrame } from '../shared/contracts.js';
+import { BODY } from '../shared/contracts.js';
+import type {
+  DesktopDisplay,
+  Point,
+  PointerInput,
+  PresentationFrame,
+} from '../shared/contracts.js';
 
 const pointer = z.object({
   kind: z.enum(['down', 'move', 'up', 'cancel', 'hover']),
@@ -44,4 +50,33 @@ export class PresentationMailbox {
     this.inFlight = null;
     this.pending = null;
   }
+}
+
+/** Keep the compact native surface on one monitor, including mixed-DPI seams.
+ * Rendering still uses the actual native origin; the creature's world root is
+ * never clamped or moved to compensate for window-manager placement.
+ */
+export function overlayOrigin(
+  root: Point,
+  display: DesktopDisplay,
+  dragging = false,
+): Point {
+  const area = display.workArea;
+  // The pointer can enter a new screen before the off-center grabbed body.
+  // Keep the previous root-centered capture surface through that handoff and
+  // the bounded offscreen release recovery; never clip it to the pointer's screen.
+  if (
+    dragging ||
+    root.x - BODY.width / 2 < area.x ||
+    root.x + BODY.width / 2 > area.x + area.width ||
+    root.y - BODY.height < area.y ||
+    root.y > area.y + area.height
+  )
+    return { x: Math.round(root.x - 160), y: Math.round(root.y - 200) };
+  const clamp = (n: number, lo: number, hi: number) =>
+    Math.max(lo, Math.min(hi, n));
+  return {
+    x: Math.round(clamp(root.x - 160, area.x, area.x + area.width - 320)),
+    y: Math.round(clamp(root.y - 200, area.y, area.y + area.height - 320)),
+  };
 }

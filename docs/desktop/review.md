@@ -24,3 +24,17 @@ Final combined verification: **516 passed, 19 existing skips**; typecheck and li
 7. **Use exposed rectangular window edges and the display work-area floor; exclude exact Dock contours and protected system surfaces**, as specified. Cost if wrong: Dot will not stand on individual Dock icons, and macOS security UI may cover it.
 
 No deferred Minor findings were reported. No merge, push, publication, or permission grant was performed as part of this local delivery.
+
+## October 17 owner-feedback refinement review
+
+A separate read-only review of the refinement diff found three P2 issues. All were reproduced with failing regressions, then fixed:
+
+1. A climb stroke used host elapsed time, so resuming after a ten-second interruption jumped the body by 28 pixels. Stroke progress now accumulates fixed simulation steps; stall and suspend/resume tests preserve both body and palm continuity.
+2. Unconditional overlay containment clipped a held body when the pointer crossed a monitor seam ahead of the actual grabbed body. Held and partially offscreen recovery states retain a root-centered surface; autonomous contained states keep their panel within the active display.
+3. Pausing during the initial reach changed to a fully attached hang pose immediately. The reach now finishes smoothly before entering hang, including reduced-motion changes.
+
+The follow-up reviewer independently checked all three fixes, both climb directions, and found no remaining important issue. Observed palm movement through the interrupted reach remained below 4.7 pixels/frame.
+
+Rulings on deferred judgments: physical external-monitor flicker remains an explicit owner acceptance check because only one display is connected here; visual/reference judgment was handled separately through the actual-rig motion preview; documentation and preview changes were reviewed and verified in the main work stream. None of these is represented as native external-display proof.
+
+A further pause/resume regression was reproduced in the main pass: a brief mid-wall pause could enter a pull-up to a distant top. Resuming now finishes the same interrupted climbing stroke; a pull-up requires both palm and body to have reached the ledge.
