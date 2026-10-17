@@ -19,6 +19,7 @@ import {
 } from './pose.js';
 import { applyClimbContact } from './rig-model.js';
 import { climbTop, supportAt } from './world.js';
+import { PettingGesture } from './affection.js';
 
 const STEP = 1 / 120,
   GRAVITY = 850,
@@ -49,6 +50,11 @@ export class CompanionSimulation {
   private lastPointerTime = 0;
   private lastCarry = 0;
   private hoverUntil = 0;
+  private pointerLook: Point | undefined;
+  private pointerNear = false;
+  private petting = new PettingGesture();
+  private lovedUntil = 0;
+  private heartId = 0;
   private distance = 0;
   private lastStep = 0;
   private nextClimbSound = 0;
@@ -66,7 +72,12 @@ export class CompanionSimulation {
     reach: number;
   } | null = null;
 
-  constructor(world: World, seed = Date.now(), placement?: Point) {
+  constructor(
+    world: World,
+    seed = Date.now(),
+    placement?: Point,
+    preferredDisplayId?: string,
+  ) {
     if (!world.displays.length)
       throw new Error('A display is required to introduce Dot.');
     this.world = world;
@@ -74,17 +85,39 @@ export class CompanionSimulation {
     const d =
       world.displays.find(
         (d) =>
+          d.id === preferredDisplayId &&
+          placement &&
+          placement.x >= d.bounds.x &&
+          placement.x <= d.bounds.x + d.bounds.width &&
+          placement.y >= d.bounds.y &&
+          placement.y <= d.bounds.y + d.bounds.height,
+      ) ??
+      world.displays.find(
+        (d) =>
           placement &&
           placement.x >= d.bounds.x &&
           placement.x < d.bounds.x + d.bounds.width &&
           placement.y >= d.bounds.y &&
           placement.y < d.bounds.y + d.bounds.height,
-      ) ?? world.displays[0];
+      ) ??
+      world.displays.find(
+        (d) =>
+          placement &&
+          world.platforms.some(
+            (p) =>
+              p.id === `floor:${d.id}` &&
+              p.y === placement.y &&
+              placement.x >= p.x1 &&
+              placement.x <= p.x2,
+          ),
+      ) ??
+      world.displays[0];
     const floor = world.platforms.find((p) => p.id === `floor:${d.id}`)!;
     const root = placement
       ? { ...placement }
       : { x: floor.x1 + 100, y: floor.y };
     this.state = {
+      hearts: [],
       atMs: 0,
       root,
       velocity: { x: 0, y: 0 },
@@ -201,6 +234,11 @@ export class CompanionSimulation {
     this.events = [];
     this.pressed = null;
     this.accumulator = 0;
+    this.state.hearts = [];
+    this.petting.reset();
+    this.pointerLook = undefined;
+    this.pointerNear = false;
+    this.lovedUntil = 0;
   }
   resume(nowMs: number): void {
     const firstArrival = this.lastTime === null;
@@ -242,21 +280,50 @@ export class CompanionSimulation {
       return;
     const s = this.state;
     if (input.kind === 'hover') {
-      if (
-        length({
-          x: input.point.x - s.root.x,
-          y: input.point.y - (s.root.y - BODY.height / 2),
-        }) < 130
-      ) {
-        if (this.hoverUntil < s.atMs && s.support && !s.grip) {
+      const distance = length({
+        x: input.point.x - s.root.x,
+        y: input.point.y - (s.root.y - 63),
+      });
+      this.pointerLook = distance < 260 ? { ...input.point } : undefined;
+      if (distance < 130) {
+        if (
+          !this.pointerNear &&
+          s.support &&
+          !s.grip &&
+          !this.pressed &&
+          s.action !== 'pet'
+        ) {
           this.intention = null;
           this.action('notice', 'notice');
+          this.hoverUntil = s.atMs + 800;
         }
-        this.hoverUntil = s.atMs + 800;
+      }
+      this.pointerNear = distance < 130;
+      const local = worldPointToRig(input.point, s.root, s.pose);
+      const stroking =
+        !!s.support &&
+        !s.grip &&
+        !this.pressed &&
+        (local.x / 40) ** 2 + ((local.y + 62) / 40) ** 2 <= 1;
+      if (this.petting.sample(input.point, input.atMs, stroking)) {
+        this.intention = null;
+        this.lovedUntil = s.atMs + 1700;
+        this.hoverUntil = this.lovedUntil;
+        this.intentionUntil = this.lovedUntil;
+        this.action('pet', 'pat');
+        s.hearts.push({
+          id: ++this.heartId,
+          origin: rigPointToWorld({ x: 35, y: -94 }, s.root, s.pose),
+          age: 0,
+          still: this.options.reducedMotion,
+        });
+        s.hearts = s.hearts.slice(-3);
       }
       return;
     }
     if (input.kind === 'down' && !this.pressed) {
+      this.petting.reset();
+      this.lovedUntil = 0;
       this.pressed = {
         point: { ...input.point },
         local: worldPointToRig(input.point, s.root, s.pose),
@@ -267,6 +334,7 @@ export class CompanionSimulation {
       return;
     }
     if (input.kind === 'move' && this.pressed) {
+      this.pointerLook = { ...input.point };
       if (
         !s.grip &&
         length({
@@ -391,6 +459,8 @@ export class CompanionSimulation {
   private step(dt: number): void {
     const s = this.state;
     s.actionAge += dt;
+    s.hearts = s.hearts.filter((heart) => (heart.age += dt) < 1.8);
+    if (s.action === 'pet' && s.atMs >= this.lovedUntil) this.action('idle');
     if (s.grip || s.climb || s.support) this.fallCuePlayed = false;
     if (s.grip) {
       s.grip.age += dt;
@@ -404,6 +474,9 @@ export class CompanionSimulation {
     else if (s.support) this.grounded(dt);
     else this.airborne(dt);
     const previousPose = s.pose;
+    const gaze = this.pointerLook
+      ? worldPointToRig(this.pointerLook, s.root, s.pose)
+      : undefined;
     s.pose = samplePose(
       s.pose,
       {
@@ -415,6 +488,14 @@ export class CompanionSimulation {
         time: s.atMs / 1000,
         sway: this.sway,
         reducedMotion: this.options.reducedMotion,
+        look:
+          gaze && s.action !== 'sleep'
+            ? {
+                x: clamp(gaze.x / 100, -1, 1),
+                y: clamp((gaze.y + 63) / 100, -1, 1),
+              }
+            : undefined,
+        loved: s.atMs < this.lovedUntil,
       },
       dt,
     );
@@ -465,7 +546,7 @@ export class CompanionSimulation {
     s.velocity.x = approach(s.velocity.x, desired, 190 * dt);
     s.velocity.y = 0;
     if (Math.abs(s.velocity.x) > 0.5) {
-      if (s.action !== 'walk') this.action('walk');
+      if (s.action !== 'walk' && s.action !== 'pet') this.action('walk');
       const dir = s.velocity.x > 0 ? 1 : -1;
       if (s.facing !== dir) {
         s.facing = dir;
@@ -506,10 +587,23 @@ export class CompanionSimulation {
     const s = this.state;
     this.intention = intent;
     if (intent.kind === 'rest') {
+      if (intent.action === 'peek' && s.support)
+        s.facing = s.root.x - s.support.x1 < s.support.x2 - s.root.x ? -1 : 1;
       this.intentionUntil = s.atMs + intent.duration * 1000;
       this.action(
         intent.action,
-        intent.action === 'idle' ? undefined : intent.action,
+        (
+          {
+            sit: 'sit',
+            stretch: 'stretch',
+            yawn: 'yawn',
+            sleep: 'sleep',
+            wave: 'notice',
+            groom: 'pat',
+            headphones: 'stretch',
+            look_around: 'notice',
+          } as Partial<Record<Action, SoundName>>
+        )[intent.action],
       );
     }
     if (intent.kind === 'jump') {
@@ -529,8 +623,8 @@ export class CompanionSimulation {
     s.root.y += s.velocity.y * dt;
     const d = this.world.displays.find((d) => d.id === s.displayId);
     if (d) {
-      const lo = d.workArea.x + BODY.width / 2,
-        hi = d.workArea.x + d.workArea.width - BODY.width / 2;
+      const lo = d.bounds.x + BODY.width / 2,
+        hi = d.bounds.x + d.bounds.width - BODY.width / 2;
       if (
         (s.root.x < lo && s.velocity.x < 0) ||
         (s.root.x > hi && s.velocity.x > 0)

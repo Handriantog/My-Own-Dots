@@ -79,3 +79,18 @@ output {
   color: #ffb4b4;
   margin-top: 10px;
 }
+
+select {
+  max-width: 60%;
+  padding: 7px 9px;
+  border: 1px solid #ffffff24;
+  border-radius: 6px;
+  background: #293243;
+  color: inherit;
+  font: inherit;
+}
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #8cc9ff;
+  outline-offset: 3px;
+}

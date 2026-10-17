@@ -38,3 +38,9 @@ The follow-up reviewer independently checked all three fixes, both climb directi
 Rulings on deferred judgments: physical external-monitor flicker remains an explicit owner acceptance check because only one display is connected here; visual/reference judgment was handled separately through the actual-rig motion preview; documentation and preview changes were reviewed and verified in the main work stream. None of these is represented as native external-display proof.
 
 A further pause/resume regression was reproduced in the main pass: a brief mid-wall pause could enter a pull-up to a distant top. Resuming now finishes the same interrupted climbing stroke; a pull-up requires both palm and body to have reached the ledge.
+
+## Second feedback review
+
+A read-only reviewer inspected the complete second-pass diff, including the Dock observer, signing helper, sound routing, interaction detection, poses, renderer, and preference migration. No Critical issue was found. Important findings were fixed: display-bound floor positions now retain their coordinate space without reinterpreting legacy files; restored upper-monitor floor positions preserve the saved display ID instead of selecting the lower monitor at the shared boundary; silent sound categories apply cancellation without allocating or stealing voices. Two smaller visual issues were also fixed: new gestures have bounded arm speed, and peeking preserves both sole contacts. Regression tests failed before each fix and pass afterward.
+
+Rulings on deferred work: changing macOS permissions remains an explicit user action; live Accessibility-enabled Dock/window play and physical mixed-monitor stacking remain acceptance checks; notarization, backend integration, replacement sounds/artwork, and individual Dock-icon contours are outside this feedback scope. The older ad-hoc-only and work-area-floor decisions above are superseded by this pass’s certificate signing support and actual display floors.

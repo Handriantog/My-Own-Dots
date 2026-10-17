@@ -61,7 +61,7 @@ export function overlayOrigin(
   display: DesktopDisplay,
   dragging = false,
 ): Point {
-  const area = display.workArea;
+  const area = display.bounds;
   // The pointer can enter a new screen before the off-center grabbed body.
   // Keep the previous root-centered capture surface through that handoff and
   // the bounded offscreen release recovery; never clip it to the pointer's screen.

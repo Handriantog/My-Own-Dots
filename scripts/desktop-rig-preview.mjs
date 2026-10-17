@@ -8,9 +8,31 @@ import { chromium } from 'playwright';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const output = path.join(root, 'artifacts/desktop');
 await mkdir(output, { recursive: true });
-const motion = process.argv.includes('--motion');
-const entry = motion
-  ? `
+const interactions = process.argv.includes('--interactions');
+const motion = process.argv.includes('--motion') || interactions;
+const entry = interactions
+  ? `import { Application, Graphics, Text } from 'pixi.js';
+import { PlushRig } from './src/desktop/renderer/rig';
+import { CompanionSimulation } from './src/desktop/core/simulation';
+import { buildWorld } from './src/desktop/core/world';
+import { initialPose,samplePose } from './src/desktop/core/pose';
+const app=new Application();await app.init({width:1200,height:670,resolution:2,autoDensity:true,backgroundAlpha:0,preference:'webgl',autoStart:false});document.body.appendChild(app.canvas);
+const display={id:'1',bounds:{x:0,y:0,width:1200,height:670},workArea:{x:0,y:25,width:1200,height:580},scaleFactor:2};
+const sim=new CompanionSimulation(buildWorld(null,[display],0),1,{x:450,y:670});sim.setOptions({paused:true,reducedMotion:false});sim.advance(0);
+const actions=['look_around','pet','sit','sleep','wave','groom','headphones','peek'];const rigs=[],poses=[],samples=[];
+for(let i=0;i<8;i++){const rig=await PlushRig.create('/desktop-dot');rigs.push(rig);poses.push(initialPose());app.stage.addChild(rig.container);const label=new Text({text:actions[i],style:{fontFamily:'Arial',fontSize:16,fill:0xc7d5e8}});label.anchor.set(.5,0);label.position.set(150+i%4*300,280+Math.floor(i/4)*315);app.stage.addChild(label);}
+const cursor=new Graphics().circle(0,0,4).fill(0xe5edf5);app.stage.addChild(cursor);
+for(let n=0;n<600;n++){const t=n/60,ms=t*1000;
+ const pointer={x:450+Math.sin(n/5)*20,y:592};sim.pointer({kind:'hover',point:pointer,atMs:ms});sim.advance(ms);const pet=sim.frame();pet.root.y-=400;for(const h of pet.hearts)h.origin.y-=400;
+ const frames=[];for(let i=0;i<8;i++){const action=actions[i];const seated=(action==='sit'||action==='sleep');const shown=seated&&t<1?'idle':action;
+ poses[i]=samplePose(poses[i],{action:shown,age:seated?Math.max(0,t-1):t,speed:0,distance:0,facing:1,time:t+1,sway:0,reducedMotion:false,look:i===0?{x:Math.sin(t*2),y:Math.cos(t*2)*.6}:undefined},1/60);
+ frames.push(i===1?pet:{atMs:ms,root:{x:150+i%4*300,y:270+Math.floor(i/4)*315},velocity:{x:0,y:0},action:shown,actionAge:t,actionId:1,facing:1,displayId:'1',support:null,grip:null,climb:null,pose:poses[i],hearts:[]});}
+ samples.push({frames,cursor:{x:150+Math.sin(t*2)*95,y:207+Math.cos(t*2)*60}});}
+window.renderAt=(ms)=>{const sample=samples[Math.min(599,Math.floor(ms/1000*60))];for(let i=0;i<8;i++)rigs[i].update(sample.frames[i],i===1?'#f5a0be':'#45a7ff');cursor.position.set(sample.cursor.x,sample.cursor.y);app.render();};
+const start=performance.now();const tick=()=>{window.renderAt(Math.min(9999,performance.now()-start));if(performance.now()-start<10000)requestAnimationFrame(tick);else window.motionDone=true;};tick();window.previewReady=true;
+`
+  : motion
+    ? `
 import { Application, Container, Graphics, Text } from 'pixi.js';
 import { PlushRig } from './src/desktop/renderer/rig';
 import { CompanionSimulation } from './src/desktop/core/simulation';
@@ -35,19 +57,19 @@ floor.clear().moveTo(45,450).lineTo(315,450).stroke({color:0x6b8199,width:1});fo
 const local={x:8,y:-92},anchor={x:1030,y:300},offset=rigPointToWorld(local,{x:0,y:0},poses[n].held);held.update({...base,action:'held',pose:poses[n].held,root:{x:anchor.x-offset.x,y:anchor.y-offset.y},grip:{anchor,local,previous:anchor,velocity:{x:0,y:0},age:t}},'#f5a0be');app.render();};
 const start=performance.now();const tick=()=>{window.renderAt(Math.min(21999,performance.now()-start));if(performance.now()-start<22000)requestAnimationFrame(tick);else window.motionDone=true;};tick();window.previewReady=true;
 `
-  : `
+    : `
 import { Application, Text } from 'pixi.js';
 import { PlushRig } from './src/desktop/renderer/rig';
 import { initialPose, samplePose, rigPointToWorld } from './src/desktop/core/pose';
 const app = new Application(); await app.init({width:1200,height:670,resolution:2,autoDensity:true,backgroundAlpha:0,preference:'webgl'}); document.body.appendChild(app.canvas);
 const colors=['#45a7ff','#f5a0be','#b4e2b3','#292b40','#f4e9d3'];
-const actions=['idle','walk','held','climb','sleep','stretch','fall','sit','yawn','pat'];
+const actions=['idle','walk','held','climb','sleep','stretch','fall','sit','yawn','pat','pet','look_around','wave','groom','headphones'];
 for(let i=0;i<15;i++){
- const action=i<10?actions[i]:'held'; const color=colors[i%5];
+ const action=actions[i]; const color=colors[i%5];
  const rig=await PlushRig.create('/desktop-dot');app.stage.addChild(rig.container);
  let pose=initialPose();for(let n=0;n<100;n++)pose=samplePose(pose,{action,age:0.4,speed:action==='walk'?60:0,distance:12,facing:i%2?1:-1,time:1,sway:0.12,reducedMotion:false},1/120);
  const root={x:120+(i%5)*240,y:164+Math.floor(i/5)*212};
- const frame={atMs:1000,root,velocity:{x:0,y:0},action,actionId:1,actionAge:0.4,facing:1,displayId:'1',support:null,grip:null,climb:null,pose};
+ const frame={atMs:1000,root,velocity:{x:0,y:0},action,actionId:1,actionAge:0.4,facing:1,displayId:'1',support:null,grip:null,climb:null,pose,hearts:action==='pet'?[{id:1,origin:{x:root.x+35,y:root.y-94},age:.65,still:false}]:[]};
  if(action==='held'){const local={x:8,y:-92};frame.grip={anchor:rigPointToWorld(local,root,pose),local,previous:{x:0,y:0},velocity:{x:0,y:0},age:1};}
  rig.update(frame,color);
  const label=new Text({text:action+' · '+color,style:{fontFamily:'Arial',fontSize:13,fill:'#aeb9c9'}});label.anchor.set(.5,0);label.position.set(root.x,root.y+18);app.stage.addChild(label);
@@ -106,7 +128,7 @@ try {
     await page.waitForFunction(() => window.motionDone, { timeout: 30000 });
     for (const [name, at] of [
       ['climb', 4000],
-      ['perch', 18500],
+      [interactions ? 'affection' : 'perch', interactions ? 2500 : 18500],
     ]) {
       await page.evaluate((at) => window.renderAt(at), at);
       await page.screenshot({
@@ -115,8 +137,18 @@ try {
     }
     const video = page.video();
     await page.close();
-    await video.saveAs(path.join(output, 'plush-motion.webm'));
-    console.log(path.join(output, 'plush-motion.webm'));
+    await video.saveAs(
+      path.join(
+        output,
+        interactions ? 'plush-interactions.webm' : 'plush-motion.webm',
+      ),
+    );
+    console.log(
+      path.join(
+        output,
+        interactions ? 'plush-interactions.webm' : 'plush-motion.webm',
+      ),
+    );
   } else {
     await page.screenshot({
       path: path.join(output, 'plush-contact-sheet.png'),

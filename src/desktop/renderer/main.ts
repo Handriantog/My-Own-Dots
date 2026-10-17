@@ -115,6 +115,10 @@ try {
     const local = structuredClone(frame.simulation);
     local.root.x -= frame.origin.x;
     local.root.y -= frame.origin.y;
+    for (const heart of local.hearts) {
+      heart.origin.x -= frame.origin.x;
+      heart.origin.y -= frame.origin.y;
+    }
     if (local.grip) {
       local.grip.anchor.x -= frame.origin.x;
       local.grip.anchor.y -= frame.origin.y;

@@ -1,5 +1,27 @@
 import { z } from 'zod';
-import type { GeometrySnapshot } from '../shared/contracts.js';
+import type { GeometrySnapshot, Rect } from '../shared/contracts.js';
+
+/** Conservatively reject hidden slivers and Dock's full-screen CG container. */
+export function isDockFootprint(r: Rect, d: Rect): boolean {
+  const right = r.x + r.width,
+    bottom = r.y + r.height;
+  const screenRight = d.x + d.width,
+    screenBottom = d.y + d.height;
+  if (
+    ![r.x, r.y, r.width, r.height].every(Number.isFinite) ||
+    r.width < 12 ||
+    r.height < 12 ||
+    r.x < d.x - 1 ||
+    r.y < d.y - 1 ||
+    right > screenRight + 1 ||
+    bottom > screenBottom + 1
+  )
+    return false;
+  return r.width >= r.height
+    ? r.height < d.height / 2 && Math.abs(bottom - screenBottom) <= 24
+    : r.width < d.width / 2 &&
+        (Math.abs(r.x - d.x) <= 24 || Math.abs(right - screenRight) <= 24);
+}
 
 const coordinate = z.number().finite().min(-100_000).max(100_000);
 const rect = z.object({
@@ -40,6 +62,16 @@ const snapshot = z.object({
       }),
     )
     .max(2048),
+  docks: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(128),
+        displayId: z.string().min(1).max(128),
+        bounds: rect,
+      }),
+    )
+    .max(32)
+    .optional(),
 });
 
 /** Supervision, not an arbitrary incoming payload, authorizes a new helper session. */
@@ -59,6 +91,18 @@ export class ObservationStream {
         next.observedAtMs < this.latest.observedAtMs)
     )
       return null;
+    const dockIds = new Set<string>();
+    for (const dock of next.docks ?? []) {
+      const identity = `${dock.displayId}:${dock.id}`;
+      const display = next.displays.find((d) => d.id === dock.displayId);
+      if (
+        dockIds.has(identity) ||
+        !display ||
+        !isDockFootprint(dock.bounds, display.bounds)
+      )
+        return null;
+      dockIds.add(identity);
+    }
     if (
       new Set(next.windows.map((w) => `${w.ownerPid}:${w.id}`)).size !==
         next.windows.length ||

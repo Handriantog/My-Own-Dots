@@ -1,3 +1,8 @@
+import {
+  SOUND_CATEGORIES,
+  SOUND_CATEGORY,
+  type SoundCategory,
+} from '../core/sound-categories.js';
 import { AudioPolicy, parseSoundManifest } from '../core/audio-policy.js';
 import type {
   InteractionEvent,
@@ -13,6 +18,7 @@ interface Voice {
 export class CompanionAudio {
   private context = new AudioContext({ latencyHint: 'interactive' });
   private master = this.context.createGain();
+  private categories = new Map<SoundCategory, GainNode>();
   private buffers = new Map<string, AudioBuffer>();
   private voices = new Map<number, Voice>();
   private policy: AudioPolicy | null = null;
@@ -21,6 +27,11 @@ export class CompanionAudio {
   constructor() {
     this.master.gain.value = 0.4;
     this.master.connect(this.context.destination);
+    for (const category of SOUND_CATEGORIES) {
+      const gain = this.context.createGain();
+      gain.connect(this.master);
+      this.categories.set(category, gain);
+    }
   }
   async load(base: string): Promise<void> {
     const response = await fetch(`${base}/manifest.json`);
@@ -55,10 +66,21 @@ export class CompanionAudio {
       now,
       0.018,
     );
+    for (const category of SOUND_CATEGORIES)
+      this.categories
+        .get(category)!
+        .gain.setTargetAtTime(prefs.categoryVolumes[category], now, 0.018);
     this.policy.setMuted(prefs.muted);
     this.cancelVoices();
     for (const event of events) {
-      const request = this.policy.offer(event, frame.atMs);
+      // Silent events still deduplicate and cancel previous actions, without
+      // taking an audible voice's slot or advancing cooldown/variant selection.
+      const request = this.policy.offer(
+        event,
+        frame.atMs,
+        prefs.volume > 0 &&
+          prefs.categoryVolumes[SOUND_CATEGORY[event.name]] > 0,
+      );
       const canceled = this.cancelVoices();
       if (!request) continue;
       const buffer = this.buffers.get(request.file);
@@ -77,7 +99,10 @@ export class CompanionAudio {
         ),
       );
       pan.pan.setValueAtTime(stereo, now);
-      source.connect(gain).connect(pan).connect(this.master);
+      source
+        .connect(gain)
+        .connect(pan)
+        .connect(this.categories.get(SOUND_CATEGORY[event.name])!);
       this.voices.set(request.id, { source, gain, pan });
       source.onended = () => {
         source.disconnect();

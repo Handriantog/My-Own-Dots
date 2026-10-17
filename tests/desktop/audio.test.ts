@@ -62,6 +62,29 @@ describe('interaction audio policy', () => {
     expect(policy.stats().voices).toBeLessThanOrEqual(4);
     expect(policy.drainCanceled().length).toBeGreaterThan(0);
   });
+  it('never lets a silent high-priority event steal one of four audible voices', () => {
+    const policy = new AudioPolicy(manifest(), () => 0);
+    for (const [index, name] of ['step', 'turn', 'climb', 'sit'].entries())
+      expect(
+        policy.offer(event(index + 1, name as SoundName, 0), 0),
+      ).not.toBeNull();
+    expect(policy.offer(event(5, 'pat', 10), 10, false)).toBeNull();
+    expect(policy.drainCanceled()).toEqual([]);
+    expect(policy.stats().voices).toBe(4);
+  });
+  it('processes silent scope cancellation without allocating a replacement voice', () => {
+    const policy = new AudioPolicy(manifest());
+    policy.offer(event(1, 'fall', 0), 0);
+    expect(policy.offer(event(2, 'pickup', 10), 10, false)).toBeNull();
+    expect(policy.drainCanceled()).toEqual([1]);
+    expect(policy.stats().voices).toBe(0);
+  });
+  it('deduplicates silent events without consuming cooldown or variant selection', () => {
+    const policy = new AudioPolicy(manifest(), () => 0);
+    expect(policy.offer(event(1, 'pat', 0), 0, false)).toBeNull();
+    expect(policy.offer(event(1, 'pat', 0), 0)).toBeNull();
+    expect(policy.offer(event(2, 'pat', 1), 1)?.file).toBe('pat-01.wav');
+  });
   it('cancels a fall on pickup and landing even if the replacement is muted', () => {
     for (const name of ['pickup', 'land_soft', 'land_hard'] as const) {
       const policy = new AudioPolicy(manifest());

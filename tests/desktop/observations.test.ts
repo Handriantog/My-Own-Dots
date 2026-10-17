@@ -33,6 +33,33 @@ export function scene(overrides: Record<string, unknown> = {}) {
 }
 
 describe('native observation stream', () => {
+  it('accepts optional geometry-only Dock footprints without breaking older helpers', () => {
+    const dock = {
+      id: 'list',
+      displayId: '1',
+      bounds: { x: -1100, y: 830, width: 600, height: 70 },
+    };
+    expect(
+      new ObservationStream().accept(scene({ docks: [dock] }), 0)?.docks,
+    ).toEqual([dock]);
+    expect(new ObservationStream().accept(scene(), 0)?.docks).toBeUndefined();
+  });
+  it('rejects duplicate, unplaced, hidden and screen-sized Dock surfaces', () => {
+    const dock = {
+      id: 'list',
+      displayId: '1',
+      bounds: { x: -1100, y: 830, width: 600, height: 70 },
+    };
+    for (const docks of [
+      [dock, dock],
+      [{ ...dock, displayId: 'missing' }],
+      [{ ...dock, bounds: { x: -1100, y: 899, width: 600, height: 1 } }],
+      [{ ...dock, bounds: { x: -1100, y: 890, width: 600, height: 70 } }],
+      [{ ...dock, bounds: scene().displays[0].bounds }],
+      Array.from({ length: 33 }, (_, id) => ({ ...dock, id: String(id) })),
+    ])
+      expect(new ObservationStream().accept(scene({ docks }), 0)).toBeNull();
+  });
   it('accepts global coordinates and maps the helper clock to the host clock', () => {
     const stream = new ObservationStream();
     expect(stream.accept(scene(), 8000)?.displays[0].bounds.x).toBe(-1440);

@@ -7,6 +7,7 @@ import {
   type World,
   type Wall,
 } from '../shared/contracts.js';
+import { isDockFootprint } from './observations.js';
 
 type Interval = [number, number];
 function subtract(
@@ -38,9 +39,9 @@ export function buildWorld(
 ): World {
   const platforms: Platform[] = displays.map((d) => ({
     id: `floor:${d.id}`,
-    x1: d.workArea.x + BODY.width / 2,
-    x2: right(d.workArea) - BODY.width / 2,
-    y: bottom(d.workArea),
+    x1: d.bounds.x + BODY.width / 2,
+    x2: right(d.bounds) - BODY.width / 2,
+    y: bottom(d.bounds),
     displayId: d.id,
   }));
   const world: World = {
@@ -50,7 +51,28 @@ export function buildWorld(
     revision: `${snapshot?.helperSession ?? 'none'}:${snapshot?.sceneRevision ?? 0}:${snapshot?.seq ?? 0}`,
     tracking: 'floor',
   };
-  if (!snapshot?.accessibility || !snapshot.sceneValid) return world;
+  if (!snapshot?.sceneValid) return world;
+  for (const dock of snapshot.docks ?? []) {
+    const display = displays.find((d) => d.id === dock.displayId);
+    if (!display || !isDockFootprint(dock.bounds, display.bounds)) continue;
+    const x1 = Math.max(
+      dock.bounds.x + BODY.footHalf,
+      display.bounds.x + BODY.width / 2,
+    );
+    const x2 = Math.min(
+      right(dock.bounds) - BODY.footHalf,
+      right(display.bounds) - BODY.width / 2,
+    );
+    if (x2 - x1 >= 2 && dock.bounds.y >= display.bounds.y + BODY.height)
+      platforms.push({
+        id: `dock:${display.id}:${dock.id}`,
+        x1: stable(x1),
+        x2: stable(x2),
+        y: stable(dock.bounds.y),
+        displayId: display.id,
+      });
+  }
+  if (!snapshot.accessibility) return world;
   world.tracking = 'windows';
   const windows = snapshot.windows.filter(
     (w) => !excludedOwners.has(w.ownerPid),

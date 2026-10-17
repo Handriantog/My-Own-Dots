@@ -22,14 +22,35 @@
         >Body color <input id="color" type="color" aria-label="Body color"
       /></label>
       <label class="volume"
-        >Sound effects <output id="volume-label">40%</output
+        >Master volume <output id="volume-label">40%</output
         ><input
           id="volume"
           type="range"
           min="0"
           max="100"
-          aria-label="Sound effects volume"
+          aria-label="Master volume"
       /></label>
+      <label class="row" for="sound-category">
+        Sound category
+        <select id="sound-category">
+          <option value="walking">Walking</option>
+          <option value="interactions">Interactions</option>
+          <option value="climbing">Climbing</option>
+          <option value="falls">Falls &amp; landings</option>
+          <option value="rest">Rest &amp; idle</option>
+        </select>
+      </label>
+      <label class="volume" for="category-volume">
+        <span id="category-volume-name">Walking volume</span>
+        <output id="category-volume-label" for="category-volume">100%</output>
+        <input
+          id="category-volume"
+          type="range"
+          min="0"
+          max="100"
+          value="100"
+        />
+      </label>
       <label class="row"
         >Mute effects <input id="muted" type="checkbox" role="switch"
       /></label>

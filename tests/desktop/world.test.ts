@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { buildWorld } from '../../src/desktop/core/world.js';
+import { buildWorld, supportAt } from '../../src/desktop/core/world.js';
 import { display, snapshot, windowRect } from './fixtures.js';
 
 describe('exposed playground', () => {
   it('offers floor and a window top with foot clearance, never a solid window interior', () => {
     const world = buildWorld(snapshot([windowRect(1, 200, 250)]), [display], 0);
     expect(world.platforms.map((p) => [p.x1, p.x2, p.y])).toEqual([
-      [52, 1388, 850],
+      [52, 1388, 900],
       [219, 681, 250],
     ]);
     expect(world.walls).toHaveLength(2);
@@ -35,7 +35,7 @@ describe('exposed playground', () => {
     );
     expect(world.platforms.filter((p) => p.windowKey)).toHaveLength(0);
   });
-  it('uses Electron work areas including negative display coordinates', () => {
+  it('uses actual screen edges including negative display coordinates', () => {
     const left = {
       ...display,
       id: '2',
@@ -45,9 +45,114 @@ describe('exposed playground', () => {
     expect(buildWorld(null, [left], 0).platforms[0]).toMatchObject({
       x1: -1388,
       x2: -52,
-      y: 850,
+      y: 900,
       displayId: '2',
     });
+  });
+  it('limits a Dock perch to its observed footprint and keeps the real floor below its ends', () => {
+    const world = buildWorld(
+      snapshot([], {
+        docks: [
+          {
+            id: 'list',
+            displayId: '1',
+            bounds: { x: 400, y: 830, width: 600, height: 70 },
+          },
+        ],
+      }),
+      [display],
+      0,
+    );
+    expect(world.platforms).toEqual([
+      { id: 'floor:1', x1: 52, x2: 1388, y: 900, displayId: '1' },
+      { id: 'dock:1:list', x1: 419, x2: 981, y: 830, displayId: '1' },
+    ]);
+    expect(supportAt(world, 418, 830, '1')).toBeNull();
+    expect(supportAt(world, 982, 830, '1')).toBeNull();
+    expect(supportAt(world, 418, 900, '1')?.id).toBe('floor:1');
+    expect(world.walls).toHaveLength(0);
+  });
+  it('removes Dock support on invalidation, hide, or expired observations', () => {
+    const docks = [
+      {
+        id: 'list',
+        displayId: '1',
+        bounds: { x: 400, y: 830, width: 600, height: 70 },
+      },
+    ];
+    for (const scene of [
+      null,
+      snapshot([], { docks: [] }),
+      snapshot([], { docks, sceneValid: false }),
+    ]) {
+      expect(
+        buildWorld(scene, [display], 0).platforms.map((p) => p.id),
+      ).toEqual(['floor:1']);
+    }
+  });
+  it('never treats a full-screen Dock backing container as a platform', () => {
+    const world = buildWorld(
+      snapshot([], {
+        docks: [{ id: 'backing', displayId: '1', bounds: display.bounds }],
+      }),
+      [display],
+      0,
+    );
+    expect(world.platforms.map((p) => p.id)).toEqual(['floor:1']);
+  });
+  it('keeps a measured Dock footprint independent of application-window tracking', () => {
+    const world = buildWorld(
+      snapshot([], {
+        accessibility: false,
+        docks: [
+          {
+            id: 'list',
+            displayId: '1',
+            bounds: { x: 400, y: 830, width: 600, height: 70 },
+          },
+        ],
+      }),
+      [display],
+      0,
+    );
+    expect(supportAt(world, 600, 830, '1')?.id).toBe('dock:1:list');
+    expect(world.tracking).toBe('floor');
+  });
+  it('handles side Dock geometry without moving the screen floor inwards', () => {
+    const left = {
+      ...display,
+      bounds: { x: -1440, y: -100, width: 1440, height: 900 },
+      workArea: { x: -1370, y: -75, width: 1370, height: 875 },
+    };
+    const world = buildWorld(
+      snapshot([], {
+        docks: [
+          {
+            id: 'side',
+            displayId: '1',
+            bounds: { x: -1440, y: 200, width: 70, height: 450 },
+          },
+        ],
+      }),
+      [left],
+      0,
+    );
+    expect(world.platforms[0]).toMatchObject({ x1: -1388, x2: -52, y: 800 });
+    expect(world.platforms).toHaveLength(1);
+    const wide = buildWorld(
+      snapshot([], {
+        docks: [
+          {
+            id: 'side',
+            displayId: '1',
+            bounds: { x: -1440, y: 200, width: 120, height: 450 },
+          },
+        ],
+      }),
+      [left],
+      0,
+    );
+    expect(wide.platforms[1]).toMatchObject({ x1: -1388, x2: -1339, y: 200 });
   });
   it('uses only floors for absent/unauthorized/invalid scenes', () => {
     for (const scene of [

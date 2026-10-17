@@ -2,6 +2,10 @@ import type { Action, Point, RigPose } from '../shared/contracts.js';
 
 export function initialPose(): RigPose {
   return {
+    bodyY: 0,
+    seated: 0,
+    look: { x: 0, y: 0 },
+    love: 0,
     lean: 0,
     stretch: 1,
     squash: 1,
@@ -29,6 +33,8 @@ export interface PoseInput {
   time: number;
   sway: number;
   reducedMotion: boolean;
+  look?: Point;
+  loved?: boolean;
 }
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 function foot(phase: number): Point {
@@ -45,7 +51,8 @@ export function samplePose(
   const { action, age, facing, time, reducedMotion } = input;
   const held = action === 'held',
     climb = action === 'climb' || action === 'hang' || action === 'pull_up';
-  const walking = action === 'walk' && Math.abs(input.speed) > 0.5;
+  const walking =
+    (action === 'walk' || action === 'pet') && Math.abs(input.speed) > 0.5;
   const sleepy = action === 'sleep',
     sitting = action === 'sit' || sleepy;
   const easing = 1 - Math.exp(-dt / 0.105);
@@ -60,7 +67,9 @@ export function samplePose(
       ? facing * 0.025
       : action === 'walk'
         ? input.speed / 4000
-        : 0;
+        : action === 'peek'
+          ? facing * 0.11
+          : 0;
   const blinkPhase = time % 4.7;
   const blink = blinkPhase < 0.12 ? Math.abs(blinkPhase - 0.06) / 0.06 : 1;
   const armSwing = walking ? Math.sin(phase * Math.PI * 2) * 0.18 : 0;
@@ -71,7 +80,13 @@ export function samplePose(
         (0.7 + 0.15 * Math.sin((Math.max(0, age - 0.55) * Math.PI * 2) / 0.8))
       : action === 'stretch'
         ? 1.8
-        : -armSwing;
+        : sitting
+          ? -0.5
+          : action === 'groom'
+            ? -1.25 + Math.sin(age * 7) * 0.12
+            : action === 'headphones'
+              ? 2.15 + Math.sin(age * 4) * 0.08
+              : -armSwing;
   const targetRight = held
     ? 0.14
     : climb
@@ -79,18 +94,26 @@ export function samplePose(
         (0.7 + 0.15 * Math.sin((Math.max(0, age - 0.55) * Math.PI * 2) / 0.8))
       : action === 'stretch'
         ? -1.8
-        : armSwing;
+        : sitting
+          ? 0.5
+          : action === 'wave'
+            ? -2.25 + Math.sin(age * 8) * 0.25 * secondary
+            : action === 'groom'
+              ? 0.55
+              : action === 'headphones'
+                ? -2.15 - Math.sin(age * 4) * 0.08
+                : armSwing;
   const targetFoot = (side: -1 | 1, f: Point): Point =>
     walking
       ? { x: side * 18 + f.x * facing, y: f.y }
       : {
           x:
-            side * (sitting ? 28 : 20) +
+            side * (sitting ? 31 : 20) +
             (climb ? facing * (side === facing ? 24 : 8) : 0),
           y: held
             ? 7
             : sitting
-              ? -2
+              ? 0
               : climb
                 ? -7 -
                   (1 +
@@ -115,11 +138,25 @@ export function samplePose(
         : 0.1)
     : 0;
   const bounce = walking ? 0.012 * Math.cos(phase * Math.PI * 4) : 0;
+  const look =
+    input.look ??
+    (action === 'look_around'
+      ? { x: Math.sin(age * 1.7) * 0.85, y: Math.cos(age * 2.1) * 0.35 }
+      : action === 'peek'
+        ? { x: facing * 0.5, y: 1 }
+        : { x: 0, y: 0 });
   const next: RigPose = {
+    bodyY: 0,
+    seated: mix(previous.seated, sitting ? 1 : 0, easing),
+    look: {
+      x: mix(previous.look.x, look.x, easing),
+      y: mix(previous.look.y, look.y, easing),
+    },
+    love: mix(previous.love, input.loved || action === 'pet' ? 1 : 0, easing),
     lean: mix(previous.lean, lean, easing),
     stretch: mix(
       previous.stretch,
-      held ? 1.09 : sitting ? 0.83 : 1 - landing * 0.12 - pat * 0.09 + bounce,
+      held ? 1.09 : sitting ? 0.97 : 1 - landing * 0.12 - pat * 0.09 + bounce,
       easing,
     ),
     squash: mix(
@@ -127,13 +164,23 @@ export function samplePose(
       held
         ? 0.97
         : sitting
-          ? 1.08
+          ? 1.07
           : 1 + landing * 0.1 + pat * 0.07 - bounce * 0.5,
       easing,
     ),
     gait: phase,
-    leftArm: mix(previous.leftArm, targetLeft, easing),
-    rightArm: mix(previous.rightArm, targetRight, easing),
+    leftArm:
+      previous.leftArm +
+      Math.max(
+        -6 * dt,
+        Math.min(6 * dt, (targetLeft - previous.leftArm) * easing),
+      ),
+    rightArm:
+      previous.rightArm +
+      Math.max(
+        -6 * dt,
+        Math.min(6 * dt, (targetRight - previous.rightArm) * easing),
+      ),
     leftArmLength: mix(previous.leftArmLength, 34, easing),
     rightArmLength: mix(previous.rightArmLength, 34, easing),
     leftFoot: walking
@@ -163,7 +210,10 @@ export function samplePose(
     facing: mix(previous.facing, facing, easing),
     breathing: Math.sin(time * 2.2) * secondary * (sleepy ? 1.8 : 0.65),
   };
-  if (walking) {
+  // The rump rests on the surface; seated feet remain in front on that same
+  // surface. This lowers the body by its actual sole gap rather than crushing it.
+  next.bodyY = next.seated * 7 * next.stretch * Math.cos(next.lean);
+  if (!held && !climb && action !== 'fall' && action !== 'jump') {
     const origin = { x: 0, y: 0 };
     // Foot contacts live in world space; plush sway and squash must not tilt
     // the planted soles into or above their supporting surface.
@@ -190,7 +240,7 @@ export function rigPointToWorld(
     y = local.y * pose.stretch;
   const c = Math.cos(pose.lean),
     s = Math.sin(pose.lean);
-  return { x: root.x + x * c - y * s, y: root.y + x * s + y * c };
+  return { x: root.x + x * c - y * s, y: root.y + pose.bodyY + x * s + y * c };
 }
 export function worldPointToRig(
   point: Point,
@@ -198,7 +248,7 @@ export function worldPointToRig(
   pose: RigPose,
 ): Point {
   const x = point.x - root.x,
-    y = point.y - root.y;
+    y = point.y - root.y - pose.bodyY;
   const c = Math.cos(pose.lean),
     s = Math.sin(pose.lean);
   return {

@@ -23,13 +23,67 @@ function resting(w: World, x = 400, y = 300) {
 }
 
 describe('continuous companion simulation', () => {
+  it('lands on the measured Dock top and drops past both ends to the real screen floor', () => {
+    const w = buildWorld(
+      snapshot([], {
+        docks: [
+          {
+            id: 'list',
+            displayId: '1',
+            bounds: { x: 400, y: 830, width: 600, height: 70 },
+          },
+        ],
+      }),
+      [display],
+      0,
+    );
+    for (const [x, y, support] of [
+      [600, 830, 'dock:1:list'],
+      [418, 900, 'floor:1'],
+      [982, 900, 'floor:1'],
+    ] as const) {
+      const sim = resting(w, x, 650);
+      run(sim, 17, 1500);
+      expect(sim.frame().root).toEqual({ x, y });
+      expect(sim.frame().support?.id).toBe(support);
+      expect(
+        sim.drainEvents().filter((event) => event.name.startsWith('land_')),
+      ).toHaveLength(1);
+    }
+  });
+  it('falls continuously to the real floor when a Dock perch hides', () => {
+    const w = buildWorld(
+      snapshot([], {
+        docks: [
+          {
+            id: 'list',
+            displayId: '1',
+            bounds: { x: 400, y: 830, width: 600, height: 70 },
+          },
+        ],
+      }),
+      [display],
+      0,
+    );
+    const sim = resting(w, 600, 830);
+    expect(sim.frame().support?.id).toBe('dock:1:list');
+    sim.setWorld(buildWorld(snapshot([], { docks: [] }), [display], 0));
+    expect(sim.frame().root).toEqual({ x: 600, y: 830 });
+    expect(sim.frame().support).toBeNull();
+    sim.advance(17);
+    expect(sim.frame().root.y).toBeGreaterThan(830);
+    expect(sim.frame().root.y).toBeLessThan(831);
+    run(sim, 34, 1000);
+    expect(sim.frame().root.y).toBe(900);
+    expect(sim.frame().support?.id).toBe('floor:1');
+  });
   it('does not start a climb with no usable top above the window', () => {
     for (const windows of [
       [windowRect(1, 200, 33, 700, 800)],
       [windowRect(2, 150, 200, 800, 120), windowRect(1, 200, 300, 700, 500)],
     ]) {
       const w = world(windows);
-      const sim = resting(w, 700, 850);
+      const sim = resting(w, 700, 900);
       const intents = Array.from({ length: 100 }, () =>
         chooseIntention(sim.frame(), w, () => 0.1),
       );
@@ -37,7 +91,7 @@ describe('continuous companion simulation', () => {
     }
   });
   it('plants a climb hand during the body pull instead of sliding it up the wall', () => {
-    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 850 });
+    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 900 });
     sim.advance(0);
     let time = 0;
     while (sim.frame().action !== 'climb' && time < 60000)
@@ -59,7 +113,7 @@ describe('continuous companion simulation', () => {
     expect(planted).toBeGreaterThan(30);
   });
   it('settles securely on a window after pulling up across fresh observations', () => {
-    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 850 });
+    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 900 });
     sim.advance(0);
     let time = 0;
     while (sim.frame().action !== 'pull_up' && time < 60000)
@@ -79,21 +133,21 @@ describe('continuous companion simulation', () => {
     }
   });
   it('lands a hop back on the narrow end of its window perch', () => {
-    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 850 });
+    // Begin at the right-end perch. Seed 25 chooses an outward hop first;
+    // this isolates its landing from unrelated idle/route scheduling.
+    const sim = new CompanionSimulation(world(), 25, { x: 876, y: 300 });
     sim.advance(0);
     let time = 0;
-    while (sim.frame().action !== 'pull_up' && time < 60000)
-      sim.advance((time += 17));
-    while (sim.frame().action !== 'jump' && time < 70000)
+    while (sim.frame().action !== 'jump' && time < 2000)
       sim.advance((time += 17));
     expect(sim.frame().action).toBe('jump');
-    while (!sim.frame().support && time < 72000) sim.advance((time += 17));
+    while (!sim.frame().support && time < 4000) sim.advance((time += 17));
     expect(sim.frame().support?.windowKey).toBe('a:42:1:1');
     expect(sim.frame().root.y).toBe(300);
   });
   it('resumes an unfinished climbing stroke without catching up a suspended clock', () => {
     for (const suspend of [false, true]) {
-      const sim = new CompanionSimulation(world(), 5, { x: 500, y: 850 });
+      const sim = new CompanionSimulation(world(), 5, { x: 500, y: 900 });
       sim.advance(0);
       let time = 0;
       while (
@@ -115,7 +169,7 @@ describe('continuous companion simulation', () => {
     }
   });
   it('continues a mid-wall climb after a brief pause instead of pulling to a distant top', () => {
-    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 850 });
+    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 900 });
     sim.advance(0);
     let time = 0;
     while (
@@ -147,17 +201,35 @@ describe('continuous companion simulation', () => {
       const w = buildWorld(null, monitors, 0);
       const above = new CompanionSimulation(w, 5, { x: 400, y: -50 });
       expect(above.frame().displayId).toBe('upper');
+      expect(above.frame().support).toBeNull();
+      above.setOptions({ paused: true, reducedMotion: false });
+      above.advance(0);
+      run(above, 17, 1000);
+      expect(above.frame().root).toEqual({ x: 400, y: 0 });
+      expect(above.frame().displayId).toBe('upper');
       expect(above.frame().support?.id).toBe('floor:upper');
       expect(
-        new CompanionSimulation(w, 5, { x: 400, y: 850 }).frame().displayId,
+        new CompanionSimulation(w, 5, { x: 400, y: 900 }).frame().displayId,
       ).toBe('1');
       expect(
         new CompanionSimulation(w, 5, { x: 400, y: 0 }).frame().displayId,
       ).toBe('1');
+      const restored = new CompanionSimulation(
+        w,
+        5,
+        { x: 400, y: 0 },
+        'upper',
+      ).frame();
+      expect(restored.displayId).toBe('upper');
+      expect(restored.support?.id).toBe('floor:upper');
+      expect(
+        new CompanionSimulation(w, 5, { x: 400, y: 900 }, 'upper').frame()
+          .displayId,
+      ).toBe('1');
     }
   });
   it('drops continuously if a foreground window covers an active pull-up destination', () => {
-    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 850 });
+    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 900 });
     sim.advance(0);
     let time = 0;
     while (sim.frame().action !== 'pull_up' && time < 60000)
@@ -186,7 +258,7 @@ describe('continuous companion simulation', () => {
     if (support) expect(covered.platforms).toContainEqual(support);
   });
   it('refreshes a walking climb target before attaching to a moved window', () => {
-    const sim = new CompanionSimulation(world(), 8, { x: 500, y: 850 });
+    const sim = new CompanionSimulation(world(), 8, { x: 500, y: 900 });
     sim.advance(0);
     run(sim, 17, 1000);
     expect(sim.frame().action).toBe('walk');
@@ -299,8 +371,8 @@ describe('continuous companion simulation', () => {
     );
   });
   it('plays one falling cue after release and cancels it when landing', () => {
-    const sim = resting(world([]), 400, 850);
-    sim.pointer({ kind: 'down', point: { x: 400, y: 770 }, atMs: 0 });
+    const sim = resting(world([]), 400, 900);
+    sim.pointer({ kind: 'down', point: { x: 400, y: 820 }, atMs: 0 });
     sim.pointer({ kind: 'move', point: { x: 400, y: 180 }, atMs: 16 });
     sim.advance(17);
     sim.pointer({ kind: 'up', point: { x: 400, y: 180 }, atMs: 18 });
@@ -319,8 +391,8 @@ describe('continuous companion simulation', () => {
       workArea: { ...display.workArea, x: -1440 },
       scaleFactor: 1,
     };
-    const sim = resting(buildWorld(null, [display, left], 0), 400, 850);
-    sim.pointer({ kind: 'down', point: { x: 400, y: 780 }, atMs: 0 });
+    const sim = resting(buildWorld(null, [display, left], 0), 400, 900);
+    sim.pointer({ kind: 'down', point: { x: 400, y: 830 }, atMs: 0 });
     sim.pointer({ kind: 'move', point: { x: -200, y: 300 }, atMs: 16 });
     sim.advance(17);
     expect(sim.frame().displayId).toBe('2');
@@ -329,7 +401,7 @@ describe('continuous companion simulation', () => {
   it('chooses only reachable routes and covers walking, climbing, jumps and rests', () => {
     const w = world();
     const random = seededRandom(12);
-    const sim = resting(w, 700, 850);
+    const sim = resting(w, 700, 900);
     const intents = Array.from({ length: 200 }, () =>
       chooseIntention(sim.frame(), w, random),
     );
@@ -345,7 +417,7 @@ describe('continuous companion simulation', () => {
     ).toBe(false);
   });
   it('keeps seeded exploration finite and continuous for ten minutes', () => {
-    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 850 });
+    const sim = new CompanionSimulation(world(), 5, { x: 500, y: 900 });
     sim.advance(0);
     let previous = sim.frame().root;
     const actions = new Set<string>();

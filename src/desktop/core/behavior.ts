@@ -12,7 +12,17 @@ export type Intention =
   | { kind: 'jump'; x: number }
   | {
       kind: 'rest';
-      action: 'idle' | 'sit' | 'stretch' | 'yawn' | 'sleep';
+      action:
+        | 'idle'
+        | 'sit'
+        | 'stretch'
+        | 'yawn'
+        | 'sleep'
+        | 'look_around'
+        | 'wave'
+        | 'groom'
+        | 'headphones'
+        | 'peek';
       duration: number;
     };
 export function seededRandom(seed: number): () => number {
@@ -47,7 +57,7 @@ export function chooseIntention(
     const wall = walls[Math.floor(random() * walls.length)];
     return { kind: 'climb', wall, x: wall.x + (wall.side * BODY.width) / 2 };
   }
-  if (roll < 0.65) {
+  if (roll < 0.53) {
     const margin = Math.min(15, (support.x2 - support.x1) / 3);
     return {
       kind: 'walk',
@@ -57,7 +67,7 @@ export function chooseIntention(
         random() * Math.max(0, support.x2 - support.x1 - margin * 2),
     };
   }
-  if (roll < 0.76) {
+  if (roll < 0.65) {
     const direction = random() < 0.5 ? -1 : 1;
     const margin = Math.min(15, (support.x2 - support.x1) / 3);
     return {
@@ -71,11 +81,28 @@ export function chooseIntention(
       ),
     };
   }
-  const rests = ['idle', 'sit', 'stretch', 'yawn', 'sleep'] as const;
-  const action = rests[Math.floor(random() * rests.length)];
+  const rests: Extract<Intention, { kind: 'rest' }>['action'][] = [
+    'idle',
+    'sit',
+    'stretch',
+    'yawn',
+    'sleep',
+    'look_around',
+    'look_around',
+    'wave',
+    'groom',
+    'headphones',
+  ];
+  if (
+    support.windowKey &&
+    Math.min(frame.root.x - support.x1, support.x2 - frame.root.x) < 75
+  )
+    rests.push('peek', 'peek');
+  const candidates = rests.filter((action) => action !== frame.action);
+  const action = candidates[Math.floor(random() * candidates.length)];
   return {
     kind: 'rest',
     action,
-    duration: action === 'sleep' ? 8 + random() * 8 : 1.2 + random() * 3.5,
+    duration: action === 'sleep' ? 8 + random() * 8 : 2 + random() * 2.5,
   };
 }

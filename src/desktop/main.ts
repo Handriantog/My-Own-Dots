@@ -97,7 +97,12 @@ async function start(): Promise<void> {
   let currentDisplays = displays();
   let world = buildWorld(null, currentDisplays, performance.now());
   const savedPoint = restorePlacement(preferences, currentDisplays);
-  let simulation = new CompanionSimulation(world, Date.now(), savedPoint);
+  let simulation = new CompanionSimulation(
+    world,
+    Date.now(),
+    savedPoint,
+    savedPoint ? (preferences.displayId ?? undefined) : undefined,
+  );
   let overlay: BrowserWindow;
   let settingsWindow: BrowserWindow | null = null;
   let audioError = '';
@@ -173,14 +178,12 @@ async function start(): Promise<void> {
       preferences = {
         ...preferences,
         displayId: d.id,
+        placementSpace: 'bounds',
         placement: {
-          x: Math.max(
-            0,
-            Math.min(1, (f.root.x - d.workArea.x) / d.workArea.width),
-          ),
+          x: Math.max(0, Math.min(1, (f.root.x - d.bounds.x) / d.bounds.width)),
           y: Math.max(
             0,
-            Math.min(1, (f.root.y - d.workArea.y) / d.workArea.height),
+            Math.min(1, (f.root.y - d.bounds.y) / d.bounds.height),
           ),
         },
       };
@@ -225,7 +228,7 @@ async function start(): Promise<void> {
           ? snapshot.sceneValid
             ? 'Window playground active'
             : 'Refreshing desktop scene…'
-          : 'Floor-only · enable Accessibility for window play',
+          : 'Floor-only · allow this app in Accessibility',
       );
     else if (!snapshot && !assetError)
       setStatus('Floor-only · window tracking unavailable');
@@ -342,6 +345,15 @@ async function start(): Promise<void> {
           );
         },
       },
+      ...(!systemPreferences.isTrustedAccessibilityClient(false)
+        ? [
+            {
+              label:
+                'After an update, remove and re-add this app in Accessibility',
+              enabled: false,
+            },
+          ]
+        : []),
       { label: 'Retry window tracking', click: () => helper.restart() },
       { type: 'separator' },
       {

@@ -1,3 +1,5 @@
+import type { CategoryVolumes } from '../core/sound-categories.js';
+
 /** All desktop coordinates are global logical pixels, top-left origin. */
 export interface Point {
   x: number;
@@ -20,6 +22,12 @@ export interface NativeWindow {
   bounds: Rect;
   opaque: boolean;
 }
+/** Visible rectangular Dock container, never its full-screen backing window. */
+export interface DockSurface {
+  id: string;
+  displayId: string;
+  bounds: Rect;
+}
 export interface GeometrySnapshot {
   protocolVersion: 1;
   helperSession: string;
@@ -31,6 +39,8 @@ export interface GeometrySnapshot {
   sceneValid: boolean;
   displays: DesktopDisplay[];
   windows: NativeWindow[];
+  /** Absent on older helpers; empty when hidden or geometry is unavailable. */
+  docks?: DockSurface[];
 }
 export const BODY = {
   width: 104,
@@ -82,6 +92,12 @@ export type Action =
   | 'wake'
   | 'notice'
   | 'pat'
+  | 'pet'
+  | 'look_around'
+  | 'wave'
+  | 'groom'
+  | 'headphones'
+  | 'peek'
   | 'appear';
 export interface Platform {
   id: string;
@@ -125,6 +141,10 @@ export interface Grip {
   age: number;
 }
 export interface RigPose {
+  bodyY: number;
+  seated: number;
+  look: Point;
+  love: number;
   lean: number;
   stretch: number;
   squash: number;
@@ -143,6 +163,7 @@ export interface RigPose {
   breathing: number;
 }
 export interface SimulationFrame {
+  hearts: { id: number; origin: Point; age: number; still: boolean }[];
   atMs: number;
   root: Point;
   velocity: Point;
@@ -165,11 +186,14 @@ export interface Preferences {
   version: 1;
   color: string;
   volume: number;
+  categoryVolumes: CategoryVolumes;
   muted: boolean;
   paused: boolean;
   reducedMotion: boolean;
   displayId: string | null;
   placement: Point | null;
+  /** Legacy v1 files used workArea; new saves use the whole display. */
+  placementSpace?: 'bounds';
 }
 export interface PresentationFrame {
   sequence: number;

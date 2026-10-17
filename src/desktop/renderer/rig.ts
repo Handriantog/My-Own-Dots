@@ -27,6 +27,10 @@ export class PlushRig {
   private restVertices: Float32Array;
   private mouthOpen = new Graphics();
   private brows = new Graphics();
+  private happyEyes = new Graphics();
+  private sleepingEyes = new Graphics();
+  private cheeks = new Graphics();
+  private hearts = new Graphics();
   private bodyMask: Graphics;
   private legs: Sprite[] = [];
   private constructor(
@@ -78,6 +82,18 @@ export class PlushRig {
       this.body.geometry.getAttribute('aPosition').buffer.data,
     );
     this.torso.addChildAt(this.body, 6);
+    // Forward paws remain visible against the lap in a seated pose; arms can
+    // reach the cheeks/headphones instead of disappearing behind the torso.
+    for (const name of [
+      'leftFoot',
+      'rightFoot',
+      'leftArm',
+      'rightArm',
+    ] as const)
+      this.torso.addChildAt(
+        this.sprites[name],
+        this.torso.getChildIndex(this.headphones),
+      );
     // Authored silhouettes trim disconnected generation debris at render time.
     // The original atlas is preserved; these masks also define the intended anatomy.
     this.bodyMask = new Graphics()
@@ -115,6 +131,16 @@ export class PlushRig {
       .quadraticCurveTo(15, -81, 9, -77)
       .stroke({ color: 0x46332c, width: 1.7, cap: 'round' });
     this.torso.addChild(this.brows);
+    for (const x of [-14, 14]) {
+      this.happyEyes.moveTo(x - 6, -62).quadraticCurveTo(x, -69, x + 6, -62);
+      this.sleepingEyes.moveTo(x - 6, -63).quadraticCurveTo(x, -59, x + 6, -63);
+      this.cheeks.ellipse(x * 1.45, -52, 5, 2.5);
+    }
+    this.happyEyes.stroke({ color: 0x46332c, width: 2.1, cap: 'round' });
+    this.sleepingEyes.stroke({ color: 0x46332c, width: 1.7, cap: 'round' });
+    this.cheeks.fill({ color: 0xf3a3b7, alpha: 0.48 });
+    this.torso.addChild(this.happyEyes, this.sleepingEyes, this.cheeks);
+    this.container.addChild(this.hearts);
   }
   static async create(assetBase: string): Promise<PlushRig> {
     Assets.setPreferences({ preferWorkers: false });
@@ -147,6 +173,7 @@ export class PlushRig {
     this.container.alpha =
       frame.action === 'appear' ? arrival * arrival * (3 - 2 * arrival) : 1;
     this.torso.rotation = p.lean;
+    this.torso.y = p.bodyY;
     this.torso.scale.set(p.squash, p.stretch);
     // The plush deforms around a rigid accessory attached at the head center.
     this.headphones.scale.set(1 / p.squash, 1 / p.stretch);
@@ -155,6 +182,10 @@ export class PlushRig {
     this.body.tint = layerTint(this.definition.layers.body, color);
     this.sprites.leftFoot.position.set(p.leftFoot.x, p.leftFoot.y);
     this.sprites.rightFoot.position.set(p.rightFoot.x, p.rightFoot.y);
+    for (const name of ['leftFoot', 'rightFoot'] as const) {
+      this.sprites[name].width = 27 + p.seated * 9;
+      this.sprites[name].height = 15 + p.seated * 5;
+    }
     for (const [index, foot] of [p.leftFoot, p.rightFoot].entries()) {
       const leg = this.legs[index],
         attachX = index === 0 ? -20 : 20;
@@ -165,6 +196,7 @@ export class PlushRig {
       leg.height = Math.hypot(dx, dy) + 8;
       leg.rotation = Math.atan2(-dx, dy);
       leg.tint = this.body.tint;
+      leg.alpha = 1 - p.seated;
     }
     for (const side of [-1, 1] as const) {
       const transform = armTransform(frame, side);
@@ -174,7 +206,16 @@ export class PlushRig {
     }
     // A shallow three-quarter turn is one master seen from a different facing;
     // never mirror or replace the identity with another generated frame.
-    this.sprites.eyes.x = p.facing * 3;
+    const eyeX = p.facing * 2 + p.look.x * 4,
+      eyeY = p.look.y * 2.5;
+    this.sprites.eyes.position.set(eyeX, -63 + eyeY);
+    const closed = Math.max(0, Math.min(1, (0.18 - p.eyeOpen) / 0.12));
+    this.sprites.eyes.alpha = (1 - p.love) * (1 - closed);
+    this.happyEyes.position.set(eyeX, eyeY);
+    this.happyEyes.alpha = p.love;
+    this.sleepingEyes.position.set(eyeX, eyeY);
+    this.sleepingEyes.alpha = closed * (1 - p.love);
+    this.cheeks.alpha = p.love;
     this.sprites.eyes.scale.x =
       (this.definition.layers.eyes.size.x /
         this.definition.layers.eyes.frame.width) *
@@ -190,6 +231,40 @@ export class PlushRig {
     this.mouthOpen.scale.set(1 - p.effort * 0.25, 1 - p.effort * 0.4);
     this.brows.x = p.facing * 3;
     this.brows.alpha = p.effort;
+    this.hearts.clear();
+    for (const burst of frame.hearts ?? [])
+      for (let i = 0; i < 3; i++) {
+        const age = burst.age - i * 0.15;
+        if (age < 0 || age > 1.45) continue;
+        const t = age / 1.45;
+        const alpha =
+          Math.min(1, age / 0.12) * Math.min(1, (1.45 - age) / 0.4) * 0.85;
+        const x =
+          burst.origin.x -
+          frame.root.x +
+          i * 9 +
+          (burst.still ? 0 : Math.sin(age * 3 + i) * 4);
+        const y =
+          burst.origin.y - frame.root.y - i * 6 - (burst.still ? 0 : age * 24);
+        const size =
+          (0.65 + i * 0.12) * (burst.still ? 1 : Math.min(1, 0.6 + t * 3));
+        const point = (dx: number, dy: number) => ({
+          x: x + dx * size,
+          y: y + dy * size,
+        });
+        const a = point(0, 4),
+          b = point(-11, -3),
+          c = point(-6, -12),
+          d = point(0, -6),
+          e = point(6, -12),
+          f = point(11, -3),
+          g = point(0, 4);
+        this.hearts
+          .moveTo(a.x, a.y)
+          .bezierCurveTo(b.x, b.y, c.x, c.y, d.x, d.y)
+          .bezierCurveTo(e.x, e.y, f.x, f.y, g.x, g.y)
+          .fill({ color: i % 2 ? 0xffb9d1 : 0xf382b0, alpha });
+      }
     const vertices = this.body.geometry.getAttribute('aPosition').buffer;
     const part = this.definition.layers.body;
     for (let i = 0; i < this.restVertices.length; i += 2) {

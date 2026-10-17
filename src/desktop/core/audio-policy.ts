@@ -54,7 +54,11 @@ export class AudioPolicy {
     private manifest: SoundManifest,
     private random: () => number = Math.random,
   ) {}
-  offer(event: InteractionEvent, nowMs: number): VoiceRequest | null {
+  offer(
+    event: InteractionEvent,
+    nowMs: number,
+    audible = true,
+  ): VoiceRequest | null {
     for (const [id, voice] of this.voices)
       if (voice.until <= nowMs) this.voices.delete(id);
     if (this.seen.has(event.id)) return null;
@@ -68,7 +72,12 @@ export class AudioPolicy {
       cancelScopes.add('carry');
     for (const [id, voice] of this.voices)
       if (cancelScopes.has(voice.scope)) this.cancel(id);
-    if (this.muted || nowMs - event.atMs > 250 || event.atMs - nowMs > 50)
+    if (
+      !audible ||
+      this.muted ||
+      nowMs - event.atMs > 250 ||
+      event.atMs - nowMs > 50
+    )
       return null;
     const family = this.manifest.events.find((e) => e.event === event.name)!;
     if (nowMs - (this.lastAt.get(event.name) ?? -Infinity) < family.cooldownMs)

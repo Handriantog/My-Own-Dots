@@ -37,6 +37,67 @@ final class DesktopObserver {
         FileHandle.standardOutput.write(Data([10]))
     }
     func rect(_ r: CGRect) -> [String: Double] { ["x": r.origin.x, "y": r.origin.y, "width": r.width, "height": r.height] }
+    func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+        var value: CFTypeRef?
+        return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
+    }
+    func dockBounds(_ element: AXUIElement) -> CGRect? {
+        guard let position = attribute(element, kAXPositionAttribute), CFGetTypeID(position) == AXValueGetTypeID(),
+              let size = attribute(element, kAXSizeAttribute), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero, extent = CGSize.zero
+        guard AXValueGetValue(position as! AXValue, .cgPoint, &point),
+              AXValueGetValue(size as! AXValue, .cgSize, &extent),
+              [point.x, point.y, extent.width, extent.height].allSatisfy({ $0.isFinite }) else { return nil }
+        return CGRect(origin: point, size: extent)
+    }
+    func dockFits(_ r: CGRect, _ d: CGRect) -> Bool {
+        guard r.width >= 12, r.height >= 12, r.minX >= d.minX - 1, r.minY >= d.minY - 1,
+              r.maxX <= d.maxX + 1, r.maxY <= d.maxY + 1 else { return false }
+        if r.width >= r.height { return r.height < d.height / 2 && abs(r.maxY - d.maxY) <= 24 }
+        return r.width < d.width / 2 && (abs(r.minX - d.minX) <= 24 || abs(r.maxX - d.maxX) <= 24)
+    }
+    func dockSurfaces() -> [[String: Any]] {
+        // Dock's on-screen CG window can cover an entire display. Never turn that
+        // backing container, or NSScreen.visibleFrame's full-width inset, into a perch.
+        guard AXIsProcessTrusted(), let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else { return [] }
+        let application = AXUIElementCreateApplication(dock.processIdentifier)
+        AXUIElementSetMessagingTimeout(application, 0.02)
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.02)
+        var queue: [(AXUIElement, String, Int)] = [(application, "root", 0)]
+        var surfaces: [[String: Any]] = []
+        var visited = 0
+        let deadline = clock + 75
+        while !queue.isEmpty && visited < 32 && clock < deadline {
+            let (element, identity, depth) = queue.removeFirst(); visited += 1
+            if (attribute(element, kAXHiddenAttribute) as? Bool) == true { continue }
+            if (attribute(element, kAXRoleAttribute) as? String) == kAXListRole,
+               let bounds = dockBounds(element) {
+                // A hit test confirms the list is currently exposed. Hidden Dock
+                // geometry can linger in AX; it must disappear as physical support.
+                var hit: AXUIElement?
+                var hitPid: pid_t = 0
+                guard AXUIElementCopyElementAtPosition(system, Float(bounds.midX), Float(bounds.midY), &hit) == .success,
+                      let hit = hit, AXUIElementGetPid(hit, &hitPid) == .success, hitPid == dock.processIdentifier else { continue }
+                for screen in NSScreen.screens {
+                    guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { continue }
+                    let displayBounds = CGDisplayBounds(CGDirectDisplayID(id.uint32Value))
+                    if dockFits(bounds, displayBounds) {
+                        surfaces.append(["id": "ax:\(dock.processIdentifier):\(identity)", "displayId": id.stringValue, "bounds": rect(bounds)])
+                    }
+                }
+                continue
+            }
+            if depth < 2 {
+                var children: CFArray?
+                if AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, 16, &children) == .success,
+                   let children = children as? [AXUIElement] {
+                    for (index, child) in children.enumerated() { queue.append((child, "\(identity).\(index)", depth + 1)) }
+                }
+            }
+        }
+        return Array(surfaces.prefix(32))
+    }
     func invalidate() { dirty = true; activeUntil = clock + 2000 }
     func sceneChanged() { revision += 1; invalidate(); snapshot(valid: false) }
     func refreshObservers() {
@@ -118,7 +179,7 @@ final class DesktopObserver {
         sequence += 1
         emit(["protocolVersion": 1, "helperSession": session, "seq": sequence, "observedAtMs": now,
               "sceneRevision": revision, "pollIntervalMs": cadence, "accessibility": AXIsProcessTrusted(),
-              "sceneValid": valid && !displays.isEmpty, "displays": displays, "windows": Array(windows.prefix(2048))])
+              "sceneValid": valid && !displays.isEmpty, "displays": displays, "windows": Array(windows.prefix(2048)), "docks": valid ? dockSurfaces() : []])
         lastObservation = now; dirty = !valid
     }
     func pointer() {

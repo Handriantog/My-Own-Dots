@@ -58,7 +58,7 @@ describe('presentation sequencing', () => {
       expect(held.root.x - origin.x).toBeLessThanOrEqual(268);
     }
   });
-  it('keeps one compact surface within offset and mixed-scale monitor work areas', () => {
+  it('keeps the native surface on its display when the real floor extends below or beside Dock work-area insets', () => {
     for (const scaleFactor of [1, 1.5, 2]) {
       for (const offset of [
         { x: -1920, y: -180 },
@@ -70,24 +70,20 @@ describe('presentation sequencing', () => {
           scaleFactor,
           bounds: { ...offset, width: 1920, height: 1080 },
           workArea: {
-            x: offset.x,
+            x: offset.x + 80,
             y: offset.y + 25,
-            width: 1920,
+            width: 1840,
             height: 1020,
           },
         };
         for (const x of [offset.x + 52, offset.x + 1868]) {
-          for (const y of [offset.y + 140, offset.y + 1045]) {
+          for (const y of [offset.y + 140, offset.y + 1080]) {
             const root = { x, y },
               origin = overlayOrigin(root, monitor);
-            expect(origin.x).toBeGreaterThanOrEqual(monitor.workArea.x);
-            expect(origin.x + 320).toBeLessThanOrEqual(
-              monitor.workArea.x + 1920,
-            );
-            expect(origin.y).toBeGreaterThanOrEqual(monitor.workArea.y);
-            expect(origin.y + 320).toBeLessThanOrEqual(
-              monitor.workArea.y + 1020,
-            );
+            expect(origin.x).toBeGreaterThanOrEqual(monitor.bounds.x);
+            expect(origin.x + 320).toBeLessThanOrEqual(monitor.bounds.x + 1920);
+            expect(origin.y).toBeGreaterThanOrEqual(monitor.bounds.y);
+            expect(origin.y + 320).toBeLessThanOrEqual(monitor.bounds.y + 1080);
             // The body stays inside the canvas without changing the world root.
             expect(root.x - origin.x).toBeGreaterThanOrEqual(52);
             expect(root.x - origin.x).toBeLessThanOrEqual(268);
@@ -96,6 +92,19 @@ describe('presentation sequencing', () => {
           }
         }
       }
+    }
+  });
+  it('keeps a held or partly offscreen body centered during handoff and release recovery', () => {
+    for (const [root, held] of [
+      [{ x: 600, y: 900 }, true],
+      [{ x: 40, y: 900 }, false],
+      [{ x: 1400, y: 900 }, false],
+      [{ x: 600, y: 940 }, false],
+      [{ x: 600, y: 100 }, false],
+    ] as const) {
+      const origin = overlayOrigin(root, display, held);
+      expect(root.x - origin.x).toBe(160);
+      expect(root.y - origin.y).toBe(200);
     }
   });
   it('keeps one in-flight frame and merges events into the freshest pending state', () => {

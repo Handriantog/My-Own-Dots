@@ -15,6 +15,8 @@ const host = vi.hoisted(() => ({
   power: null as EventEmitter | null,
   cursor: { x: 1200, y: 100 },
   frame: null as PresentationFrame | null,
+  accessibilityTrusted: false,
+  menu: [] as Array<{ label?: string }>,
 }));
 vi.mock('electron', async () => {
   const { EventEmitter } = await import('node:events');
@@ -90,10 +92,13 @@ vi.mock('electron', async () => {
     shell: {},
     systemPreferences: {
       getAnimationSettings: () => ({ prefersReducedMotion: false }),
+      isTrustedAccessibilityClient: () => host.accessibilityTrusted,
     },
     Tray: class {
       setToolTip() {}
-      setContextMenu() {}
+      setContextMenu(items: Array<{ label?: string }>) {
+        host.menu = items;
+      }
     },
   };
 });
@@ -129,6 +134,8 @@ beforeEach(async () => {
   host.children = [];
   host.cursor = { x: 1200, y: 100 };
   host.frame = null;
+  host.accessibilityTrusted = false;
+  host.menu = [];
   vi.useFakeTimers({
     toFake: [
       'setTimeout',
@@ -168,13 +175,29 @@ function invalidScene() {
   expect(host.windows[0].visible).toBe(false);
 }
 describe('host scene recovery', () => {
+  it('explains how to renew an updated app grant while Accessibility is denied', () => {
+    expect(
+      host.menu.some((item) => item.label?.includes('remove and re-add')),
+    ).toBe(true);
+  });
+  it('omits stale-grant guidance after the host is trusted', () => {
+    host.accessibilityTrusted = true;
+    const child = host.children[0] as EventEmitter & { stdout: PassThrough };
+    child.stdout.emit('data', Buffer.from(JSON.stringify(snapshot()) + '\n'));
+    expect(
+      host.menu.some((item) => item.label?.includes('remove and re-add')),
+    ).toBe(false);
+  });
+
   it('keeps the compact overlay inside its monitor at the left and bottom edges', async () => {
     await vi.advanceTimersByTimeAsync(34);
     const origin = host.frame!.origin;
+    expect(host.frame!.simulation.root.y).toBe(900);
+    expect(host.frame!.simulation.support?.id).toBe('floor:1');
     expect(origin.x).toBeGreaterThanOrEqual(0);
-    expect(origin.y).toBeGreaterThanOrEqual(25);
+    expect(origin.y).toBeGreaterThanOrEqual(0);
     expect(origin.x + 320).toBeLessThanOrEqual(1440);
-    expect(origin.y + 320).toBeLessThanOrEqual(850);
+    expect(origin.y + 320).toBeLessThanOrEqual(900);
   });
   it('releases a held Dot when helper geometry expires during capture', async () => {
     const child = host.children[0] as EventEmitter & { stdout: PassThrough };

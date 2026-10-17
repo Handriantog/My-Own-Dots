@@ -143,7 +143,9 @@ export function applyClimbContact(
   );
   const blend =
     frame.action === 'climb' && frame.actionAge < 0.55
-      ? 1 - Math.exp(-dt / 0.12)
+      ? // Ease into reaching after the last airborne step. Starting the full
+        // reach on that same frame adds a visible palm jerk to the jump motion.
+        (1 - Math.exp(-dt / 0.12)) * Math.min(1, frame.actionAge / 0.12)
       : 1;
   frame.pose[rotation] = previous[rotation] + angle * blend;
   frame.pose[height] =

@@ -21,3 +21,9 @@ The climb uses Bone Bone's [cat climbing footage](https://commons.wikimedia.org/
 The same master rig now takes shorter steps with opposing arm swings, keeps planted soles level during body deformation, and reaches into each climb before repeated grip/pull beats. The near palm stays fixed through each pull. A slight eye squeeze, subtle brows, and a small effort mouth mark exertion. Initial grip and release blend the actual limb angle and length. Pickup keeps larger eyes and a round mouth throughout the carry; no drawn hand or hidden system cursor is used.
 
 `node scripts/desktop-rig-preview.mjs --motion` records the real rig and deterministic climb simulation as a 22-second WebM in `artifacts/desktop/plush-motion.webm`. It also captures climbing and perch inspection frames. The normal preview still produces the multi-color contact sheet.
+
+## Second feedback: affection and seated gestures
+
+The same atlas now supports bounded eye-pair gaze, happy and sleeping vector eyelids, translucent blush, and three staggered heart shapes per recognized petting burst. Hearts are bounded, expire on simulation time, and disappear on suspend; reduced motion keeps their positions still. No new bitmap identities or audio assets are introduced. Sitting moves the rump down to the floor, brings the paws forward, hides standing leg bridges, and rests the arms by the lap. Sleep uses that seated base. Noncontact arm speed is bounded across waves, grooming, headphone adjustment, and ordinary travel.
+
+`node scripts/desktop-rig-preview.mjs --interactions` records ten seconds of the real rig in `artifacts/desktop/plush-interactions.webm`, including gaze, repeated gesture detection, affection, sit/sleep transitions, and the new idle actions.

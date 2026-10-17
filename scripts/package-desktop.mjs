@@ -1,10 +1,15 @@
 import { packager } from '@electron/packager';
+import { signDesktopApp } from './sign-desktop.mjs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
+const releaseDirectory = path.resolve(
+  root,
+  process.env.DOTS_DESKTOP_RELEASE_DIR || 'release',
+);
 if (process.platform !== 'darwin')
   throw new Error('The first desktop release is macOS only.');
 const electronVersion = JSON.parse(
@@ -12,7 +17,7 @@ const electronVersion = JSON.parse(
 ).version;
 const bundles = await packager({
   dir: path.join(root, 'dist/desktop'),
-  out: path.join(root, 'release'),
+  out: releaseDirectory,
   name: 'My Own Dots',
   executableName: 'My Own Dots',
   appBundleId: 'com.myownstack.dots.desktop',
@@ -33,23 +38,9 @@ const bundles = await packager({
 });
 for (const directory of bundles) {
   const app = path.join(directory, 'My Own Dots.app');
-  // Local ad-hoc signature validates the assembled bundle. This is not Developer ID
-  // signing or notarization, and does not claim public Gatekeeper distribution.
-  const sign = spawnSync(
-    'codesign',
-    ['--force', '--deep', '--sign', '-', app],
-    { stdio: 'inherit' },
-  );
-  if (sign.status !== 0) process.exit(sign.status ?? 1);
-  const verify = spawnSync(
-    'codesign',
-    ['--verify', '--deep', '--strict', app],
-    { stdio: 'inherit' },
-  );
-  if (verify.status !== 0) process.exit(verify.status ?? 1);
+  const signing = signDesktopApp(app);
   const zip = path.join(
-    root,
-    'release',
+    releaseDirectory,
     `My-Own-Dots-macOS-${process.arch}.zip`,
   );
   const archive = spawnSync(
@@ -59,10 +50,10 @@ for (const directory of bundles) {
   );
   if (archive.status !== 0) process.exit(archive.status ?? 1);
   writeFileSync(
-    path.join(root, 'release/BUILD.txt'),
-    `My Own Dots 0.1.0\nBuilt: ${new Date().toISOString()}\nArchitecture: ${process.arch}\nElectron: ${electronVersion}\nSigning: local ad-hoc only; not notarized\nRuntime: bundled; no Node/Python/Docker/backend required\nApp: ${app}\nZip: ${zip}\n`,
+    path.join(releaseDirectory, 'BUILD.txt'),
+    `My Own Dots 0.1.0\nBuilt: ${new Date().toISOString()}\nArchitecture: ${process.arch}\nElectron: ${electronVersion}\nSigning: ${signing}; not notarized\nRuntime: bundled; no Node/Python/Docker/backend required\nApp: ${app}\nZip: ${zip}\n`,
   );
   console.log(
-    `App: ${app}\nArchive: ${zip}\nLocal ad-hoc build; public signing and notarization remain a release step.`,
+    `App: ${app}\nArchive: ${zip}\n${signing}; notarization remains a release step.`,
   );
 }
