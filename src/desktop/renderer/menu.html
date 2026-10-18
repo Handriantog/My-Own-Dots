@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Dot menu</title>
+  </head>
+  <body>
+    <svg
+      class="definitions"
+      aria-hidden="true"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <defs>
+        <path
+          id="cloud"
+          d="M39 76C22 80 10 69 12 55C1 44 10 27 26 27C27 10 48 5 61 16C71 1 97 1 108 14C123 3 146 10 150 24C169 19 186 29 185 43C200 52 194 72 179 75C166 85 149 81 141 76C124 88 106 84 97 78C80 86 66 83 58 77C48 86 39 91 27 89C34 85 38 81 39 76Z"
+        />
+      </defs>
+    </svg>
+    <nav aria-label="Dot actions">
+      <button class="cloud-button chat" data-action="chat" aria-label="Chat">
+        <svg class="cloud-shape" viewBox="0 0 202 100" aria-hidden="true">
+          <use href="#cloud" />
+        </svg>
+        <span class="content"
+          ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 11.5a8 8 0 0 1-8 8H5l-4 3 2-6a8 8 0 1 1 17-5Z" />
+            <path d="M7 10h8M7 14h5" /></svg
+          ><span>Chat</span></span
+        >
+      </button>
+      <button class="cloud-button talk" aria-label="Talk" data-action="talk">
+        <svg class="cloud-shape" viewBox="0 0 202 100" aria-hidden="true">
+          <use href="#cloud" />
+        </svg>
+        <span class="content"
+          ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="8" y="2" width="8" height="13" rx="4" />
+            <path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8" /></svg
+          ><span>Talk</span><span class="hint">Connect</span></span
+        >
+      </button>
+      <button class="cloud-button hide" data-action="hide" aria-label="Hide">
+        <svg class="cloud-shape" viewBox="0 0 202 100" aria-hidden="true">
+          <use href="#cloud" />
+        </svg>
+        <span class="content"
+          ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M3 12s3-6 9-6 9 6 9 6-3 6-9 6-9-6-9-6ZM3 3l18 18" />
+            <path d="M10 10a3 3 0 0 0 4 4" /></svg
+          ><span>Hide</span></span
+        >
+      </button>
+    </nav>
+    <script type="module" src="./menu.ts"></script>
+  </body>
+</html>

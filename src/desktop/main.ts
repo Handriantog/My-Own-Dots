@@ -22,6 +22,13 @@ import { hitTestRig } from './core/rig-model.js';
 import { buildWorld } from './core/world.js';
 import { HelperSupervisor } from './host/helper.js';
 import { DesktopDiagnostics } from './host/diagnostics.js';
+import { CompanionChatWindow } from './host/chat-window.js';
+import { CompanionCloudMenu } from './host/cloud-menu.js';
+import {
+  CompanionClick,
+  companionPanelBounds,
+  companionMenuLayout,
+} from './host/interaction.js';
 import {
   PreferenceStore,
   parsePreferenceChange,
@@ -35,6 +42,7 @@ import {
 import type {
   DesktopDisplay,
   GeometrySnapshot,
+  PointerInput,
   Preferences,
   PresentationFrame,
 } from './shared/contracts.js';
@@ -119,6 +127,40 @@ async function start(): Promise<void> {
   );
   let overlay: BrowserWindow;
   let settingsWindow: BrowserWindow | null = null;
+  let voiceActive = false;
+  const chat = new CompanionChatWindow(
+    __dirname,
+    app.getPath('userData'),
+    () => preferences.color,
+    {
+      active(value) {
+        voiceActive = value;
+      },
+      ready() {
+        if (quitting) return;
+        companionMenu.close();
+        rebuildMenu();
+      },
+    },
+  );
+  const clickGesture = new CompanionClick();
+  let dismissMenuClick = false;
+  let menuOpen = false;
+  const companionMenu = new CompanionCloudMenu(__dirname, {
+    change(open) {
+      menuOpen = open;
+      updateOptions();
+    },
+    action(action) {
+      if (action === 'chat') openChat();
+      else if (action === 'talk') openTalk();
+      else {
+        userHidden = true;
+        chat.hide();
+        syncVisibility();
+      }
+    },
+  });
   let audioError = '';
   let rendererReady = false,
     userHidden = false,
@@ -161,15 +203,11 @@ async function start(): Promise<void> {
       },
       pointer: (input) => {
         if (!capturing) return;
-        simulation.pointer({
+        handlePointer({
           kind: input.down ? 'move' : 'up',
           point: input.point,
           atMs: performance.now(),
         });
-        if (!input.down) {
-          capturing = false;
-          helper.command('release');
-        }
       },
     },
   );
@@ -182,7 +220,8 @@ async function start(): Promise<void> {
   }
   function updateOptions(): void {
     simulation.setOptions({
-      paused: preferences.paused,
+      paused: preferences.paused || menuOpen,
+      frozen: menuOpen,
       reducedMotion:
         preferences.reducedMotion ||
         systemPreferences.getAnimationSettings().prefersReducedMotion,
@@ -210,12 +249,13 @@ async function start(): Promise<void> {
   }
   function changePreferences(change: Partial<Preferences>): void {
     preferences = { ...preferences, ...change };
+    if (change.color) chat.updateAppearance();
     updateOptions();
     rebuildMenu();
     void savePreferences();
   }
   function cancelCapture(): void {
-    simulation.pointer({
+    handlePointer({
       kind: 'cancel',
       point: screen.getCursorScreenPoint(),
       atMs: performance.now(),
@@ -226,6 +266,60 @@ async function start(): Promise<void> {
       overlay.setIgnoreMouseEvents(true, { forward: true });
       ignored = true;
     }
+  }
+  function handlePointer(input: PointerInput): void {
+    if (input.kind === 'down') {
+      dismissMenuClick = companionMenu.isOpen;
+      if (dismissMenuClick) companionMenu.close();
+    }
+    simulation.pointer(input);
+    const clicked = clickGesture.pointer(input);
+    if (input.kind === 'up' || input.kind === 'cancel') {
+      capturing = false;
+      helper.command('release');
+    }
+    if (clicked && !dismissMenuClick) openCompanionMenu();
+  }
+  function panelBounds(width: number, height: number) {
+    const frame = simulation.frame();
+    const display =
+      currentDisplays.find((d) => d.id === frame.displayId) ??
+      currentDisplays[0];
+    return companionPanelBounds(frame.root, display.workArea, width, height);
+  }
+  function openChat(): void {
+    userHidden = false;
+    syncVisibility();
+    void chat.open(panelBounds(440, 620)).catch((error) => {
+      void diagnostics.record('chat-open-failed', {
+        message: String(error).slice(0, 300),
+      });
+    });
+  }
+  function openTalk(): void {
+    userHidden = false;
+    syncVisibility();
+    void chat.talk(panelBounds(440, 620)).catch((error) => {
+      void diagnostics.record('chat-open-failed', {
+        message: String(error).slice(0, 300),
+      });
+    });
+  }
+  function openCompanionMenu(): void {
+    if (companionMenu.isOpen) {
+      companionMenu.close();
+      return;
+    }
+    const frame = simulation.frame();
+    const display =
+      currentDisplays.find((d) => d.id === frame.displayId) ??
+      currentDisplays[0];
+    void companionMenu.open(
+      companionMenuLayout(frame.root, display.bounds),
+      preferences.reducedMotion ||
+        systemPreferences.getAnimationSettings().prefersReducedMotion,
+      chat.voiceReady,
+    );
   }
   function refreshWorld(snapshot: GeometrySnapshot | null): void {
     const key = `${snapshot?.helperSession ?? 'none'}:${snapshot?.seq ?? 0}:${displayRevision}`;
@@ -257,6 +351,7 @@ async function start(): Promise<void> {
       !osSuspended &&
       helper.current(performance.now())?.sceneValid !== false &&
       !assetError;
+    if (userHidden || osSuspended) chat.hide();
     if (next === visible || !overlay || overlay.isDestroyed()) return;
     visible = next;
     healthySince = null;
@@ -273,6 +368,7 @@ async function start(): Promise<void> {
       mailbox.reset();
       overlay.showInactive();
     } else {
+      companionMenu.close();
       cancelCapture();
       simulation.suspend();
       mailbox.reset();
@@ -292,6 +388,16 @@ async function start(): Promise<void> {
         enabled: false,
       },
       { type: 'separator' },
+      { label: 'Chat with Dot', click: openChat },
+      { label: 'Talk with Dot', click: openTalk },
+      {
+        label: 'Chat connection…',
+        click: () => {
+          userHidden = false;
+          syncVisibility();
+          void chat.configure(panelBounds(440, 620)).catch(() => {});
+        },
+      },
       { label: 'Customize Dot', click: openSettings },
       {
         label: 'Body color',
@@ -411,6 +517,7 @@ async function start(): Promise<void> {
       preferences: { ...preferences },
       hovered: hitTestRig(cursor, state),
       visible: show,
+      voiceActive,
       displayBounds: (
         currentDisplays.find((d) => d.id === state.displayId) ??
         currentDisplays[0]
@@ -443,6 +550,7 @@ async function start(): Promise<void> {
       attempt: restarts + 1,
     });
     rendererReady = false;
+    companionMenu.close();
     cancelCapture();
     simulation.suspend();
     mailbox.reset();
@@ -605,7 +713,7 @@ async function start(): Promise<void> {
       helper.command('capture');
     }
     if (!capturing && input.kind !== 'hover') return;
-    simulation.pointer({
+    handlePointer({
       kind: input.kind,
       point: actual,
       atMs: performance.now(),
@@ -678,7 +786,8 @@ async function start(): Promise<void> {
       return;
     }
     const cursor = screen.getCursorScreenPoint();
-    simulation.pointer({
+    companionMenu.pointer(cursor);
+    handlePointer({
       kind: capturing ? 'move' : 'hover',
       point: cursor,
       atMs: now,
@@ -757,6 +866,7 @@ async function start(): Promise<void> {
     if (quitting) return;
     event.preventDefault();
     quitting = true;
+    chat.hide();
     clearInterval(ticker);
     if (retryTimer) clearTimeout(retryTimer);
     cancelCapture();
@@ -765,6 +875,8 @@ async function start(): Promise<void> {
     void savePreferences().finally(() => {
       tray.destroy();
       settingsWindow?.destroy();
+      companionMenu.destroy();
+      chat.destroy();
       overlay.destroy();
       app.exit(0);
     });

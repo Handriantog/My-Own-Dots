@@ -1,3 +1,11 @@
+import type { DesktopFolderBridge } from '../desktop/shared/folder-contract';
+
+declare global {
+  interface Window {
+    dotFolders?: DesktopFolderBridge;
+  }
+}
+
 let token = sessionStorage.getItem('opendots-token') ?? '';
 export function setToken(value: string) {
   token = value;

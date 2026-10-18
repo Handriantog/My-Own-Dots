@@ -56,13 +56,14 @@ export class CompanionAudio {
     frame: SimulationFrame,
     prefs: Preferences,
     display: { x: number; width: number },
+    voiceActive = false,
   ): void {
     if (this.disposed || !this.policy) return;
     this.suspended = false;
     if (this.context.state === 'suspended') void this.context.resume();
     const now = this.context.currentTime;
     this.master.gain.setTargetAtTime(
-      prefs.muted ? 0 : prefs.volume,
+      prefs.muted ? 0 : prefs.volume * (voiceActive ? 0.1 : 1),
       now,
       0.018,
     );

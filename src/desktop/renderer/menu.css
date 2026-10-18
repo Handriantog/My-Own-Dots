@@ -1,0 +1,171 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #385471;
+  background: transparent;
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  user-select: none;
+}
+.definitions {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+nav {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.cloud-button {
+  position: absolute;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  cursor: pointer;
+  outline: none;
+  transform-origin: 20% 80%;
+  animation: arrive 260ms cubic-bezier(0.2, 0.8, 0.25, 1.2) both;
+}
+.cloud-shape {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  fill: #fbfdff;
+  stroke: #d6e5f3;
+  stroke-width: 1;
+  filter: drop-shadow(0 2px 2px #20395424);
+  transition:
+    fill 160ms,
+    filter 160ms,
+    transform 160ms;
+}
+.talk {
+  animation-delay: 55ms;
+  color: #84849a;
+  cursor: default;
+}
+.talk .cloud-shape {
+  fill: #f1f0f9;
+  stroke: #dddbea;
+}
+.hide {
+  animation-delay: 110ms;
+  color: #647b80;
+}
+.hide .cloud-shape {
+  fill: #f5fbfa;
+  stroke: #d9e9e5;
+}
+.content {
+  position: absolute;
+  inset: 8px 7px 13px;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.content > span:not(.hint) {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.1px;
+  text-align: left;
+}
+.icon {
+  width: 16px;
+  height: 16px;
+  align-self: center;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.hint {
+  position: absolute;
+  top: 27px;
+  left: 0;
+  right: 0;
+  font-size: 8px;
+  text-align: center;
+  opacity: 0.72;
+}
+.cloud-button:not([aria-disabled]):hover .cloud-shape {
+  fill: #eaf5ff;
+  filter: drop-shadow(0 2px 3px #20395430);
+  transform: translateY(-1px);
+}
+.cloud-button:focus-visible .cloud-shape {
+  stroke: #5085b8;
+  stroke-width: 2.5;
+}
+.cloud-button:not([aria-disabled]):active .cloud-shape {
+  transform: scale(0.96);
+}
+.cloud-button[data-mirrored='true'] .cloud-shape {
+  scale: -1 1;
+}
+.cloud-button[data-mirrored='true'] {
+  transform-origin: 80% 80%;
+}
+@keyframes arrive {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.88);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+body[data-still='true'] .cloud-button {
+  animation: none;
+}
+body[data-still='true'] .cloud-shape {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cloud-button {
+    animation: none;
+  }
+  .cloud-shape {
+    transition: none;
+  }
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #d5e8f8;
+  }
+  .cloud-shape {
+    fill: #283a4c;
+    stroke: #516a82;
+  }
+  .talk {
+    color: #c1bcd7;
+  }
+  .talk .cloud-shape {
+    fill: #353247;
+    stroke: #5c5774;
+  }
+  .hide {
+    color: #c2dcd6;
+  }
+  .hide .cloud-shape {
+    fill: #293e3d;
+    stroke: #4e6d67;
+  }
+  .cloud-button:not([aria-disabled]):hover .cloud-shape {
+    fill: #37536b;
+  }
+}

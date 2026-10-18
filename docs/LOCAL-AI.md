@@ -1,6 +1,6 @@
 # Your subscriptions and local conversations
 
-My Own Dots is a fork of OpenDots for MyOwnStack. It keeps the workspace, specialist Dots, saved pages, tools, approvals and scheduled work. Its default backend uses the published `myown-llm-integrator@0.1.0` npm package and PostgreSQL on your machine. No CopilotKit account or model API key is required for this configuration.
+My Own Dots is a fork of OpenDots for MyOwnStack. It keeps the workspace, specialist Dots, saved pages, tools, approvals and scheduled work. Its default backend uses the published `myown-llm-integrator@0.2.0` npm package and PostgreSQL on your machine. No CopilotKit account or model API key is required for this configuration.
 
 ## Start locally
 
@@ -53,7 +53,7 @@ One application server per local workspace is supported. Per-thread database loc
 ## Optional services
 
 - **Managed Slack and Automatic Learning:** unavailable in local mode. The app's explicit memories and MCP connections continue to work. Use an explicit Intelligence backend only if you want those managed features.
-- **Voice:** the current realtime speech adapter still requires `VOICE_API_KEY` and `VOICE_MODEL`; a text subscription does not supply realtime speech. Voice is disabled until configured.
+- **Voice:** [local voice calls](desktop/local-voice-calls.md) use explicitly installed Whisper, Silero and Kokoro models with the existing subscription agent. This path needs no paid speech API. The separate Realtime adapter requires `VOICE_API_KEY` and `VOICE_MODEL`; both voice paths remain disabled until configured.
 - **Web research:** disabled by default. Select `WEB_SEARCH_PROVIDER=browser` with the local browser worker for URL reading, or explicitly select `parallel` to use that third-party search service. See [setup](SETUP.md#browser-tool).
 - **Connected apps:** Composio remains optional and disabled until configured and permitted. Direct MCP connections offer a separate integration path.
 - **Dot computers:** remain optional isolated OpenBot containers. See [computers](COMPUTERS.md).

@@ -1,11 +1,18 @@
 import { MemoryStore } from './memory-store.js';
 import { ComputerStore } from './computer-store.js';
 import { ConnectionStore } from './connection-store.js';
+import { FolderAccessService } from './folder-access.js';
 import { Pages } from './pages.js';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import type { VoiceDelivery } from '../shared/local-voice.js';
+import {
+  DEFAULT_VOICE_SETTINGS,
+  voiceSettingsSchema,
+  type VoiceSettings,
+} from '../shared/voice-settings.js';
 import { validateLearningSettings } from '../shared/learning.js';
 import type { CallReceipt, Conversation, Dot, Space } from '../shared/types.js';
 export class WorkspaceStore {
@@ -14,6 +21,7 @@ export class WorkspaceStore {
   readonly pages: Pages;
   readonly computers: ComputerStore;
   readonly connections: ConnectionStore;
+  readonly folders: FolderAccessService;
   constructor(
     path: string,
     readonly ownerId: string,
@@ -26,6 +34,8 @@ export class WorkspaceStore {
       CREATE TABLE IF NOT EXISTS thread_bindings(id TEXT PRIMARY KEY, dotId TEXT NOT NULL, ownerId TEXT NOT NULL, title TEXT NOT NULL, createdAt INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS task_threads(taskId TEXT PRIMARY KEY, threadId TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS calls(id TEXT PRIMARY KEY, threadId TEXT NOT NULL, startedAt INTEGER NOT NULL, endedAt INTEGER, status TEXT NOT NULL, transcript TEXT NOT NULL, error TEXT);
+      CREATE TABLE IF NOT EXISTS local_voice_delivery(callId TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS dot_voice_settings(dotId TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS captures(threadId TEXT PRIMARY KEY, value TEXT NOT NULL);`);
     for (const [table, column, definition] of [
       ['dots', 'learningContainerId', 'TEXT'],
@@ -60,6 +70,12 @@ export class WorkspaceStore {
     this.memory = new MemoryStore(this.db, ownerId);
     this.computers = new ComputerStore(this.db);
     this.connections = new ConnectionStore(this.db);
+    this.folders = new FolderAccessService(this.db, ownerId, {
+      requireDot: (id) => {
+        if (!this.dot(id)) throw new Error('Dot not found.');
+      },
+      requireThread: (threadId, dotId) => this.requireThread(threadId, dotId),
+    });
     this.pages = new Pages(this.db, (id) =>
       this.spaces().some((space) => space.id === id),
     );
@@ -85,6 +101,7 @@ export class WorkspaceStore {
     }
   }
   close() {
+    this.folders.close();
     this.db.close();
   }
   spaces(): Space[] {
@@ -125,6 +142,25 @@ export class WorkspaceStore {
   }
   dot(id: string) {
     return this.dots().find((dot) => dot.id === id);
+  }
+  voiceSettings(dotId: string): VoiceSettings {
+    if (!this.dot(dotId)) throw new Error('Dot not found.');
+    const row = this.db
+      .prepare('SELECT value FROM dot_voice_settings WHERE dotId=?')
+      .get(dotId);
+    return row
+      ? voiceSettingsSchema.parse(JSON.parse(String(row.value)))
+      : { ...DEFAULT_VOICE_SETTINGS };
+  }
+  setVoiceSettings(dotId: string, input: unknown): VoiceSettings {
+    if (!this.dot(dotId)) throw new Error('Dot not found.');
+    const settings = voiceSettingsSchema.parse(input);
+    this.db
+      .prepare(
+        'INSERT OR REPLACE INTO dot_voice_settings(dotId,value) VALUES (?,?)',
+      )
+      .run(dotId, JSON.stringify(settings));
+    return settings;
   }
   createDot(
     spaceId: string,
@@ -319,6 +355,21 @@ export class WorkspaceStore {
         `SELECT * FROM calls ${threadId ? 'WHERE threadId=?' : ''} ORDER BY startedAt DESC`,
       )
       .all(...(threadId ? [threadId] : [])) as unknown as CallReceipt[];
+  }
+  saveVoiceDelivery(id: string, rows: VoiceDelivery[]): void {
+    this.call(id);
+    this.db
+      .prepare(
+        'INSERT INTO local_voice_delivery VALUES (?, ?) ON CONFLICT(callId) DO UPDATE SET value=excluded.value',
+      )
+      .run(id, JSON.stringify(rows));
+  }
+  voiceDelivery(id: string): VoiceDelivery[] {
+    this.call(id);
+    const row = this.db
+      .prepare('SELECT value FROM local_voice_delivery WHERE callId=?')
+      .get(id);
+    return row ? (JSON.parse(String(row.value)) as VoiceDelivery[]) : [];
   }
   createCall(threadId: string): CallReceipt {
     this.requireThread(threadId);

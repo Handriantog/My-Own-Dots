@@ -48,7 +48,7 @@ vi.mock('electron', async () => {
     visible = false;
     bounds = { x: 0, y: 0, width: 320, height: 320 };
     webContents = Object.assign(new EventEmitter(), {
-      id: 1,
+      id: host.windows.length + 1,
       mainFrame: { url: 'dots://app/index.html' },
       setWindowOpenHandler: vi.fn(),
       send: (channel: string, frame: PresentationFrame) => {
@@ -71,6 +71,10 @@ vi.mock('electron', async () => {
     showInactive() {
       this.visible = true;
     }
+    show() {
+      this.visible = true;
+    }
+    focus() {}
     hide() {
       this.visible = false;
     }
@@ -79,6 +83,9 @@ vi.mock('electron', async () => {
     }
     setPosition(x: number, y: number) {
       this.bounds = { ...this.bounds, x, y };
+    }
+    setBounds(bounds: typeof this.bounds) {
+      this.bounds = bounds;
     }
     isDestroyed() {
       return false;
@@ -89,7 +96,8 @@ vi.mock('electron', async () => {
     setAlwaysOnTop() {}
     setVisibleOnAllWorkspaces() {}
     setIgnoreMouseEvents() {}
-    async loadURL() {
+    async loadURL(url: string) {
+      this.webContents.mainFrame.url = url;
       host.loads++;
     }
   }
@@ -211,6 +219,90 @@ function invalidScene() {
   );
   expect(host.windows[0].visible).toBe(false);
 }
+describe('companion click menu', () => {
+  it('hides chat on lock even if a geometry transition already hid the overlay', async () => {
+    const { CompanionChatWindow } =
+      await import('../../src/desktop/host/chat-window.js');
+    const hide = vi.spyOn(CompanionChatWindow.prototype, 'hide');
+    try {
+      invalidScene();
+      expect(hide).not.toHaveBeenCalled();
+      host.power!.emit('lock-screen');
+      expect(hide).toHaveBeenCalledOnce();
+    } finally {
+      hide.mockRestore();
+    }
+  });
+  function pointer(kind: 'down' | 'move' | 'up') {
+    const window = host.windows[0];
+    host.ipc!.emit(
+      'dot:pointer',
+      {
+        sender: window.webContents,
+        senderFrame: window.webContents.mainFrame,
+      },
+      { kind, point: host.cursor, atMs: performance.now() },
+    );
+  }
+  it('opens the cloud menu on a body click and can restore the hidden Dot', async () => {
+    host.cursor = {
+      x: host.frame!.simulation.root.x,
+      y: host.frame!.simulation.root.y - 55,
+    };
+    pointer('down');
+    expect(host.windows).toHaveLength(1);
+    pointer('up');
+    await vi.advanceTimersByTimeAsync(0);
+    const menu = host.windows[1];
+    expect(menu.webContents.mainFrame.url).toContain('dots://app/menu.html?');
+    expect(menu.visible).toBe(true);
+    host.ipc!.emit(
+      'dot:menu:action',
+      { sender: menu.webContents, senderFrame: menu.webContents.mainFrame },
+      'hide',
+    );
+    expect(host.windows[0].visible).toBe(false);
+    host.menu.find((item) => item.label === 'Show Dot')!.click!();
+    expect(host.windows[0].visible).toBe(true);
+  });
+  it('preserves pickup without opening a menu on release', () => {
+    host.cursor = {
+      x: host.frame!.simulation.root.x,
+      y: host.frame!.simulation.root.y - 55,
+    };
+    pointer('down');
+    host.cursor.x += 20;
+    pointer('move');
+    pointer('up');
+    expect(host.windows).toHaveLength(1);
+  });
+  it('dismisses on another body press and does not reopen on release', async () => {
+    host.cursor = {
+      x: host.frame!.simulation.root.x,
+      y: host.frame!.simulation.root.y - 55,
+    };
+    pointer('down');
+    pointer('up');
+    await vi.advanceTimersByTimeAsync(0);
+    const menu = host.windows[1];
+    expect(menu.visible).toBe(true);
+    pointer('down');
+    expect(menu.visible).toBe(false);
+    pointer('up');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(menu.visible).toBe(false);
+    pointer('down');
+    pointer('up');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(menu.visible).toBe(true);
+    pointer('down');
+    host.cursor.x += 20;
+    pointer('move');
+    pointer('up');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(menu.visible).toBe(false);
+  });
+});
 describe('host scene recovery', () => {
   function ready() {
     const window = host.windows[0];

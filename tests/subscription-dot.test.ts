@@ -3,9 +3,78 @@ import { lastValueFrom, toArray } from 'rxjs';
 import { DotAgent } from '../src/server/dot-agent.js';
 import { Store } from '../src/server/store.js';
 import { WorkspaceStore } from '../src/server/workspace.js';
+import {
+  setVoiceTurn,
+  clearVoiceTurn,
+} from '../src/server/local-voice/context.js';
 const engine = vi.hoisted(() => ({ runAgent: vi.fn() }));
 vi.mock('myown-llm-integrator', () => engine);
 afterEach(() => vi.restoreAllMocks());
+it('adds English-only guidance to governed voice turns without changing typed chat', async () => {
+  const store = new Store(':memory:');
+  const workspace = new WorkspaceStore(':memory:', 'owner');
+  try {
+    const dot = workspace.dots()[0];
+    workspace.bindThread('voice', dot.id, 'Voice');
+    workspace.setVoiceSettings(dot.id, {
+      voiceId: 'bm_george',
+      personality: 'serious',
+    });
+    engine.runAgent.mockReset().mockResolvedValue({
+      result: { text: 'Hello', toolCalls: [] },
+      usage: {},
+    });
+    const agent = new DotAgent(
+      store,
+      workspace,
+      {
+        conversationBackend: 'local',
+        localDatabaseUrl: 'postgres://unused',
+        llmBackend: 'subscription',
+        llmProvider: 'codex',
+        baseUrl: '',
+        runtimeUrl: '',
+        voiceName: 'marin',
+        slackUsers: [],
+        webSearchProvider: 'disabled',
+      },
+      dot.id,
+    );
+    const input = {
+      threadId: 'voice',
+      runId: 'run',
+      messages: [{ id: 'user', role: 'user' as const, content: 'Hello' }],
+      context: [],
+      state: {},
+      tools: [],
+      forwardedProps: {},
+    };
+    setVoiceTurn(workspace, {
+      callId: 'call',
+      dotId: dot.id,
+      threadId: 'voice',
+      messageId: 'user',
+      text: 'Hello',
+    });
+    await lastValueFrom(agent.run(input).pipe(toArray()));
+    expect(engine.runAgent.mock.calls.at(-1)?.[0].prompt).toContain(
+      'Reply in English only',
+    );
+    expect(engine.runAgent.mock.calls.at(-1)?.[0].prompt).toContain(
+      'measured, professional',
+    );
+    clearVoiceTurn(workspace, 'call');
+    await lastValueFrom(
+      agent.run({ ...input, runId: 'typed' }).pipe(toArray()),
+    );
+    expect(engine.runAgent.mock.calls.at(-1)?.[0].prompt).not.toContain(
+      'Reply in English only',
+    );
+  } finally {
+    store.close();
+    workspace.close();
+  }
+});
 it('runs Dot tools through the subscription without Intelligence or API credentials', async () => {
   const store = new Store(':memory:');
   const workspace = new WorkspaceStore(':memory:', 'owner');

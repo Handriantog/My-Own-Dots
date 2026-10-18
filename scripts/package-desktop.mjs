@@ -34,6 +34,8 @@ const bundles = await packager({
     LSMinimumSystemVersion: '14.0',
     NSHighResolutionCapable: true,
     NSHumanReadableCopyright: 'My Own Dots',
+    NSMicrophoneUsageDescription:
+      'Talk with your selected Dot using local speech recognition. The microphone is active only during a call you start.',
   },
 });
 for (const directory of bundles) {
@@ -51,7 +53,7 @@ for (const directory of bundles) {
   if (archive.status !== 0) process.exit(archive.status ?? 1);
   writeFileSync(
     path.join(releaseDirectory, 'BUILD.txt'),
-    `My Own Dots 0.1.0\nBuilt: ${new Date().toISOString()}\nArchitecture: ${process.arch}\nElectron: ${electronVersion}\nSigning: ${signing}; not notarized\nRuntime: bundled; no Node/Python/Docker/backend required\nApp: ${app}\nZip: ${zip}\n`,
+    `My Own Dots 0.1.0\nBuilt: ${new Date().toISOString()}\nArchitecture: ${process.arch}\nElectron: ${electronVersion}\nSigning: ${signing}; not notarized\nRuntime: bundled companion; AI chat connects to a separately running local Dots workspace\nApp: ${app}\nZip: ${zip}\n`,
   );
   console.log(
     `App: ${app}\nArchive: ${zip}\n${signing}; notarization remains a release step.`,

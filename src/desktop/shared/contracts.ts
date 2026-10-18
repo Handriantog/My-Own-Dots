@@ -205,6 +205,7 @@ export interface PresentationFrame {
   hovered: boolean;
   visible: boolean;
   displayBounds: Rect;
+  voiceActive?: boolean;
 }
 export interface DesktopBridge {
   onFrame(callback: (frame: PresentationFrame) => void): () => void;

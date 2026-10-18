@@ -53,7 +53,10 @@ const harness = vi.hoisted(() => {
       };
     }),
     connectAgent: vi.fn(async () => ({})),
-    runAgent: vi.fn(async () => ({ newMessages: [] })),
+    stopAgent: vi.fn(),
+    runAgent: vi.fn(async () => ({
+      newMessages: [] as Array<{ role: string }>,
+    })),
     emitError(message: string, code: string) {
       const params = { error: new Error(message), code };
       for (const subscriber of [...copilotSubscribers])
@@ -61,6 +64,18 @@ const harness = vi.hoisted(() => {
     },
   };
   return {
+    stopVoicePreview: vi.fn(),
+    startLocalVoice: vi.fn(async () => {}),
+    localVoiceStatus: 'idle' as 'idle' | 'active',
+    localVoiceOptions: undefined as
+      | undefined
+      | {
+          onCancelTranscript(messageId: string): Promise<void>;
+          onTranscript(input: {
+            messageId: string;
+            text: string;
+          }): Promise<void>;
+        },
     agent,
     agentSubscribers,
     copilotkit,
@@ -90,11 +105,43 @@ vi.mock('../src/client/ChatTranscript', () => ({
 }));
 vi.mock('../src/client/Mascot', () => ({ Mascot: () => null }));
 vi.mock('../src/client/CallView', () => ({ CallView: () => null }));
+vi.mock('../src/client/local-voice/VoiceSettings', async () => {
+  const { useImperativeHandle } = await import('react');
+  return {
+    VoiceSettings: ({
+      ref,
+    }: {
+      ref: import('react').Ref<{ stopPreview(): void }>;
+    }) => {
+      useImperativeHandle(ref, () => ({
+        stopPreview: harness.stopVoicePreview,
+      }));
+      return null;
+    },
+  };
+});
 vi.mock('../src/client/useVoice', () => ({
   useVoice: () => ({ status: 'idle', error: '', end: vi.fn() }),
 }));
+vi.mock('../src/client/local-voice/useLocalVoice', () => ({
+  useLocalVoice: (options: {
+    onCancelTranscript(messageId: string): Promise<void>;
+    onTranscript(input: { messageId: string; text: string }): Promise<void>;
+  }) => {
+    harness.localVoiceOptions = options;
+    return {
+      status: harness.localVoiceStatus,
+      error: '',
+      start: harness.startLocalVoice,
+      end: vi.fn(),
+      interrupt: vi.fn(),
+    };
+  },
+}));
 
 import { Chat } from '../src/client/Chat';
+import { CallView } from '../src/client/CallView';
+import { VoiceSettings } from '../src/client/local-voice/VoiceSettings';
 
 class ReplayAgent extends AbstractAgent {
   events: BaseEvent[] = [];
@@ -241,6 +288,9 @@ function alertText(): string[] {
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   harness.api.mockClear();
+  harness.stopVoicePreview.mockClear();
+  harness.startLocalVoice.mockClear();
+  harness.localVoiceStatus = 'idle';
   harness.agent.subscribe.mockClear();
   harness.copilotkit.subscribe.mockClear();
   harness.copilotkit.connectAgent.mockClear();
@@ -248,6 +298,209 @@ beforeEach(() => {
   harness.useAgent.mockReturnValue({ agent: harness.agent, isReady: true });
   harness.useCopilotKit.mockReturnValue({ copilotkit: harness.copilotkit });
   vi.stubGlobal('window', { prompt: vi.fn(() => 'Saved conversation') });
+});
+
+it('stops voice previews synchronously before starting a call and locks settings during it', async () => {
+  const next = { ...props, localVoiceEnabled: true, localVoiceReady: true };
+  await act(async () => {
+    root = create(createElement(Chat, next));
+  });
+  expect(root.root.findByType(VoiceSettings).props.callActive).toBe(false);
+  harness.startLocalVoice.mockImplementationOnce(async () => {
+    expect(harness.stopVoicePreview).toHaveBeenCalledOnce();
+  });
+  await act(async () => {
+    root.root.findByProps({ 'aria-label': 'Start voice call' }).props.onClick();
+  });
+  expect(harness.startLocalVoice).toHaveBeenCalledOnce();
+  harness.localVoiceStatus = 'active';
+  await act(async () => root.update(createElement(Chat, next)));
+  expect(root.root.findByType(VoiceSettings).props.callActive).toBe(true);
+});
+
+it('shows connecting immediately and starts native Talk once after chat is ready', async () => {
+  let connected!: () => void;
+  harness.copilotkit.connectAgent.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        connected = () => resolve({});
+      }),
+  );
+  const target = new EventTarget();
+  const activate = vi.fn(async () => {
+    target.dispatchEvent(new Event('dot-voice-start'));
+  });
+  vi.stubGlobal(
+    'window',
+    Object.assign(target, {
+      dotVoice: { activate, setReady: vi.fn(async () => {}) },
+    }),
+  );
+  const consumed = vi.fn();
+  const next = {
+    ...props,
+    localVoiceReady: true,
+    localVoiceEnabled: true,
+    voiceIntent: 1,
+    onVoiceConsumed: consumed,
+  };
+  await act(async () => {
+    root = create(createElement(Chat, next));
+  });
+  expect(root.root.findByType(CallView).props.voice.status).toBe('connecting');
+  expect(harness.startLocalVoice).not.toHaveBeenCalled();
+  await act(async () => {
+    connected();
+  });
+  expect(activate).toHaveBeenCalledOnce();
+  expect(harness.startLocalVoice).toHaveBeenCalledOnce();
+  expect(consumed).toHaveBeenCalledOnce();
+  await act(async () => {
+    root.update(createElement(Chat, { ...next, calls: [] }));
+  });
+  expect(harness.startLocalVoice).toHaveBeenCalledOnce();
+  expect(root.root.findAllByProps({ children: 'Start call' })).toHaveLength(0);
+});
+
+it('registers cold native readiness before requesting the Talk activation', async () => {
+  const target = new EventTarget();
+  let registered!: () => void;
+  const setReady = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        registered = resolve;
+      }),
+  );
+  const activate = vi.fn(async () => {
+    target.dispatchEvent(new Event('dot-voice-start'));
+  });
+  vi.stubGlobal(
+    'window',
+    Object.assign(target, { dotVoice: { setReady, activate } }),
+  );
+  const next = {
+    ...props,
+    localVoicePending: true,
+    voiceIntent: 1,
+    onVoiceConsumed: vi.fn(),
+  };
+  await act(async () => {
+    root = create(createElement(Chat, next));
+  });
+  expect(activate).not.toHaveBeenCalled();
+  await act(async () => {
+    root.update(
+      createElement(Chat, {
+        ...next,
+        localVoicePending: false,
+        localVoiceReady: true,
+      }),
+    );
+  });
+  expect(setReady).toHaveBeenCalledWith(true);
+  expect(activate).not.toHaveBeenCalled();
+  await act(async () => registered());
+  expect(activate).toHaveBeenCalledOnce();
+  expect(harness.startLocalVoice).toHaveBeenCalledOnce();
+});
+
+it('reports unavailable local voice instead of starting a deferred or paid call', async () => {
+  const consumed = vi.fn();
+  const next = {
+    ...props,
+    voiceReady: true,
+    localVoiceEnabled: true,
+    localVoiceReason: 'Install the selected speech model.',
+    voiceIntent: 1,
+    onVoiceConsumed: consumed,
+  };
+  await act(async () => {
+    root = create(createElement(Chat, next));
+  });
+  expect(alertText()).toContain('Install the selected speech model.');
+  expect(consumed).toHaveBeenCalledOnce();
+  await act(async () => {
+    root.update(createElement(Chat, { ...next, localVoiceReady: true }));
+  });
+  expect(harness.startLocalVoice).not.toHaveBeenCalled();
+});
+
+it('does not activate when a Talk is cancelled while readiness registration is pending', async () => {
+  let registered!: () => void;
+  const activate = vi.fn(async () => {});
+  vi.stubGlobal(
+    'window',
+    Object.assign(new EventTarget(), {
+      dotVoice: {
+        setReady: () =>
+          new Promise<void>((resolve) => {
+            registered = resolve;
+          }),
+        activate,
+      },
+    }),
+  );
+  const next = {
+    ...props,
+    localVoiceReady: true,
+    voiceIntent: 1,
+    onVoiceConsumed: vi.fn(),
+  };
+  await act(async () => {
+    root = create(createElement(Chat, next));
+  });
+  await act(async () => {
+    root.update(createElement(Chat, { ...next, voiceIntent: 0 }));
+  });
+  await act(async () => registered());
+  expect(activate).not.toHaveBeenCalled();
+  expect(harness.startLocalVoice).not.toHaveBeenCalled();
+});
+
+it('cancels a waiting Talk and never starts it when chat later loads', async () => {
+  let connected!: () => void;
+  harness.copilotkit.connectAgent.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        connected = () => resolve({});
+      }),
+  );
+  const consumed = vi.fn();
+  await act(async () => {
+    root = create(
+      createElement(Chat, {
+        ...props,
+        localVoiceReady: true,
+        voiceIntent: 1,
+        onVoiceConsumed: consumed,
+      }),
+    );
+  });
+  await act(async () => {
+    await root.root.findByType(CallView).props.voice.end();
+  });
+  await act(async () => {
+    connected();
+  });
+  expect(consumed).toHaveBeenCalledOnce();
+  expect(harness.startLocalVoice).not.toHaveBeenCalled();
+});
+
+it('consumes another Talk while already calling without restarting or leaving a pending request', async () => {
+  harness.localVoiceStatus = 'active';
+  const consumed = vi.fn();
+  await act(async () => {
+    root = create(
+      createElement(Chat, {
+        ...props,
+        localVoiceReady: true,
+        voiceIntent: 2,
+        onVoiceConsumed: consumed,
+      }),
+    );
+  });
+  expect(consumed).toHaveBeenCalledOnce();
+  expect(harness.startLocalVoice).not.toHaveBeenCalled();
 });
 
 afterEach(async () => {
@@ -461,4 +714,100 @@ it('runs local Dream as an app command and preserves its draft on server failure
 it('does not show local memory controls in hosted chat', async () => {
   await mountChat();
   expect(JSON.stringify(root.toJSON())).not.toContain('Memory activity');
+});
+
+it('submits a final voice transcript once through the chat agent and preserves the draft', async () => {
+  harness.agent.addMessage.mockClear();
+  harness.copilotkit.runAgent.mockClear();
+  harness.copilotkit.runAgent.mockResolvedValueOnce({
+    newMessages: [{ role: 'assistant' }],
+  });
+  await mountChat();
+  const draft = () =>
+    root.root.findByProps({ 'aria-label': 'Message your Dot' });
+  await act(async () =>
+    draft().props.onChange({
+      target: { value: 'My unfinished typed thought' },
+    }),
+  );
+  await act(async () =>
+    harness.localVoiceOptions!.onTranscript({
+      messageId: 'voice-final-id',
+      text: 'Hello from voice',
+    }),
+  );
+  await act(async () =>
+    harness.localVoiceOptions!.onTranscript({
+      messageId: 'voice-final-id',
+      text: 'Hello from voice',
+    }),
+  );
+  expect(harness.agent.addMessage).toHaveBeenCalledExactlyOnceWith({
+    id: 'voice-final-id',
+    role: 'user',
+    content: 'Hello from voice',
+  });
+  expect(harness.copilotkit.runAgent).toHaveBeenCalledExactlyOnceWith({
+    agent: harness.agent,
+  });
+  expect(draft().props.value).toBe('My unfinished typed thought');
+});
+
+it('cancels only its voice run without reporting intentional interruption as failure', async () => {
+  harness.copilotkit.stopAgent.mockClear();
+  let resolve!: (result: { newMessages: { role: string }[] }) => void;
+  harness.copilotkit.runAgent.mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  await mountChat();
+  await act(async () => {
+    const pending = harness.localVoiceOptions!.onTranscript({
+      messageId: 'cancel-me',
+      text: 'Hello',
+    });
+    await harness.localVoiceOptions!.onCancelTranscript('unrelated');
+    expect(harness.copilotkit.stopAgent).not.toHaveBeenCalled();
+    const stopped = harness.localVoiceOptions!.onCancelTranscript('cancel-me');
+    resolve({ newMessages: [] });
+    await Promise.all([pending, stopped]);
+  });
+  expect(harness.copilotkit.stopAgent).toHaveBeenCalledExactlyOnceWith({
+    agent: harness.agent,
+  });
+  expect(alertText()).toEqual([]);
+});
+
+it('accepts the next voice turn after cancellation before React commits the idle render', async () => {
+  let resolve!: (result: { newMessages: { role: string }[] }) => void;
+  harness.copilotkit.runAgent.mockReturnValueOnce(
+    new Promise((done) => {
+      resolve = done;
+    }),
+  );
+  harness.copilotkit.runAgent.mockResolvedValueOnce({
+    newMessages: [{ role: 'assistant' }],
+  });
+  harness.agent.addMessage.mockClear();
+  await mountChat();
+  let first!: Promise<void>;
+  await act(async () => {
+    first = harness.localVoiceOptions!.onTranscript({
+      messageId: 'first-voice',
+      text: 'First thought',
+    });
+  });
+  await act(async () => {
+    const stopped =
+      harness.localVoiceOptions!.onCancelTranscript('first-voice');
+    resolve({ newMessages: [] });
+    await Promise.all([first, stopped]);
+    await harness.localVoiceOptions!.onTranscript({
+      messageId: 'second-voice',
+      text: 'Actually, second thought',
+    });
+  });
+  expect(harness.agent.addMessage).toHaveBeenCalledTimes(2);
+  expect(alertText()).toEqual([]);
 });

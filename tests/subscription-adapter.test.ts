@@ -465,3 +465,81 @@ it('includes the output schema in structured-output preparation', async () => {
   ).rejects.toThrow(/Schema capacity/);
   expect(infer).not.toHaveBeenCalled();
 });
+
+it('delivers authorized records before provider completion and does not replay the final answer', async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const authorizeText = vi.fn();
+  const runDecision = vi.fn(async (request) => {
+    await request.onText({ sequence: 0, text: 'First sentence. ' });
+    await gate;
+    await request.onText({ sequence: 1, text: 'Second sentence.' });
+    return answer('First sentence. Second sentence.');
+  });
+  const events: StreamChunk[] = [];
+  const completion = (async () => {
+    for await (const event of chat({
+      adapter: subscriptionText({
+        ...config,
+        stream: { runDecision, authorizeText },
+      }),
+      messages,
+    })) {
+      if (event.type === 'TEXT_MESSAGE_CONTENT')
+        expect(authorizeText).toHaveBeenCalledWith(
+          event.messageId,
+          expect.any(Number),
+          event.delta,
+        );
+      events.push(event);
+    }
+  })();
+  await vi.waitFor(() =>
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'TEXT_MESSAGE_CONTENT' &&
+          event.delta === 'First sentence. ',
+      ),
+    ).toBe(true),
+  );
+  expect(events.some((event) => event.type === 'RUN_FINISHED')).toBe(false);
+  release();
+  await completion;
+  expect(
+    events
+      .filter((event) => event.type === 'TEXT_MESSAGE_CONTENT')
+      .map((event) => event.delta),
+  ).toEqual(['First sentence. ', 'Second sentence.']);
+  expect(runDecision.mock.calls[0][0]).toMatchObject({
+    model: 'configured-model',
+    toolNames: [],
+  });
+  expect(infer).not.toHaveBeenCalled();
+});
+
+it('rejects a mixed streamed-text and tool response without executing tools', async () => {
+  const saved: string[] = [];
+  const events = await collect(
+    chat({
+      adapter: subscriptionText({
+        stream: {
+          authorizeText: vi.fn(),
+          runDecision: async (request) => {
+            await request.onText?.({ sequence: 0, text: 'Saved.' });
+            return answer('Saved.', [
+              { name: 'create_page', argumentsJson: '{"title":"Unsafe"}' },
+            ]);
+          },
+        },
+      }),
+      messages,
+      tools: [pageTool(saved)],
+    }),
+  );
+  expect(saved).toEqual([]);
+  expect(events.some((event) => event.type === 'RUN_ERROR')).toBe(true);
+  expect(events.some((event) => event.type === 'TOOL_CALL_START')).toBe(false);
+});

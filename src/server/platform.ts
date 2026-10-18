@@ -188,6 +188,16 @@ export class Platform {
       await this.handler?.channels?.stop();
     }
   }
+  /** Cancel only a run whose latest input is the server-issued voice message. */
+  async stopVoiceTurn(threadId: string, messageId: string): Promise<void> {
+    this.workspace.requireThread(threadId);
+    const run = (await this.localConversations?.getSnapshot(threadId))?.lastRun;
+    if (
+      run?.status === 'running' &&
+      run.input.messages.findLast((m) => m.role === 'user')?.id === messageId
+    )
+      await this.localRunner?.stop({ threadId, runId: run.runId });
+  }
   async createConversation(dotId: string, title: string) {
     this.requireReady();
     if (!this.workspace.dot(dotId)) throw new Error('Dot not found.');

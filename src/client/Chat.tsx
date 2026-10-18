@@ -7,6 +7,12 @@ import {
   connectionActionTool,
 } from '../shared/connection-types';
 import { ConnectionActionCard } from './ConnectionActionCard';
+import {
+  folderApprovalSchema,
+  folderApprovalTool,
+} from '../shared/folder-access';
+import { FolderAccessCard } from './FolderAccessCard';
+import { FolderAccessSettings } from './FolderAccessSettings';
 import { contextualMessage, type PageContext } from './page-context';
 import { api } from './api';
 import type { Page } from '../server/pages';
@@ -37,15 +43,27 @@ import { ChatTranscript, isInternalVoiceReceipt } from './ChatTranscript';
 import type { CallReceipt, Conversation, Dot } from '../shared/types';
 import { Mascot } from './Mascot';
 import { useVoice } from './useVoice';
+import { useLocalVoice } from './local-voice/useLocalVoice';
+import {
+  VoiceSettings,
+  type VoiceSettingsHandle,
+} from './local-voice/VoiceSettings';
 import { CallView } from './CallView';
 import { shouldSubmitComposerOnKeyDown } from './chat-composer';
 
 export function Chat({
+  companionColor,
   thread,
   dot,
   initialPrompt,
   onConsumed,
   voiceReady,
+  localVoiceReady = false,
+  localVoiceEnabled = false,
+  localVoiceReason,
+  localVoicePending = false,
+  voiceIntent = 0,
+  onVoiceConsumed,
   localMemory = false,
   calls,
   paused,
@@ -53,11 +71,18 @@ export function Chat({
   onSchedule,
   onComputer,
 }: {
+  companionColor?: string;
   thread: Conversation;
   dot: Dot;
   initialPrompt?: string;
   onConsumed: () => void;
   voiceReady: boolean;
+  localVoiceReady?: boolean;
+  localVoiceEnabled?: boolean;
+  localVoiceReason?: string;
+  localVoicePending?: boolean;
+  voiceIntent?: number;
+  onVoiceConsumed?: () => void;
   localMemory?: boolean;
   calls: CallReceipt[];
   paused: boolean;
@@ -107,12 +132,157 @@ export function Chat({
   const chatError = error || runError;
   const [loaded, setLoaded] = useState(false);
   const [running, setRunning] = useState(false);
-  const voice = useVoice(thread.id, onSaved, agent.messages.at(-1)?.id);
+  const voiceSettings = useRef<VoiceSettingsHandle>(null);
+  const voiceRun = useRef<
+    | { messageId: string; done?: Promise<unknown>; cancelled: boolean }
+    | undefined
+  >(undefined);
+  const paidVoice = useVoice(thread.id, onSaved, agent.messages.at(-1)?.id);
+  const localVoice = useLocalVoice({
+    threadId: thread.id,
+    dotId: dot.id,
+    onSaved,
+    onTranscript: ({ messageId, text }) => send(text, messageId),
+    onCancelTranscript: async (messageId) => {
+      const current = voiceRun.current;
+      if (!current || current.messageId !== messageId) return;
+      current.cancelled = true;
+      copilotkit.stopAgent({ agent });
+      await current.done?.catch(() => {});
+    },
+  });
+  const [talkError, setTalkError] = useState('');
+  const [completedIntent, setCompletedIntent] = useState(0);
+  const consumedIntent = useRef(0);
+  const requestedIntent = useRef(0);
+  const currentIntent = useRef(voiceIntent);
+  currentIntent.current = voiceIntent;
+  const talkMounted = useRef(true);
+  useEffect(() => {
+    talkMounted.current = true;
+    return () => {
+      talkMounted.current = false;
+    };
+  }, []);
+  const waitingForTalk =
+    !!voiceIntent &&
+    completedIntent !== voiceIntent &&
+    localVoice.status === 'idle';
+  const consumeTalk = () => {
+    consumedIntent.current = voiceIntent;
+    setCompletedIntent(voiceIntent);
+    onVoiceConsumed?.();
+  };
+  const transport =
+    localVoiceEnabled || localVoiceReady || localVoice.status !== 'idle'
+      ? localVoice
+      : paidVoice;
+  const voice = waitingForTalk
+    ? {
+        ...localVoice,
+        status: 'connecting' as const,
+        phase: 'listening' as const,
+        error: '',
+        caption: 'Preparing your conversation…',
+        end: async () => {
+          consumeTalk();
+        },
+      }
+    : transport;
+  const canCall = localVoiceReady || voiceReady;
+  const voiceMessages = useRef(new Set<string>());
   const sent = useRef(false);
   const bottom = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    if (
+      voiceIntent &&
+      consumedIntent.current !== voiceIntent &&
+      localVoice.status !== 'idle'
+    )
+      consumeTalk();
+  }, [voiceIntent, localVoice.status]);
+  useEffect(() => {
+    if (!waitingForTalk) return;
+    const start = () => {
+      if (
+        requestedIntent.current !== voiceIntent ||
+        consumedIntent.current === voiceIntent
+      )
+        return;
+      voiceSettings.current?.stopPreview();
+      consumeTalk();
+      void localVoice.start();
+    };
+    window.addEventListener?.('dot-voice-start', start);
+    return () => window.removeEventListener?.('dot-voice-start', start);
+  }, [waitingForTalk, voiceIntent, localVoice.start]);
+  useEffect(() => {
+    if (!waitingForTalk || consumedIntent.current === voiceIntent) return;
+    const current = () =>
+      talkMounted.current &&
+      currentIntent.current === voiceIntent &&
+      consumedIntent.current !== voiceIntent;
+    const fail = (reason: string) => {
+      if (!current()) return;
+      setTalkError(reason);
+      consumeTalk();
+    };
+    if (paused) return fail('Resume your Dot before starting a call.');
+    if (!localVoicePending && !localVoiceReady)
+      return fail(
+        localVoiceReason ||
+          'Local voice is not configured. Complete local voice setup, then choose Talk again.',
+      );
+    if (contextError || error) return fail(contextError || error);
+    if (!localVoiceReady || !loaded || !contextReady || running) return;
+    if (requestedIntent.current === voiceIntent) return;
+    requestedIntent.current = voiceIntent;
+    setTalkError('');
+    if (!window.dotVoice)
+      return fail('Reopen Talk from your desktop Dot to start the call.');
+    const bridge = window.dotVoice;
+    // Child effects can run before App publishes cold readiness to the host.
+    // Register it before consuming the native Talk gesture.
+    void bridge
+      .setReady(true)
+      .then(() => {
+        if (current()) return bridge.activate();
+      })
+      .catch((cause) =>
+        fail(
+          cause instanceof Error
+            ? cause.message
+            : 'Could not start the call. Choose Talk again.',
+        ),
+      );
+  }, [
+    waitingForTalk,
+    voiceIntent,
+    paused,
+    localVoicePending,
+    localVoiceReady,
+    localVoiceReason,
+    loaded,
+    contextReady,
+    running,
+    contextError,
+    error,
+  ]);
+  useEffect(() => {
+    if (!waitingForTalk) return;
+    const timeout = setTimeout(() => {
+      if (consumedIntent.current === voiceIntent) return;
+      setTalkError(
+        'The conversation took too long to connect. Choose Talk to try again.',
+      );
+      consumeTalk();
+    }, 30000);
+    return () => clearTimeout(timeout);
+  }, [waitingForTalk, voiceIntent]);
+  useEffect(() => {
     const subscription = copilotkit.subscribe({
       onError: ({ error, code }) => {
+        if (voiceRun.current?.cancelled) return;
         if (
           code === CopilotKitCoreErrorCode.AGENT_RUN_ERROR_EVENT ||
           code === CopilotKitCoreErrorCode.AGENT_RUN_FAILED_EVENT ||
@@ -124,7 +294,9 @@ export function Chat({
       },
     });
     const events = agent.subscribe({
-      onRunErrorEvent: ({ event }) => setRunError(event.message),
+      onRunErrorEvent: ({ event }) => {
+        if (!voiceRun.current?.cancelled) setRunError(event.message);
+      },
       onRunFinishedEvent: ({ outcome }) => {
         if (outcome === 'success') setRunError('');
       },
@@ -152,11 +324,21 @@ export function Chat({
       active = false;
     };
   }, [agent, copilotkit, isReady]);
-  const send = async (text: string) => {
-    if (!text.trim() || running || !loaded || !contextReady || paused) return;
+  const send = async (text: string, voiceMessageId?: string) => {
+    if (voiceMessageId && voiceMessages.current.has(voiceMessageId)) return;
+    // The transport waits for the previous voice promise; React may not have
+    // committed its idle render yet when the next final transcript arrives.
+    const busy = voiceMessageId ? !!voiceRun.current : running;
+    if (!text.trim() || busy || !loaded || !contextReady || paused) {
+      if (voiceMessageId)
+        throw new Error('The conversation is not ready for a voice message.');
+      return;
+    }
+    if (!voiceMessageId && voice.status !== 'idle') return;
     setError('');
     setRunError('');
-    const command = localMemory ? parseMemoryCommand(text) : null;
+    const command =
+      localMemory && !voiceMessageId ? parseMemoryCommand(text) : null;
     if (command) {
       setRunning(true);
       try {
@@ -175,28 +357,49 @@ export function Chat({
       return;
     }
     setRunning(true);
+    if (voiceMessageId) voiceMessages.current.add(voiceMessageId);
     agent.addMessage({
-      id: crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
+      id:
+        voiceMessageId ??
+        crypto.randomUUID?.() ??
+        `${Date.now()}-${Math.random()}`,
       role: 'user',
       content: contextualMessage(text, pageContext),
     });
-    setDraft('');
-    setSource('');
-    setSourceOpen(false);
+    if (!voiceMessageId) {
+      setDraft('');
+      setSource('');
+      setSourceOpen(false);
+    }
     try {
-      const result = await copilotkit.runAgent({ agent });
+      const current = voiceMessageId
+        ? {
+            messageId: voiceMessageId,
+            done: undefined as Promise<unknown> | undefined,
+            cancelled: false,
+          }
+        : undefined;
+      if (current) voiceRun.current = current;
+      const pending = copilotkit.runAgent({ agent });
+      if (current) current.done = pending;
+      const result = await pending;
+      if (current?.cancelled) return;
       if (!result.newMessages.some((message) => message.role === 'assistant'))
         throw new Error(
           'The current turn returned no response. Check the runtime connection and retry.',
         );
       onSaved();
     } catch (e) {
+      if (voiceMessageId && voiceRun.current?.cancelled) return;
       setRunError(
         e instanceof Error
           ? e.message
           : 'The turn failed. Your conversation remains saved.',
       );
+      if (voiceMessageId) throw e;
     } finally {
+      if (voiceRun.current?.messageId === voiceMessageId)
+        voiceRun.current = undefined;
       setRunning(false);
     }
   };
@@ -234,6 +437,17 @@ export function Chat({
       ),
     },
     [thread.id],
+  );
+  const folderPickerAvailable = !!window.dotFolders;
+  useHumanInTheLoop(
+    {
+      name: folderApprovalTool.name,
+      description: folderApprovalTool.description,
+      parameters: folderApprovalSchema,
+      available: folderPickerAvailable,
+      render: (props) => <FolderAccessCard {...props} threadId={thread.id} />,
+    },
+    [thread.id, folderPickerAvailable],
   );
   const computerCalls = agent.messages.flatMap((message) =>
     message.role === 'assistant' ? (message.toolCalls ?? []) : [],
@@ -278,7 +492,8 @@ export function Chat({
               call.function.name.startsWith('computer_') ||
               call.function.name === 'COMPOSIO_MANAGE_CONNECTIONS' ||
               call.function.name === pageReviewTool.name ||
-              call.function.name === connectionActionTool.name,
+              call.function.name === connectionActionTool.name ||
+              call.function.name === folderApprovalTool.name,
           ))),
   );
   return (
@@ -286,6 +501,7 @@ export function Chat({
       <header className="chat-persona">
         <Mascot
           identity={dot.id}
+          companionColor={companionColor}
           name={dot.name}
           small
           state={running ? 'working' : paused ? 'paused' : 'idle'}
@@ -341,14 +557,21 @@ export function Chat({
               voice.status === 'idle' ? 'Start voice call' : 'End voice call'
             }
             title={
-              voiceReady
+              canCall
                 ? 'Talk with your Dot'
-                : 'Voice setup requires VOICE_API_KEY and VOICE_MODEL'
+                : localVoiceReason ||
+                  'Voice setup requires VOICE_API_KEY and VOICE_MODEL'
             }
-            disabled={!voiceReady || paused || !loaded || !contextReady}
-            onClick={() =>
-              voice.status === 'idle' ? void voice.start() : void voice.end()
+            disabled={
+              voice.status === 'idle' &&
+              (!canCall || paused || !loaded || !contextReady || running)
             }
+            onClick={() => {
+              if (voice.status === 'idle') {
+                voiceSettings.current?.stopPreview();
+                void voice.start();
+              } else void voice.end();
+            }}
           >
             {voice.status === 'idle' ? (
               <Phone size={18} />
@@ -358,6 +581,16 @@ export function Chat({
           </button>
         </div>
       </header>
+      <FolderAccessSettings dotId={dot.id} />
+      {(localVoiceEnabled || localVoiceReady) && (
+        <VoiceSettings
+          ref={voiceSettings}
+          dotId={dot.id}
+          callActive={voice.status !== 'idle'}
+          previewReady={localVoiceReady}
+          unavailableReason={localVoiceReason}
+        />
+      )}
       {pageContext && (
         <div className="page-chat-context">
           Working on{' '}
@@ -435,7 +668,13 @@ export function Chat({
         key={voice.status === 'idle' ? 'idle' : 'call'}
         dot={dot}
         voice={voice}
+        companionColor={companionColor}
       />
+      {talkError && (
+        <p className="chat-error" role="alert">
+          {talkError}
+        </p>
+      )}
       <form
         className="chat-composer"
         onSubmit={(e) => {
@@ -494,7 +733,11 @@ export function Chat({
               type="button"
               className="send-button"
               aria-label="Stop response"
-              onClick={() => copilotkit.stopAgent({ agent })}
+              onClick={() =>
+                localVoice.status !== 'idle'
+                  ? void localVoice.interrupt()
+                  : copilotkit.stopAgent({ agent })
+              }
             >
               <Square size={16} />
             </button>
@@ -502,14 +745,20 @@ export function Chat({
             <button
               className="send-button"
               aria-label="Send message"
-              disabled={!draft.trim() || !loaded || !contextReady || paused}
+              disabled={
+                !draft.trim() ||
+                !loaded ||
+                !contextReady ||
+                paused ||
+                voice.status !== 'idle'
+              }
             >
               <ArrowUp size={19} />
             </button>
           )}
         </div>
         <div className="chat-compose-note">
-          {voiceReady
+          {canCall
             ? 'Text and voice, one conversation.'
             : 'Text is ready. Voice needs separate server configuration.'}
         </div>

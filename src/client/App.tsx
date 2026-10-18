@@ -43,13 +43,18 @@ import {
   type Notices,
 } from './poll-notice';
 import { Mascot } from './Mascot';
+import { useCompanionColor } from './companion-appearance';
 import { Chat } from './Chat';
+import { FolderAccessSettings } from './FolderAccessSettings';
+import { VoiceSettings } from './local-voice/VoiceSettings';
+import { CallView } from './CallView';
 import { ThreadList } from './ThreadList';
 import { ResultPane } from './ResultPane';
 import { TaskRow } from './TaskPresentation';
 import { TaskActions } from './TaskActions';
 import { WorkspaceDialog, type Dialog } from './WorkspaceDialog';
 import { submitComposerOnEnter } from './chat-composer';
+import type { LocalVoiceStatus } from '../shared/local-voice';
 
 function describeFailure(error: unknown, fallback: string) {
   return {
@@ -59,11 +64,118 @@ function describeFailure(error: unknown, fallback: string) {
   };
 }
 
-export function App() {
+function savedDesktopSelection(key: string): string {
+  try {
+    return localStorage.getItem(`desktop-${key}`) ?? '';
+  } catch {
+    return '';
+  }
+}
+
+export function App({ desktop = false }: { desktop?: boolean }) {
+  const companionColor = useCompanionColor(desktop);
   const [state, setState] = useState<State>();
   const [workspace, setWorkspace] = useState<WorkspaceState>();
-  const [selectedDot, setSelectedDot] = useState('');
-  const [selectedThread, setSelectedThread] = useState<string>();
+  const [localVoice, setLocalVoice] = useState<LocalVoiceStatus>({
+    enabled: false,
+    ready: false,
+    reason: 'Checking local voice setup…',
+  });
+  const [voiceIntent, setVoiceIntent] = useState(0);
+  const nextVoiceIntent = useRef(0);
+  const [localVoiceChecked, setLocalVoiceChecked] = useState(false);
+  const [localVoiceResolved, setLocalVoiceResolved] = useState(false);
+  const voiceCreation = useRef(0);
+  const consumeVoiceIntent = useCallback(() => {
+    setVoiceIntent(0);
+    window.dotVoice?.cancelTalk();
+  }, []);
+  useEffect(() => {
+    const offTalk = window.dotVoice?.onTalk(() =>
+      setVoiceIntent(++nextVoiceIntent.current),
+    );
+    const offStop = window.dotVoice?.onStop(consumeVoiceIntent);
+    const hidden = () => {
+      if (document.visibilityState === 'hidden') consumeVoiceIntent();
+    };
+    document.addEventListener('visibilitychange', hidden);
+    window.addEventListener('pagehide', consumeVoiceIntent);
+    return () => {
+      offTalk?.();
+      offStop?.();
+      document.removeEventListener('visibilitychange', hidden);
+      window.removeEventListener('pagehide', consumeVoiceIntent);
+      window.dotVoice?.cancelTalk();
+    };
+  }, [consumeVoiceIntent]);
+  useEffect(() => {
+    let active = true;
+    const check = () =>
+      void api<LocalVoiceStatus>(
+        '/local-voice/status',
+        'GET',
+        undefined,
+        AbortSignal.timeout(10000),
+      )
+        .then((status) => {
+          if (active) {
+            setLocalVoice(status);
+            setLocalVoiceChecked(true);
+            setLocalVoiceResolved(true);
+          }
+        })
+        .catch(() => {
+          if (active) {
+            setLocalVoiceChecked(false);
+            setLocalVoiceResolved(true);
+            setLocalVoice((previous) => ({
+              ...previous,
+              ready: false,
+              reason: 'Local voice setup is unavailable.',
+            }));
+          }
+        });
+    check();
+    const timer = setInterval(check, 5000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [voiceIntent]);
+  useEffect(() => {
+    // A failed status poll blocks new starts, but the active call has its own
+    // heartbeat/SSE failure handling. Only confirmed unavailability revokes it.
+    if (!localVoiceChecked && !state?.settings.paused) return;
+    window.dotVoice?.setReady(
+      localVoice.ready && !!workspace && !state?.settings.paused,
+    );
+  }, [
+    localVoice.ready,
+    localVoiceChecked,
+    !!workspace,
+    state?.settings.paused,
+  ]);
+  useEffect(
+    () => () => {
+      void window.dotVoice?.setReady(false);
+    },
+    [],
+  );
+  const [selectedDot, setSelectedDot] = useState(() =>
+    desktop ? savedDesktopSelection('dot') : '',
+  );
+  const [selectedThread, setSelectedThread] = useState<string | undefined>(
+    () => (desktop ? savedDesktopSelection('thread') || undefined : undefined),
+  );
+  useEffect(() => {
+    if (!desktop) return;
+    try {
+      localStorage.setItem('desktop-dot', selectedDot);
+      localStorage.setItem('desktop-thread', selectedThread ?? '');
+    } catch {
+      /* Chat still works when browser storage is unavailable. */
+    }
+  }, [desktop, selectedDot, selectedThread]);
   const [view, rawSetView] = useState<'chat' | 'tasks' | 'memories' | 'space'>(
     'chat',
   );
@@ -133,6 +245,16 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState('');
   const [taskDetail, setTaskDetail] = useState<Detail>();
+  useEffect(() => {
+    if (!voiceIntent) return;
+    const timer = setTimeout(() => {
+      consumeVoiceIntent();
+      setError(
+        'The conversation took too long to connect. Choose Talk to try again.',
+      );
+    }, 30000);
+    return () => clearTimeout(timer);
+  }, [voiceIntent, consumeVoiceIntent]);
   const refresh = useCallback(async () => {
     try {
       const [s, w] = await Promise.all([
@@ -242,6 +364,7 @@ export function App() {
       setView('chat');
       setMobile(false);
     } catch (e) {
+      consumeVoiceIntent();
       setError(
         e instanceof Error ? e.message : 'Could not create the conversation.',
       );
@@ -249,10 +372,58 @@ export function App() {
       setBusy(false);
     }
   };
+  useEffect(() => {
+    if (!voiceIntent) return;
+    if (
+      needsAuth ||
+      (workspace && !configured) ||
+      state?.settings.paused ||
+      (localVoiceResolved && !localVoice.ready)
+    ) {
+      consumeVoiceIntent();
+      setError(
+        needsAuth
+          ? 'Unlock your workspace, then choose Talk again.'
+          : !configured
+            ? 'Complete your workspace setup before starting a call.'
+            : state?.settings.paused
+              ? 'Resume your Dot before starting a call.'
+              : localVoice.reason ||
+                'Complete local voice setup before starting a call.',
+      );
+      return;
+    }
+    if (!configured || !dot) return;
+    if (view !== 'chat') setView('chat');
+    if (!thread && !busy && voiceCreation.current !== voiceIntent) {
+      voiceCreation.current = voiceIntent;
+      const existing = workspace?.conversations.find(
+        (item) => item.dotId === dot.id,
+      );
+      if (existing) setSelectedThread(existing.id);
+      else void newConversation();
+    }
+  }, [
+    voiceIntent,
+    configured,
+    dot?.id,
+    thread?.id,
+    busy,
+    needsAuth,
+    localVoiceResolved,
+    localVoice.ready,
+    state?.settings.paused,
+  ]);
   if (needsAuth)
     return (
       <main className="unlock">
-        <Mascot />
+        {desktop ? (
+          <div className="companion-connecting" aria-hidden="true">
+            <MessageCircle size={30} />
+          </div>
+        ) : (
+          <Mascot />
+        )}
         <h1>Your own little corner.</h1>
         <p>
           Enter the owner access token configured on this template’s server.
@@ -295,8 +466,14 @@ export function App() {
   if (!state || !workspace || !dot)
     return (
       <main className="unlock">
-        <Mascot state="working" />
-        <h1>Finding your dots…</h1>
+        {desktop ? (
+          <div className="companion-connecting" aria-hidden="true">
+            <MessageCircle size={30} />
+          </div>
+        ) : (
+          <Mascot state="working" />
+        )}
+        <h1>{voiceIntent ? 'Connecting voice call…' : 'Finding your dots…'}</h1>
         {error && (
           <>
             <p className="chat-error">{error}</p>
@@ -306,7 +483,29 @@ export function App() {
       </main>
     );
   const content = (
-    <div className={`app template-app ${navCollapsed ? 'nav-collapsed' : ''}`}>
+    <div
+      className={`app template-app ${navCollapsed ? 'nav-collapsed' : ''} ${desktop ? 'desktop-chat' : ''}`}
+    >
+      {voiceIntent > 0 && !thread && configured && (
+        <CallView
+          dot={dot}
+          companionColor={companionColor}
+          voice={{
+            status: 'connecting',
+            phase: 'listening',
+            error: '',
+            muted: false,
+            speakerMuted: false,
+            startedAt: undefined,
+            caption: 'Preparing your conversation…',
+            userCaption: '',
+            start: async () => {},
+            end: async () => consumeVoiceIntent(),
+            toggleMute() {},
+            toggleSpeaker() {},
+          }}
+        />
+      )}
       <nav className="icon-rail" aria-label="Workspace navigation">
         <button
           className="rail-brand"
@@ -521,6 +720,83 @@ export function App() {
         </div>
       </aside>
       <div className="workspace">
+        {desktop && (
+          <header className="companion-toolbar">
+            <div className="companion-toolbar-row">
+              <select
+                aria-label="Choose your Dot"
+                value={dot.id}
+                onChange={(event) => {
+                  const next = workspace.dots.find(
+                    (item) => item.id === event.target.value,
+                  );
+                  if (next) chooseDot(next);
+                }}
+              >
+                {workspace.dots.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+              {view !== 'chat' && (
+                <button className="text-button" onClick={() => setView('chat')}>
+                  Back to chat
+                </button>
+              )}
+              <button
+                className="icon-button"
+                aria-label="New conversation"
+                title="New conversation"
+                disabled={!configured || busy}
+                onClick={() => {
+                  setSelectedThread(undefined);
+                  setPendingPrompt(undefined);
+                  setView('chat');
+                }}
+              >
+                <Plus size={17} />
+              </button>
+              <button
+                className="icon-button"
+                aria-label="Settings and setup"
+                title="Settings and setup"
+                onClick={() => setDialog({ type: 'settings' })}
+              >
+                <Settings2 size={17} />
+              </button>
+              <a
+                className="icon-button"
+                aria-label="Open full workspace"
+                title="Open full workspace"
+                href="/"
+                target="_blank"
+                rel="noreferrer"
+              >
+                <ArrowUpRight size={17} />
+              </a>
+            </div>
+            <select
+              className="companion-history"
+              aria-label="Conversation history"
+              value={thread?.id ?? ''}
+              onChange={(event) => {
+                setSelectedThread(event.target.value || undefined);
+                setPendingPrompt(undefined);
+                setView('chat');
+              }}
+            >
+              <option value="">A new conversation</option>
+              {workspace.conversations
+                .filter((item) => item.dotId === dot.id)
+                .map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.title}
+                  </option>
+                ))}
+            </select>
+          </header>
+        )}
         <header className="topbar">
           <button
             className="desktop-nav-toggle document-icon"
@@ -622,6 +898,7 @@ export function App() {
               {thread && configured ? (
                 <Chat
                   key={thread.id}
+                  companionColor={companionColor}
                   thread={thread}
                   dot={dot}
                   initialPrompt={pendingPrompt}
@@ -630,7 +907,18 @@ export function App() {
                     workspace.setup.conversationBackend === 'local' &&
                     workspace.setup.llmBackend === 'subscription'
                   }
-                  voiceReady={workspace.setup.voice}
+                  voiceReady={
+                    !desktop &&
+                    localVoiceChecked &&
+                    !localVoice.enabled &&
+                    workspace.setup.voice
+                  }
+                  localVoiceReady={localVoice.ready}
+                  localVoiceEnabled={localVoice.enabled}
+                  localVoiceReason={localVoice.reason}
+                  localVoicePending={!localVoiceResolved}
+                  voiceIntent={voiceIntent}
+                  onVoiceConsumed={consumeVoiceIntent}
                   calls={workspace.calls.filter(
                     (call) => call.threadId === thread.id,
                   )}
@@ -643,9 +931,19 @@ export function App() {
                 />
               ) : (
                 <div className="new-conversation">
+                  <FolderAccessSettings dotId={dot.id} />
+                  {(localVoice.enabled || localVoice.ready) && (
+                    <VoiceSettings
+                      dotId={dot.id}
+                      callActive={!!voiceIntent}
+                      previewReady={localVoice.ready}
+                      unavailableReason={localVoice.reason}
+                    />
+                  )}
                   <div className="empty-chat-persona">
                     <Mascot
                       identity={dot.id}
+                      companionColor={companionColor}
                       name={dot.name}
                       state={state.settings.paused ? 'paused' : 'idle'}
                     />

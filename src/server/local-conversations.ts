@@ -19,6 +19,7 @@ import {
 import { defaultIfEmpty, from, lastValueFrom, tap } from 'rxjs';
 import { pageReviewTool } from '../shared/page-review.js';
 import { connectionActionTool } from '../shared/connection-types.js';
+import { folderApprovalTool } from '../shared/folder-access.js';
 
 export type RunStatus =
   'running' | 'finished' | 'failed' | 'stopped' | 'interrupted';
@@ -71,7 +72,11 @@ export function mergeInputMessages(
   const answered = new Set(
     merged.filter((m) => m.role === 'tool').map((m) => m.toolCallId),
   );
-  const clientTools = new Set([pageReviewTool.name, connectionActionTool.name]);
+  const clientTools = new Set([
+    pageReviewTool.name,
+    connectionActionTool.name,
+    folderApprovalTool.name,
+  ]);
   const pending = new Set(
     merged.flatMap((message) =>
       message.role === 'assistant'

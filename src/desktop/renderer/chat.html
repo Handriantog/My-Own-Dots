@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <title>Chat with Dot</title>
+  </head>
+  <body>
+    <main>
+      <div class="connecting-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <path
+            d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H5l-3 2 1.5-6A8.5 8.5 0 1 1 21 11.5Z"
+          />
+          <path d="M8 10h7M8 14h4" />
+        </svg>
+      </div>
+      <span class="eyebrow">YOUR DESKTOP COMPANION</span>
+      <h1>A little space to talk.</h1>
+      <p id="status" role="status">Connecting to your workspace…</p>
+      <form hidden>
+        <label for="address">Workspace address</label>
+        <input
+          id="address"
+          type="url"
+          required
+          spellcheck="false"
+          placeholder="http://127.0.0.1:4310"
+        />
+        <button type="submit">Connect to workspace</button>
+      </form>
+      <p class="note">
+        Your Dots, conversations, and AI settings live in your workspace. Dot
+        will be right here while it starts.
+      </p>
+    </main>
+    <script type="module" src="./chat.ts"></script>
+  </body>
+</html>

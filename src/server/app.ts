@@ -1,6 +1,7 @@
 import { memoryRoutes } from './memory-routes.js';
 import { computerRoutes } from './computer-routes.js';
 import { connectionRoutes } from './connection-routes.js';
+import { folderRoutes } from './folder-routes.js';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { timingSafeEqual } from 'node:crypto';
@@ -11,6 +12,8 @@ import { configured, type Config } from './research.js';
 import type { Platform } from './platform.js';
 import { VoiceService } from './voice.js';
 import { workspaceRoutes } from './workspace-routes.js';
+import { localVoiceRoutes } from './local-voice/routes.js';
+import type { LocalVoiceService } from './local-voice/service.js';
 const interval = z.number().int().min(60).max(31_536_000).nullable();
 export interface AppOptions {
   store: Store;
@@ -19,6 +22,7 @@ export interface AppOptions {
   ownerToken?: string;
   origin?: string | string[];
   platform?: Platform;
+  localVoice?: LocalVoiceService;
 }
 export function createApp({
   store,
@@ -27,6 +31,7 @@ export function createApp({
   ownerToken,
   origin,
   platform,
+  localVoice,
 }: AppOptions) {
   const app = new Hono();
   app.use(
@@ -92,6 +97,9 @@ export function createApp({
     await next();
   });
   if (platform) app.route('/api', computerRoutes(platform.computers));
+  app.route('/api', localVoiceRoutes(localVoice));
+  if (platform?.workspace?.folders)
+    app.route('/api', folderRoutes(platform.workspace.folders));
   if (platform)
     app.route(
       '/api',

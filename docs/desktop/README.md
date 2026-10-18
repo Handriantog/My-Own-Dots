@@ -2,7 +2,7 @@
 
 The macOS companion gives one plush Dot a local desktop playground. It walks, rests, stretches, sleeps, jumps, looks around, waves, grooms, adjusts its headphones, and responds to clicks, petting, or pinching pickup. With Accessibility enabled, it can use exposed application-window tops and sides, climb, hang, pull itself up, and fall when a supporting window moves or disappears. Its body color changes without replacing its character or animation.
 
-The operational controls live in the menu-bar Dot icon. Chat, voice, research, and agent tasks remain future companion integrations; this app does not load the existing web workspace or connect to its backend.
+Click Dot to open three compact cloud speech bubbles surrounding it: **Chat · Talk · Hide**. Each has its own icon, soft shadow, and gentle opening animation; reduced-motion settings suppress the animation. Each cloud is 112×58 logical pixels, with a tighter arc above its shoulders. Chat sits to the left, Talk above, and Hide to the right; the arc folds inward at screen edges. Dot stays fixed in place while the menu is open, including mid-fall or mid-climb. The transparent center lets you click or pick up Dot to dismiss the menu. Escape or clicking outside dismisses them, and arrow keys navigate the choices. **Chat** opens a compact, focusable conversation window using the existing local web workspace. Its Dots, AI configuration, persistent history, stop control, and tool approval cards are shared with the full workspace. The chat avatar uses the desktop plush and your chosen body color, and color changes refresh without discarding the conversation or draft. **Talk** opens and automatically connects a local English voice call using the selected conversation; no preliminary Chat visit or second start click is needed. The call shows setup failures without opening the microphone. **Hide** hides Dot and its chat window; use **Show Dot** in the menu-bar icon to bring the companion back. Operational controls remain in the menu-bar icon.
 
 ## Run or install
 
@@ -19,7 +19,23 @@ npm run desktop:package
 open "release/My Own Dots-darwin-arm64/My Own Dots.app"
 ```
 
-The package command builds the current Mac's architecture. On Apple Silicon it produces `release/My Own Dots-darwin-arm64/My Own Dots.app` and `release/My-Own-Dots-macOS-arm64.zip`. The application includes Electron, the Swift observer, artwork, and all 69 sounds. Copy the `.app` into Applications if desired; its runtime does not require Node, Python, Docker, the source checkout, internet access, or a running web server.
+The package command builds the current Mac's architecture. On Apple Silicon it produces `release/My Own Dots-darwin-arm64/My Own Dots.app` and `release/My-Own-Dots-macOS-arm64.zip`. The application includes Electron, the Swift observer, artwork, and all 69 sounds. Copy the `.app` into Applications if desired. Roaming, appearance, and sound run independently; AI chat needs your local workspace and its configured inference services.
+
+## Connect chat
+
+Start your Dots workspace in Command Center, or run `npm run build` followed by `npm start` from this checkout. The companion defaults to `http://127.0.0.1:4310`. For the web development server (`npm run dev`), use `http://127.0.0.1:5173`. The server and frontend must include this version's compact chat view.
+
+When the workspace is offline, the chat box shows a connection screen with an editable address and retry button. **Chat connection…** in the menu bar reopens those controls at any time. Only loopback workspace addresses are accepted; a different local port is supported. The choice saves in `chat-connection.json` beside companion preferences. `DOTS_WORKSPACE_URL` can override the saved address at launch.
+
+Choose a Dot in the chat header, type a message, and press Enter or Send. Shift+Enter inserts a newline. The history dropdown reopens saved conversations; the plus button starts a fresh one. Closing the window preserves the current conversation and any running response. Reopening reuses the same window, and the selection survives a restart. Owner-token authentication is handled by the existing workspace screen. The external-link button opens the full workspace in your browser.
+
+The chat renderer is sandboxed. Only the configured local workspace main frame receives a narrow voice lifecycle bridge for readiness, call start/end, Talk intent, and forced stop; it has no file, process, or provider-credential access. The local connection screen exposes only validated connection controls. Provider credentials and inference stay in the workspace server; no separate AI client is bundled into the companion.
+
+Loading and connection screens use a neutral speech symbol. Once connected, desktop chat shows the current plush and the body color selected in Customize Dot. Ordinary web chat retains its specialist avatars. The old fixed blue placeholder no longer flashes before the desktop appearance loads.
+
+See [local voice calls](local-voice-calls.md) for setup and testing. Local Whisper, Silero and Kokoro wrap the existing chat agent, preserving approval cards and conversation history. Ordinary inference remains buffered; the opt-in persistent-provider voice path can deliver validated response text incrementally. The [file-audio prototype report](local-voice-prototype.md) records earlier offline checks.
+
+Chat's **Voice & personality** controls select from 28 installed English voices and Natural, Cheerful, Calm, or Serious personalities. **Preview** uses a fixed local phrase; **Save** applies the choice to that Dot. A Dot can also [request local folder access](folder-access.md): the owner chooses a folder, reviews read or editing access, and approves before file tools can use it. **Folder access** lists grants and supports revocation.
 
 By default packaging uses a **local ad-hoc signature**. For a stable identity across rebuilds, explicitly select an installed code-signing identity:
 
@@ -31,7 +47,7 @@ The observer and nested app components are signed inside out, then verified. Cer
 
 ## Interaction and preferences
 
-- Click the body for a small acknowledgment. Move at least four logical pixels while pressing to pick it up.
+- Click the body for an acknowledgment and the floating menu. Roaming pauses while the menu is open. Move at least four logical pixels while pressing to pick it up; releasing a drag does not open the menu.
 - Pickup gathers the actual grabbed fur point using the ordinary pointer, with no drawn hand. Dot keeps a wide-eyed, round-mouth expression while held. The body stretches slightly, limbs dangle, and movement gives it bounded sway. Release lets the current motion flow into falling and landing.
 - Move the pointer nearby to draw Dot’s gaze. Gently rub back and forth over its body without pressing to pet it: happy eyes, blush, and three staggered heart bubbles appear above its upper-right. A stationary hover or one pass does not trigger petting.
 - Sitting lowers the rump onto the supporting surface with visible forward paws. Sleep uses the same seated posture with closed eyelids. Short curious gestures alternate with travel and rest; window-ledged peeks happen only near a supported window edge.
@@ -47,7 +63,7 @@ If Dot disappears while its menu-bar icon remains, check the status line before 
 
 The menu reports **Floor-only** when Accessibility is unavailable or native tracking has failed. Floor roaming, dragging, color, and sound remain usable. Choose **Enable window play in System Settings…**, grant this application Accessibility, then choose **Retry window tracking**. The helper checks permission periodically and refreshes geometry when it changes. If Accessibility is already enabled but a rebuilt app stays Floor-only, remove its old entry from Accessibility, use the plus button to add the current `.app`, and enable it again. Then choose **Retry window tracking**. An old row can retain a grant for the previous ad-hoc build even when its toggle appears enabled; retrying the helper cannot renew that app identity. Do this once when moving from ad-hoc signing to a stable certificate identity, too. Keep using the same signing identity for later builds. No privacy database reset is needed. Apple's [code identity guidance](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements) explains why ad-hoc signing ties authorization to one version of the code.
 
-The helper reads public window rectangles, ordering, display information, and Accessibility window-change notifications. It does not read window titles, text, screenshots, or document contents. It never moves or operates another application's windows. There are no microphone or screen-capture streams.
+The helper reads public window rectangles, ordering, display information, and Accessibility window-change notifications. It does not read window titles, text, screenshots, or document contents. It never moves or operates another application's windows. The window helper opens no microphone or screen-capture streams. The separate chat call captures microphone audio only after an explicit Talk action or the chat call button.
 
 Window tops are approximate one-way platforms. Only exposed edges with room for Dot are eligible. A fullscreen window flush with the screen ceiling has no usable top perch. The actual screen bottom is the floor. When public Accessibility geometry identifies an exposed Dock list, its limited rectangular footprint supplies a separate perch; beyond either end, Dot falls to the screen floor. Hidden or unavailable Dock geometry supplies no floating platform. Individual icons and magnified contours are not modeled. Ordinary application windows and fullscreen Spaces are the intended stacking scope; lock/login and protected system surfaces remain controlled by macOS.
 
@@ -66,8 +82,11 @@ npm test -- tests/desktop
 npm run desktop:build
 npm run desktop:preview
 npm run desktop:smoke
+node scripts/desktop-chat-smoke.mjs
 ```
 
 `desktop:preview` writes an action/color contact sheet under `artifacts/desktop/`. `desktop:smoke` launches the standalone development bundle from outside its checkout, checks the renderer sandbox and overlay configuration, and writes a screenshot/report. A packaged executable path can be passed to `scripts/desktop-smoke.mjs` to test the installed layout. These checks supplement the actual desktop interaction matrix in [verification.md](verification.md).
 
-The existing `dev`, `build`, `start`, and web/server test commands retain their original roles. Windows and Linux adapters, public notarization, assistant integration, and sound refinement are future work. Possible later mouse gestures include a nose boop, double-click high-five, and opt-in cursor-follow play; these are proposals, not active shortcuts.
+The chat smoke needs a running workspace. It checks the click menu, offline/API-only recovery, renderer isolation, compact layout, and close/reopen behavior. Add `--live` to send one tool-free connection-check prompt through the configured AI and verify its reply and history reload. This creates a real workspace conversation. Screenshots and reports go to `artifacts/desktop/`. Run `node scripts/desktop-menu-preview.mjs` to render the production clouds around the plush at their real sizes, including a screen-corner example.
+
+The existing `dev`, `build`, `start`, and web/server test commands retain their original roles. Windows and Linux adapters, public notarization, and sound refinement are future work. The owner has tested local voice calls and confirmed improved reliability; controlled microphone, echo and speaker latency measurements remain separate checks. Possible later mouse gestures include a nose boop, double-click high-five, and opt-in cursor-follow play; these are proposals, not active shortcuts.

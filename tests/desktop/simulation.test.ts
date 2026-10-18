@@ -23,6 +23,43 @@ function resting(w: World, x = 400, y = 300) {
 }
 
 describe('continuous companion simulation', () => {
+  it.each(['walk', 'fall', 'climb'])(
+    'holds its position during %s until the interaction freeze ends',
+    (action) => {
+      const sim = new CompanionSimulation(world(), 5, {
+        x: 500,
+        y: action === 'fall' ? 600 : 900,
+      });
+      let time = 0;
+      sim.advance(time);
+      while (sim.frame().action !== action && time < 60000)
+        sim.advance((time += 17));
+      expect(sim.frame().action).toBe(action);
+      const position = sim.frame().root;
+      sim.setOptions({ paused: true, reducedMotion: false, frozen: true });
+      for (let i = 0; i < 180; i++) sim.advance((time += 17));
+      expect(sim.frame().root).toEqual(position);
+      sim.setOptions({ paused: false, reducedMotion: false, frozen: false });
+      for (
+        let i = 0;
+        i < 1800 &&
+        JSON.stringify(sim.frame().root) === JSON.stringify(position);
+        i++
+      )
+        sim.advance((time += 17));
+      expect(sim.frame().root).not.toEqual(position);
+    },
+  );
+  it('stays in place when its support disappears during an interaction freeze', () => {
+    const sim = resting(world(), 400, 300);
+    sim.setOptions({ paused: true, reducedMotion: false, frozen: true });
+    sim.setWorld(world([]));
+    run(sim, 17, 2000);
+    expect(sim.frame().root).toEqual({ x: 400, y: 300 });
+    sim.setOptions({ paused: true, reducedMotion: false, frozen: false });
+    run(sim, 2034, 1000);
+    expect(sim.frame().root.y).toBeGreaterThan(300);
+  });
   it('lands on the measured Dock top and drops past both ends to the real screen floor', () => {
     const w = buildWorld(
       snapshot([], {

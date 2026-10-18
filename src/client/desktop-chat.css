@@ -1,0 +1,315 @@
+/* A focused companion surface using the same conversation and approval UI. */
+.companion-connecting {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin: 12px auto 24px;
+  border-radius: 22px;
+  background: #e8efea;
+  color: #73877b;
+}
+.desktop-chat.template-app.app {
+  display: block;
+  height: 100dvh;
+  min-height: 0;
+  overflow: hidden;
+}
+.desktop-chat > .icon-rail,
+.desktop-chat > .sidebar,
+.desktop-chat > .mobile-menu,
+.desktop-chat > .nav-scrim,
+.desktop-chat .workspace > .topbar {
+  display: none;
+}
+.desktop-chat.template-app.app .workspace {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.companion-toolbar {
+  padding: 10px 16px;
+  border-bottom: 1px solid #e8e9e5;
+  background: #fafaf8;
+  flex-shrink: 0;
+}
+.companion-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.companion-toolbar-row > select {
+  margin-right: auto;
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.companion-toolbar select {
+  border: 0;
+  background: transparent;
+  color: #34433a;
+  padding: 6px 3px;
+  cursor: pointer;
+  max-width: 100%;
+}
+.companion-toolbar .companion-history {
+  display: block;
+  width: 100%;
+  font-size: 11px;
+  color: #59695f;
+  text-overflow: ellipsis;
+}
+.companion-toolbar .icon-button {
+  color: #59695f;
+}
+.desktop-chat .chat-workspace {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  padding: 0;
+  overflow: hidden;
+}
+.desktop-chat .chat-column {
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
+.desktop-chat.template-app .live-chat {
+  height: 100%;
+  min-height: 0;
+  padding: 12px 18px 16px;
+}
+.desktop-chat.template-app .chat-persona {
+  min-height: 68px;
+  padding-bottom: 10px;
+  justify-content: flex-start;
+}
+.desktop-chat.template-app .chat-persona .chat-persona-actions {
+  position: static;
+  margin-left: auto;
+}
+.desktop-chat.template-app .chat-persona > .mascot {
+  width: 42px;
+  height: 42px;
+}
+.desktop-chat .chat-transcript {
+  padding: 16px 0;
+  gap: 16px;
+}
+.desktop-chat .chat-welcome h1 {
+  font-size: 22px;
+}
+.desktop-chat .chat-welcome {
+  padding: 12px 0;
+}
+.desktop-chat.template-app .new-conversation {
+  height: 100%;
+  min-height: 0;
+  padding: 24px 20px 18px;
+  overflow: auto;
+}
+.desktop-chat.template-app .empty-chat-persona {
+  margin-bottom: 18px;
+}
+.desktop-chat.template-app .empty-chat-persona .mascot {
+  width: 78px;
+  height: 78px;
+}
+.desktop-chat .empty-chat-persona p {
+  max-height: 90px;
+  overflow: auto;
+}
+.desktop-chat .starter-suggestions {
+  display: none;
+}
+.desktop-chat .composer-bottom > span {
+  font-size: 10px;
+}
+.desktop-chat .chat-workspace.split > .result-pane {
+  position: absolute;
+  inset: 86px 0 0;
+  width: 100%;
+  max-width: 100%;
+  z-index: 5;
+}
+.desktop-chat .chat-workspace.split .chat-column {
+  width: 100%;
+}
+.desktop-chat .notice {
+  font-size: 11px;
+}
+/* Explicit dark rules use :root so the theme builder leaves them intact. */
+:root[data-theme='dark'] .companion-toolbar {
+  background: #202622;
+  border-color: #354138;
+}
+:root[data-theme='dark'] .companion-toolbar select {
+  color: #c7d9ce;
+}
+.companion-avatar {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.companion-avatar canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+.mascot:has(.companion-avatar) > span {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.companion-avatar-placeholder {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: #8c9b94;
+}
+.companion-avatar:has(canvas) .companion-avatar-placeholder {
+  display: none;
+}
+
+.desktop-chat .call-view:not(.minimized) {
+  inset: 12px;
+  padding: 22px;
+}
+.desktop-chat .call-persona {
+  margin-top: 12px;
+}
+.desktop-chat .call-view:not(.minimized) .call-persona .mascot {
+  width: 120px;
+  height: 120px;
+}
+.desktop-chat .call-view:not(.minimized) .call-persona h2 {
+  margin: 10px 0 6px;
+  font-size: 22px;
+}
+.desktop-chat .call-view:not(.minimized) .call-timer {
+  font-size: 16px;
+}
+.desktop-chat .call-view:not(.minimized) .call-persona p {
+  margin: 8px 0;
+}
+.desktop-chat .call-caption {
+  padding: 16px 0;
+  font-size: 15px;
+  min-height: 64px;
+}
+.desktop-chat .call-heading,
+.desktop-chat .call-controls,
+.desktop-chat .call-footer {
+  flex-shrink: 0;
+}
+.desktop-chat .call-controls {
+  gap: 12px;
+}
+.desktop-chat .call-view:not(.minimized) .call-controls button > span {
+  width: 52px;
+  height: 52px;
+}
+.desktop-chat .call-footer {
+  margin: 16px 0 4px;
+  font-size: 10px;
+}
+.desktop-chat .local-voice-invitation {
+  flex-wrap: wrap;
+  margin: 8px 0;
+  padding: 10px 12px;
+  gap: 8px;
+  border: 1px solid var(--line);
+}
+.desktop-chat .local-voice-invitation > span {
+  flex-basis: 100%;
+}
+.desktop-chat .call-view.approval {
+  margin: 8px 0;
+  padding: 12px;
+}
+@media (max-height: 520px) {
+  .desktop-chat .call-view:not(.minimized) {
+    padding: 14px;
+  }
+  .desktop-chat .call-view:not(.minimized) .call-persona {
+    margin-top: 4px;
+  }
+  .desktop-chat .call-view:not(.minimized) .call-persona .mascot {
+    width: 64px;
+    height: 64px;
+  }
+  .desktop-chat .call-view:not(.minimized) .call-persona h2 {
+    margin: 4px 0 2px;
+    font-size: 18px;
+  }
+  .desktop-chat .call-view:not(.minimized) .call-timer {
+    font-size: 14px;
+  }
+  .desktop-chat .call-view:not(.minimized) .call-persona p {
+    margin: 4px 0;
+    font-size: 12px;
+  }
+  .desktop-chat .call-caption {
+    padding: 8px 0;
+    font-size: 13px;
+    min-height: 48px;
+    line-height: 1.4;
+  }
+  .desktop-chat .call-caption p {
+    margin-bottom: 8px;
+  }
+  .desktop-chat .call-caption small {
+    margin-bottom: 4px;
+  }
+  .desktop-chat .call-caption .call-user-caption {
+    font-size: 12px;
+  }
+  .desktop-chat .call-controls {
+    padding-top: 8px;
+  }
+  .desktop-chat .call-controls button {
+    gap: 8px;
+  }
+  .desktop-chat .call-view:not(.minimized) .call-controls button > span {
+    width: 44px;
+    height: 44px;
+  }
+  .desktop-chat .call-controls small {
+    font-size: 10px;
+  }
+  .desktop-chat .call-footer {
+    display: none;
+  }
+}
+@media (max-height: 520px) {
+  .desktop-chat .call-view.approval {
+    margin: 4px 0;
+    padding: 6px 10px;
+  }
+  .desktop-chat .call-view.approval .call-heading {
+    display: none;
+  }
+  .desktop-chat .call-view.approval .call-persona {
+    margin-top: 0;
+  }
+  .desktop-chat .call-view.approval .call-persona p {
+    margin: 2px 0;
+    font-size: 12px;
+    line-height: 16px;
+  }
+  .desktop-chat .call-view.approval .call-controls {
+    padding-top: 4px;
+  }
+  .desktop-chat .call-view.approval .call-controls button {
+    gap: 3px;
+  }
+  .desktop-chat .call-view.approval .call-controls button > span {
+    width: 32px;
+    height: 32px;
+  }
+}

@@ -38,7 +38,11 @@ export class CompanionSimulation {
   private world: World;
   private state: SimulationFrame;
   private random: () => number;
-  private options = { paused: false, reducedMotion: false };
+  private options: {
+    paused: boolean;
+    reducedMotion: boolean;
+    frozen?: boolean;
+  } = { paused: false, reducedMotion: false };
   private lastTime: number | null = null;
   private accumulator = 0;
   private suspended = false;
@@ -141,7 +145,11 @@ export class CompanionSimulation {
     this.events = [];
     return result;
   }
-  setOptions(options: { paused: boolean; reducedMotion: boolean }): void {
+  setOptions(options: {
+    paused: boolean;
+    reducedMotion: boolean;
+    frozen?: boolean;
+  }): void {
     this.options = options;
     if (
       (options.paused || options.reducedMotion) &&
@@ -252,9 +260,10 @@ export class CompanionSimulation {
   }
   advance(nowMs: number): void {
     if (!Number.isFinite(nowMs)) return;
-    if (this.lastTime === null || this.suspended) {
+    if (this.lastTime === null || this.suspended || this.options.frozen) {
       this.lastTime = nowMs;
       this.state.atMs = nowMs;
+      this.accumulator = 0;
       return;
     }
     const elapsed = (nowMs - this.lastTime) / 1000;
