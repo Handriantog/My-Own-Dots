@@ -40,6 +40,7 @@ const editable = new Set([
   'LOCAL_DATABASE_URL',
   'LOCAL_POSTGRES_PORT',
   'LOCAL_POSTGRES_PASSWORD',
+  'COMPOSE_PROJECT_NAME',
   'LLM_BACKEND',
   'LLM_PROVIDER',
   'LLM_MODEL',
@@ -156,7 +157,7 @@ export class WorkspaceBackend {
           { cause: error },
         );
       const password = randomBytes(24).toString('hex');
-      contents = `HOST=127.0.0.1\nPORT=4310\nDATABASE_PATH=data/opendots.sqlite\nOWNER_TOKEN=${randomBytes(32).toString('hex')}\nCONVERSATION_BACKEND=local\nLLM_BACKEND=subscription\nLLM_PROVIDER=codex\nLOCAL_POSTGRES_PASSWORD=${password}\nLOCAL_POSTGRES_PORT=5434\nLOCAL_DATABASE_URL=postgresql://dots:${password}@127.0.0.1:5434/dots\nDO_NOT_TRACK=1\n`;
+      contents = `HOST=127.0.0.1\nPORT=4310\nDATABASE_PATH=data/opendots.sqlite\nOWNER_TOKEN=${randomBytes(32).toString('hex')}\nCONVERSATION_BACKEND=local\nCOMPOSE_PROJECT_NAME=dots-${randomBytes(8).toString('hex')}\nLLM_BACKEND=subscription\nLLM_PROVIDER=codex\nLOCAL_POSTGRES_PASSWORD=${password}\nLOCAL_POSTGRES_PORT=5434\nLOCAL_DATABASE_URL=postgresql://dots:${password}@127.0.0.1:5434/dots\nDO_NOT_TRACK=1\n`;
       await writeFile(envFile, contents, { mode: 0o600, flag: 'wx' });
     }
     let values: NodeJS.ProcessEnv;
@@ -387,7 +388,9 @@ export class WorkspaceBackend {
       if (generation !== this.generation)
         throw new Error('Workspace startup was cancelled.');
       if ((await this.identity(url, ownerToken))?.workspaceId === workspaceId) {
-        if (failure || child.exitCode !== null)
+        if (generation !== this.generation || this.child !== child)
+          throw new Error('Workspace startup was cancelled.');
+        if (failure || child.exitCode !== null || child.signalCode !== null)
           throw (
             failure ?? new Error('Workspace backend exited during startup.')
           );
@@ -443,7 +446,7 @@ export class WorkspaceBackend {
         [
           'compose',
           '--project-name',
-          `dots-${workspaceIdentity(this.config!.database).slice(0, 12)}`,
+          env.COMPOSE_PROJECT_NAME || 'my-own-dots-local',
           '--env-file',
           this.config!.envFile,
           '-f',

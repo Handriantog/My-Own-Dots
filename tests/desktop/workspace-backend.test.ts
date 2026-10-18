@@ -215,6 +215,7 @@ it('creates a private persistent configuration under userData on a new installat
   const values = await readFile(config.envFile, 'utf8');
   expect(values).toMatch(/OWNER_TOKEN=[a-f0-9]{64}/);
   expect(values).toMatch(/LOCAL_POSTGRES_PASSWORD=[a-f0-9]{48}/);
+  expect(values).toMatch(/COMPOSE_PROJECT_NAME=dots-[a-f0-9]{16}/);
 });
 
 it('serializes concurrent starts and cancels a pending launch on stop', async () => {
@@ -279,4 +280,98 @@ it('keeps the Integrator default uv environment outside the signed application',
   expect(await response.json()).toMatchObject({
     pythonEnvironment: path.join(workspace, 'integrations/llm/.venv'),
   });
+});
+
+it.each([undefined, 'owner-selected-project'])(
+  'preserves legacy Compose storage unless explicitly configured (%s)',
+  async (project) => {
+    const { bundle, workspace, root } = await fixture();
+    const pgPort = await freePort();
+    await mkdir(path.join(root, 'bin'));
+    const log = path.join(root, 'docker-arguments.json');
+    await writeFile(
+      path.join(root, 'bin/docker'),
+      `#!${process.execPath}\nrequire('node:fs').writeFileSync(process.env.DOCKER_ARGUMENTS,JSON.stringify(process.argv.slice(2))); process.exit(1);\n`,
+      { mode: 0o755 },
+    );
+    const backend = new WorkspaceBackend({
+      bundle,
+      data: root,
+      sourceRoot: workspace,
+      environment: {
+        PATH: path.join(root, 'bin'),
+        DOCKER_ARGUMENTS: log,
+        ...(project ? { COMPOSE_PROJECT_NAME: project } : {}),
+      },
+    });
+    cleanups.push(() => backend.stop());
+    await backend.configure({
+      CONVERSATION_BACKEND: 'local',
+      LOCAL_DATABASE_URL: `postgresql://dots:fixture@127.0.0.1:${pgPort}/dots`,
+      LOCAL_POSTGRES_PORT: String(pgPort),
+      LOCAL_POSTGRES_PASSWORD: 'fixture',
+    });
+    await backend.start();
+    const args = JSON.parse(await readFile(log, 'utf8')) as string[];
+    expect(args[args.indexOf('--project-name') + 1]).toBe(
+      project || 'my-own-dots-local',
+    );
+  },
+);
+
+it('does not cache a successful readiness response that completes after stop', async () => {
+  const { bundle, workspace, root } = await fixture(`
+const http=require('node:http');
+const server=http.createServer((req,res)=>{res.end(JSON.stringify({service:'my-own-dots',protocol:1,workspaceId:process.env.DOTS_WORKSPACE_ID}));});
+server.listen(Number(process.env.PORT),process.env.HOST);
+process.on('SIGTERM',()=>setTimeout(()=>server.close(()=>process.exit(0)),100));
+`);
+  const backend = new WorkspaceBackend({
+    bundle,
+    data: root,
+    sourceRoot: workspace,
+    environment: {},
+    startupTimeoutMs: 2000,
+    shutdownTimeoutMs: 500,
+  });
+  cleanups.push(() => backend.stop());
+  const original = globalThis.fetch;
+  let intercepted = false;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let observed!: () => void;
+  const observedResponse = new Promise<void>((resolve) => {
+    observed = resolve;
+  });
+  globalThis.fetch = async (...args) => {
+    const response = await original(...args);
+    if (!intercepted && response.ok) {
+      intercepted = true;
+      observed();
+      await held;
+    }
+    return response;
+  };
+  try {
+    const startup = backend.start().then(
+      (value) => ({ value, error: undefined }),
+      (error) => ({ value: undefined, error }),
+    );
+    await observedResponse;
+    const stopping = backend.stop();
+    release();
+    const result = await startup;
+    await stopping;
+    expect(result.value).toBeUndefined();
+    expect(result.error).toMatchObject({
+      message: expect.stringMatching(/cancelled/),
+    });
+    const fresh = await backend.start();
+    expect((await original(`${fresh.url}/api/desktop/identity`)).ok).toBe(true);
+  } finally {
+    release();
+    globalThis.fetch = original;
+  }
 });
