@@ -60,10 +60,26 @@
       <label class="row"
         >Reduce motion <input id="reducedMotion" type="checkbox" role="switch"
       /></label>
-      <p class="note">
-        Changes save automatically. The first sound collection is still being
-        softened.
-      </p>
+      <section class="shortcut" aria-labelledby="shortcut-title">
+        <h2 id="shortcut-title">Windowless talk</h2>
+        <p id="shortcut-hint">
+          Press once to talk, again to end. Dot stays in place and shows when it
+          is listening, thinking or speaking.
+        </p>
+        <button
+          id="talk-shortcut"
+          type="button"
+          aria-describedby="shortcut-hint"
+        >
+          Loading…
+        </button>
+        <div class="shortcut-actions">
+          <button id="shortcut-reset" type="button">Use ⌘ ⇧ Space</button>
+          <button id="shortcut-disable" type="button">Disable</button>
+        </div>
+        <p id="shortcut-status" role="status" aria-live="polite"></p>
+      </section>
+      <p class="note">Changes save automatically.</p>
       <p id="error" role="status"></p>
     </main>
     <script type="module" src="./settings.ts"></script>

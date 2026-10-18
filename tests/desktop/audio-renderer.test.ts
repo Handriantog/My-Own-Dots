@@ -58,6 +58,7 @@ class SourceDouble extends AudioNodeDouble {
   }
 }
 class ContextDouble {
+  sampleRate = 48000;
   static current: ContextDouble;
   destination = new AudioNodeDouble();
   currentTime = 0;
@@ -78,6 +79,10 @@ class ContextDouble {
     const source = new SourceDouble();
     this.sources.push(source);
     return source;
+  }
+  createBuffer(_channels: number, length: number) {
+    const samples = new Float32Array(length);
+    return { getChannelData: () => samples };
   }
   async decodeAudioData() {
     return { duration: 1 };
@@ -126,6 +131,43 @@ afterEach(() => {
 });
 
 describe('desktop sound category mixer', () => {
+  it('plays a visibility pop once per cue through the existing volume and interaction bus', () => {
+    const prefs = {
+      ...DEFAULT_PREFERENCES,
+      volume: 0.8,
+      categoryVolumes: {
+        ...DEFAULT_PREFERENCES.categoryVolumes,
+        interactions: 0.25,
+      },
+    };
+    audio.consume([], frame, prefs, display.bounds, false, 1);
+    audio.consume([], frame, prefs, display.bounds, false, 1);
+    expect(ContextDouble.current.sources).toHaveLength(1);
+    expect(ContextDouble.current.sources[0].level()).toBeCloseTo(0.2);
+    audio.consume([], frame, prefs, display.bounds, true, 1);
+    expect(ContextDouble.current.sources[0].level()).toBeCloseTo(0.02);
+    audio.suspend();
+    expect(ContextDouble.current.sources[0].stopped).toBe(true);
+  });
+  it.each(['muted', 'master', 'category'] as const)(
+    'does not replay a pop suppressed by %s when sound is restored',
+    (control) => {
+      const prefs = {
+        ...DEFAULT_PREFERENCES,
+        muted: control === 'muted',
+        volume: control === 'master' ? 0 : 0.4,
+        categoryVolumes: {
+          ...DEFAULT_PREFERENCES.categoryVolumes,
+          interactions: control === 'category' ? 0 : 1,
+        },
+      };
+      audio.consume([], frame, prefs, display.bounds, false, 1);
+      audio.consume([], frame, DEFAULT_PREFERENCES, display.bounds, false, 1);
+      expect(ContextDouble.current.sources).toHaveLength(0);
+      audio.consume([], frame, DEFAULT_PREFERENCES, display.bounds, false, 2);
+      expect(ContextDouble.current.sources).toHaveLength(1);
+    },
+  );
   it('ducks active and new plush effects during a call, then restores the saved volume', () => {
     audio.consume(
       [event(1, 'pat')],

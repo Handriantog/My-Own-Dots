@@ -231,3 +231,49 @@ it('creates at most one conversation while first Talk waits and cancels a hidden
   expect(root.root.findByType(Chat).props.voiceIntent).toBe(0);
   expect(bridge.cancelTalk).toHaveBeenCalled();
 });
+
+it('preserves a windowless Talk intent when hidden and cancels it on a native stop', async () => {
+  Object.assign(window.dotVoice!, { isWindowless: () => true });
+  await mount();
+  await act(async () => harness.talk!());
+  await act(async () => {
+    documentTarget.visibilityState = 'hidden';
+    documentTarget.dispatchEvent(new Event('visibilitychange'));
+  });
+  expect(root.root.findByType(Chat).props.voiceIntent).toBe(1);
+  await act(async () => harness.stop!());
+  expect(root.root.findByType(Chat).props.voiceIntent).toBe(0);
+});
+
+it('reports unavailable voice setup to the desktop before consuming a hidden Talk', async () => {
+  const reportError = vi.fn();
+  Object.assign(window.dotVoice!, { isWindowless: () => true, reportError });
+  const normal = harness.api.getMockImplementation()!;
+  harness.api.mockImplementation((path: string, method?: string) =>
+    path === '/local-voice/status'
+      ? Promise.resolve({
+          enabled: false,
+          ready: false,
+          reason: 'Speech models need setup.',
+        })
+      : normal(path, method),
+  );
+  await mount();
+  await act(async () => harness.talk!());
+  expect(reportError).toHaveBeenCalledWith('Speech models need setup.');
+  expect(reportError.mock.invocationCallOrder[0]).toBeLessThan(
+    bridge.cancelTalk.mock.invocationCallOrder.at(-1)!,
+  );
+});
+
+it('does not echo native stop as cancellation of a newer talk request', async () => {
+  await mount();
+  await act(async () => harness.talk!());
+  bridge.cancelTalk.mockClear();
+  await act(async () => {
+    harness.stop!();
+    harness.talk!();
+  });
+  expect(bridge.cancelTalk).not.toHaveBeenCalled();
+  expect(root.root.findByType(Chat).props.voiceIntent).toBe(2);
+});

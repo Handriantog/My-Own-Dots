@@ -203,7 +203,19 @@ try {
   assert.equal(await chat.evaluate(() => typeof window.dotChat), 'undefined');
   assert.deepEqual(
     await chat.evaluate(() => Object.keys(window.dotVoice).sort()),
-    ['activate', 'begin', 'cancelTalk', 'end', 'onStop', 'onTalk', 'setReady'],
+    [
+      'activate',
+      'begin',
+      'cancelStart',
+      'cancelTalk',
+      'end',
+      'isWindowless',
+      'onStop',
+      'onTalk',
+      'phase',
+      'reportError',
+      'setReady',
+    ],
   );
   assert.deepEqual(await chat.evaluate(() => Object.keys(window.dotFolders)), [
     'choose',

@@ -7,6 +7,58 @@ import {
 } from '../../src/desktop/core/pose.js';
 
 describe('continuous rig pose', () => {
+  it('speaks with small, smooth mouth movements and rests back in a smile', () => {
+    let pose = initialPose();
+    const openings: number[] = [];
+    const input = {
+      action: 'idle' as const,
+      age: 1,
+      speed: 0,
+      distance: 0,
+      facing: 1 as const,
+      time: 0,
+      sway: 0,
+      reducedMotion: false,
+      voice: 'speaking' as const,
+    };
+    for (let n = 0; n < 360; n++) {
+      const next = samplePose(pose, { ...input, time: n / 60 }, 1 / 60);
+      expect(Math.abs(next.speech - pose.speech)).toBeLessThan(0.23);
+      expect(next.mouth).toBe(0); // Speech does not use the surprise/yawn oval.
+      openings.push(next.speech);
+      pose = next;
+    }
+    expect(Math.max(...openings)).toBeGreaterThan(0.45);
+    expect(Math.max(...openings)).toBeLessThan(0.85);
+    expect(Math.min(...openings.slice(60))).toBeLessThan(0.04);
+    for (let n = 0; n < 60; n++)
+      pose = samplePose(pose, { ...input, voice: 'listening' }, 1 / 60);
+    expect(pose.speech).toBeLessThan(0.001);
+  });
+  it('keeps the speaking mouth still with reduced motion enabled', () => {
+    let pose = initialPose();
+    const openings: number[] = [];
+    for (let n = 0; n < 240; n++) {
+      pose = samplePose(
+        pose,
+        {
+          action: 'idle',
+          age: 1,
+          speed: 0,
+          distance: 0,
+          facing: 1,
+          time: n / 60,
+          sway: 0,
+          reducedMotion: true,
+          voice: 'speaking',
+        },
+        1 / 60,
+      );
+      if (n > 120) openings.push(pose.speech);
+    }
+    expect(openings[0]).toBeGreaterThan(0);
+    expect(Math.max(...openings) - Math.min(...openings)).toBeLessThan(0.001);
+  });
   it('keeps a gentle wide-eyed awe expression throughout a long pickup', () => {
     let pose = initialPose();
     for (let n = 0; n < 600; n++)

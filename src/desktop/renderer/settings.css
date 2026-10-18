@@ -11,13 +11,13 @@ body {
   margin: 0;
 }
 main {
-  padding: 28px;
+  padding: 22px;
 }
 .intro {
   display: flex;
   align-items: center;
   gap: 15px;
-  margin-bottom: 22px;
+  margin-bottom: 14px;
 }
 .intro img {
   width: 58px;
@@ -40,7 +40,7 @@ p {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 0;
+  padding: 10px 0;
   border-bottom: 1px solid #ffffff12;
 }
 input {
@@ -61,8 +61,8 @@ input[type='checkbox'] {
 .volume {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 14px;
-  padding: 18px 0 8px;
+  gap: 10px;
+  padding: 12px 0 8px;
 }
 .volume input {
   grid-column: 1 / -1;
@@ -73,7 +73,7 @@ output {
   color: #bcdcff;
 }
 .note {
-  margin-top: 22px;
+  margin-top: 14px;
 }
 #error {
   color: #ffb4b4;
@@ -93,4 +93,43 @@ input:focus-visible,
 select:focus-visible {
   outline: 2px solid #8cc9ff;
   outline-offset: 3px;
+}
+button:focus-visible {
+  outline: 2px solid #8cc9ff;
+  outline-offset: 3px;
+}
+.shortcut {
+  margin-top: 16px;
+}
+.shortcut h2 {
+  font-size: 14px;
+  margin: 0 0 7px;
+}
+.shortcut button {
+  border: 1px solid #ffffff30;
+  border-radius: 8px;
+  background: #293243;
+  color: inherit;
+  padding: 9px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+#talk-shortcut {
+  width: 100%;
+  margin: 12px 0 8px;
+}
+#talk-shortcut[aria-pressed='true'] {
+  border-color: #8cc9ff;
+  background: #354863;
+}
+.shortcut-actions {
+  display: flex;
+  gap: 8px;
+}
+.shortcut-actions button {
+  font-size: 12px;
+}
+#shortcut-status {
+  margin-top: 8px;
+  color: #ffcc97;
 }

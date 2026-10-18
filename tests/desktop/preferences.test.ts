@@ -101,6 +101,7 @@ describe('desktop preferences', () => {
     };
     expect(parsePreferences(legacy)).toEqual({
       ...legacy,
+      talkShortcut: 'Command+Shift+Space',
       categoryVolumes: {
         walking: 1,
         interactions: 1,
@@ -180,4 +181,16 @@ describe('desktop preferences', () => {
       volume: 0.2,
     });
   });
+});
+
+it('saves, restores and disables the talk shortcut without adding it to unrelated updates', async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'dot-shortcut-'));
+  dirs.push(directory);
+  const store = new PreferenceStore(directory);
+  await store.save({ ...DEFAULT_PREFERENCES, talkShortcut: 'Command+Shift+Y' });
+  expect((await store.load()).talkShortcut).toBe('Command+Shift+Y');
+  await store.save({ ...DEFAULT_PREFERENCES, talkShortcut: '' });
+  expect((await store.load()).talkShortcut).toBe('');
+  expect(parsePreferenceChange({ muted: true })).toEqual({ muted: true });
+  expect(parsePreferenceChange({ talkShortcut: 'Space' })).toBeNull();
 });

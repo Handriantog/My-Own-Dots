@@ -1,5 +1,6 @@
 import {
   Assets,
+  AlphaFilter,
   Container,
   Graphics,
   MeshPlane,
@@ -16,16 +17,26 @@ import {
   type RigDefinition,
 } from '../core/rig-model.js';
 import type { Point, SimulationFrame } from '../shared/contracts.js';
+import type { VisibilityPose } from '../core/visibility.js';
+import { rigPointToWorld } from '../core/pose.js';
 
 type Part = keyof RigDefinition['layers'];
 export class PlushRig {
   readonly container = new Container();
   private torso = new Container();
+  private orb = new Container();
+  private orbFur: Sprite;
+  private bodyCenter: Point;
+  private popCenter: Point = { x: 0, y: 0 };
+  private morphFade = new AlphaFilter({ alpha: 1 });
   private headphones = new Container();
   private sprites = {} as Record<Part, Sprite>;
   private body: MeshPlane;
   private restVertices: Float32Array;
   private mouthOpen = new Graphics();
+  private speechInterior = new Graphics();
+  private speechRim: MeshPlane;
+  private speechVertices: Float32Array;
   private brows = new Graphics();
   private happyEyes = new Graphics();
   private sleepingEyes = new Graphics();
@@ -37,7 +48,20 @@ export class PlushRig {
     private definition: RigDefinition,
     textures: Record<Part, Texture>,
   ) {
-    this.container.addChild(this.torso);
+    const bodyLayer = definition.layers.body;
+    this.bodyCenter = {
+      x: bodyLayer.position.x,
+      y: bodyLayer.position.y - bodyLayer.size.y / 2,
+    };
+    this.orbFur = new Sprite(textures.body);
+    this.orbFur.anchor.set(0.5);
+    this.orbFur.width = 128;
+    this.orbFur.height = 136;
+    const orbMask = new Graphics().circle(0, 0, 48).fill(0xffffff);
+    this.orb.addChild(this.orbFur, orbMask);
+    this.orbFur.mask = orbMask;
+    this.orb.visible = false;
+    this.container.addChild(this.orb, this.torso);
     for (const name of ['leftFoot', 'rightFoot'] as const) {
       const leg = new Sprite(textures[name]);
       leg.anchor.set(0.5, 0);
@@ -124,6 +148,17 @@ export class PlushRig {
       .ellipse(0, 2, 1.9, 1)
       .fill(0xb77d78);
     this.torso.addChild(this.mouthOpen);
+    // Bend the original textured smile into a slightly open smile. Its warm
+    // brown material and rounded corners remain part of Dot's authored face.
+    this.speechRim = new MeshPlane({
+      texture: textures.mouth,
+      verticesX: 20,
+      verticesY: 4,
+    });
+    this.speechVertices = new Float32Array(
+      this.speechRim.geometry.getAttribute('aPosition').buffer.data,
+    );
+    this.torso.addChild(this.speechInterior, this.speechRim);
     this.brows
       .moveTo(-20, -79)
       .quadraticCurveTo(-15, -81, -9, -77)
@@ -169,6 +204,11 @@ export class PlushRig {
   update(frame: SimulationFrame, color: string): void {
     const p = frame.pose;
     this.container.position.set(frame.root.x, frame.root.y);
+    this.popCenter = rigPointToWorld(this.bodyCenter, frame.root, p);
+    this.orb.position.set(
+      this.popCenter.x - frame.root.x,
+      this.popCenter.y - frame.root.y,
+    );
     const arrival = Math.min(1, frame.actionAge / 0.65);
     this.container.alpha =
       frame.action === 'appear' ? arrival * arrival * (3 - 2 * arrival) : 1;
@@ -180,6 +220,7 @@ export class PlushRig {
     for (const name of Object.keys(this.sprites) as Part[])
       this.sprites[name].tint = layerTint(this.definition.layers[name], color);
     this.body.tint = layerTint(this.definition.layers.body, color);
+    this.orbFur.tint = this.body.tint;
     this.sprites.leftFoot.position.set(p.leftFoot.x, p.leftFoot.y);
     this.sprites.rightFoot.position.set(p.rightFoot.x, p.rightFoot.y);
     for (const name of ['leftFoot', 'rightFoot'] as const) {
@@ -226,6 +267,33 @@ export class PlushRig {
       Math.max(0.06, p.eyeOpen);
     this.sprites.mouth.x = p.facing * 3;
     this.sprites.mouth.alpha = 1 - p.mouth;
+    const opening = p.speech ?? 0;
+    this.sprites.mouth.visible = opening < 0.001;
+    this.speechRim.visible = this.speechInterior.visible = opening >= 0.001;
+    if (this.speechRim.visible) {
+      const part = this.definition.layers.mouth;
+      const width = 1 - opening * 0.1;
+      const vertices = this.speechRim.geometry.getAttribute('aPosition').buffer;
+      const points = vertices.data as Float32Array;
+      for (let i = 0; i < points.length; i += 2) {
+        const x = (this.speechVertices[i] / part.frame.width) * 12 - 6;
+        const y = (this.speechVertices[i + 1] / part.frame.height) * 5 - 2.5;
+        points[i] = x * width;
+        points[i + 1] = y + opening * 3.5 * Math.max(0, 1 - (x / 5.3) ** 2);
+      }
+      vertices.update();
+      this.speechRim.position.set(p.facing * 3, -48);
+      this.speechRim.alpha = this.speechInterior.alpha = 1 - p.mouth;
+      this.speechInterior.position.set(p.facing * 3, -48);
+      this.speechInterior.scale.x = width;
+      this.speechInterior
+        .clear()
+        .moveTo(-4.65, -1.25)
+        .quadraticCurveTo(0, 1.45, 4.65, -1.25)
+        .quadraticCurveTo(0, 1.45 + opening * 7, -4.65, -1.25)
+        .closePath()
+        .fill(0x28170f);
+    }
     this.mouthOpen.position.set(p.facing * 3, -48);
     this.mouthOpen.alpha = p.mouth;
     this.mouthOpen.scale.set(1 - p.effort * 0.25, 1 - p.effort * 0.4);
@@ -303,6 +371,26 @@ export class PlushRig {
   }
   hitTest(point: Point, frame: SimulationFrame): boolean {
     return hitTestRig(point, frame);
+  }
+  appearance(pose: VisibilityPose): Point {
+    this.container.alpha = 1;
+    // Scale toward the posed body's center instead of the feet/root, keeping
+    // the circle in the same place as it shrinks away or unfolds into Dot.
+    this.container.position.set(
+      this.popCenter.x + (this.container.x - this.popCenter.x) * pose.scaleX,
+      this.popCenter.y + (this.container.y - this.popCenter.y) * pose.scaleY,
+    );
+    this.container.scale.set(pose.scaleX, pose.scaleY);
+    this.orb.visible = pose.circle > 0;
+    this.orb.alpha = Math.min(1, pose.circle * 3);
+    // Let the ball grow before facial details and headphones unfold; a tiny
+    // translucent copy of the whole Dot otherwise reads as a ghost over it.
+    const morph = Math.min(1, pose.circle / 0.65);
+    this.morphFade.alpha = 1 - morph * morph * (3 - 2 * morph);
+    this.torso.visible = this.morphFade.alpha > 0;
+    this.torso.filters =
+      pose.circle > 0 && pose.circle < 1 ? [this.morphFade] : [];
+    return this.popCenter;
   }
   destroy(): void {
     this.container.destroy({ children: true });

@@ -98,10 +98,14 @@ it('delivers Talk received before React subscribes once and unsubscribes control
   expect(Object.keys(bridge).sort()).toEqual([
     'activate',
     'begin',
+    'cancelStart',
     'cancelTalk',
     'end',
+    'isWindowless',
     'onStop',
     'onTalk',
+    'phase',
+    'reportError',
     'setReady',
   ]);
   host.ipc!.emit('dot:voice:talk');
@@ -134,4 +138,24 @@ it('discards a queued Talk on stop before React subscribes', async () => {
   const talk = vi.fn();
   bridge.onTalk(talk);
   expect(talk).not.toHaveBeenCalled();
+});
+
+it('retains windowless intent before subscribing and clears it on end and native stop', async () => {
+  await import('../../src/desktop/chat-preload.js');
+  const bridge = host.exposed.get('dotVoice') as DesktopVoiceBridge;
+  expect(bridge.isWindowless()).toBe(false);
+  host.ipc!.emit('dot:voice:talk', {}, true);
+  const received: boolean[] = [];
+  bridge.onTalk(() => received.push(bridge.isWindowless()));
+  expect(received).toEqual([true]);
+  await bridge.phase('call-12345678', 'speaking');
+  expect(host.invoke).toHaveBeenCalledWith('dot:voice:phase', {
+    callId: 'call-12345678',
+    phase: 'speaking',
+  });
+  await bridge.end('call-12345678');
+  expect(bridge.isWindowless()).toBe(false);
+  host.ipc!.emit('dot:voice:talk', {}, true);
+  host.ipc!.emit('dot:voice:stop', {}, 'shortcut');
+  expect(bridge.isWindowless()).toBe(false);
 });

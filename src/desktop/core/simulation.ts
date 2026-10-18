@@ -20,6 +20,7 @@ import {
 import { applyClimbContact } from './rig-model.js';
 import { climbTop, supportAt } from './world.js';
 import { PettingGesture } from './affection.js';
+import type { CompanionVoiceState } from '../shared/voice-contract.js';
 
 const STEP = 1 / 120,
   GRAVITY = 850,
@@ -42,6 +43,7 @@ export class CompanionSimulation {
     paused: boolean;
     reducedMotion: boolean;
     frozen?: boolean;
+    voice?: CompanionVoiceState;
   } = { paused: false, reducedMotion: false };
   private lastTime: number | null = null;
   private accumulator = 0;
@@ -149,8 +151,28 @@ export class CompanionSimulation {
     paused: boolean;
     reducedMotion: boolean;
     frozen?: boolean;
+    voice?: CompanionVoiceState;
   }): void {
+    const endingVoice = this.options.voice && !options.voice;
     this.options = options;
+    if (options.voice) {
+      this.intention = null;
+      this.state.velocity = { x: 0, y: 0 };
+      this.supportMotion = { x: 0, y: 0 };
+    }
+    if (endingVoice) {
+      this.state.support = supportAt(
+        this.world,
+        this.state.root.x,
+        this.state.root.y,
+        this.state.displayId,
+      );
+      this.state.climb = null;
+      this.climbStroke = null;
+      this.pullFrom = this.pullTo = this.pullTarget = null;
+      this.supportMotion = { x: 0, y: 0 };
+      this.action(this.state.support ? 'idle' : 'fall');
+    }
     if (
       (options.paused || options.reducedMotion) &&
       this.state.support &&
@@ -163,6 +185,7 @@ export class CompanionSimulation {
   setWorld(world: World): void {
     const old = this.state.support;
     this.world = world;
+    if (this.options.voice) return;
     if (old) {
       const candidate = world.platforms.find(
         (p) =>
@@ -260,7 +283,11 @@ export class CompanionSimulation {
   }
   advance(nowMs: number): void {
     if (!Number.isFinite(nowMs)) return;
-    if (this.lastTime === null || this.suspended || this.options.frozen) {
+    if (
+      this.lastTime === null ||
+      this.suspended ||
+      (this.options.frozen && !this.options.voice)
+    ) {
       this.lastTime = nowMs;
       this.state.atMs = nowMs;
       this.accumulator = 0;
@@ -283,6 +310,7 @@ export class CompanionSimulation {
   }
   pointer(input: PointerInput): void {
     if (
+      this.options.voice ||
       this.suspended ||
       !Number.isFinite(input.point.x + input.point.y + input.atMs)
     )
@@ -469,6 +497,24 @@ export class CompanionSimulation {
     const s = this.state;
     s.actionAge += dt;
     s.hearts = s.hearts.filter((heart) => (heart.age += dt) < 1.8);
+    if (this.options.voice) {
+      s.pose = samplePose(
+        s.pose,
+        {
+          action: 'idle',
+          age: s.actionAge,
+          speed: 0,
+          distance: 0,
+          facing: s.facing,
+          time: s.atMs / 1000,
+          sway: 0,
+          reducedMotion: this.options.reducedMotion,
+          voice: this.options.voice,
+        },
+        dt,
+      );
+      return;
+    }
     if (s.action === 'pet' && s.atMs >= this.lovedUntil) this.action('idle');
     if (s.grip || s.climb || s.support) this.fallCuePlayed = false;
     if (s.grip) {

@@ -19,7 +19,7 @@ npm run desktop:package
 open "release/My Own Dots-darwin-arm64/My Own Dots.app"
 ```
 
-The package command builds the current Mac's architecture. On Apple Silicon it produces `release/My Own Dots-darwin-arm64/My Own Dots.app` and `release/My-Own-Dots-macOS-arm64.zip`. The application includes Electron, the Swift observer, artwork, and all 69 sounds. Copy the `.app` into Applications if desired. Roaming, appearance, and sound run independently; AI chat needs your local workspace and its configured inference services.
+The package command builds the current Mac's architecture. On Apple Silicon it produces `release/My Own Dots-darwin-arm64/My Own Dots.app` and `release/My-Own-Dots-macOS-arm64.zip`. The application includes Electron, the Swift observer, artwork, the 69-clip effects pack, and a synthesized droplet pop. Copy the `.app` into Applications if desired. Roaming, appearance, and sound run independently; AI chat needs your local workspace and its configured inference services.
 
 ## Connect chat
 
@@ -47,15 +47,19 @@ The observer and nested app components are signed inside out, then verified. Cer
 
 ## Interaction and preferences
 
+- Press **Command + Shift + Space** to start talking without opening a window or taking focus from your current app. Press it again to end, including while connecting. Dot holds its position, cups a hand toward its headphones while listening, looks upward while thinking, and moves its mouth and arms while speaking. The menu-bar icon also reports the current phase and provides **End talk**. Calls use the selected Dot and conversation, with the same local voice setup as Talk.
+- In **Customize Dot → Windowless talk**, click the shortcut button and press a combination with Command, Control or Option. Escape cancels recording. **Use ⌘ ⇧ Space** restores the default; **Disable** removes the global shortcut. Changes persist across launches. A conflicting shortcut leaves your previous selection intact. Recording temporarily releases the shortcut so it can be captured without starting a call.
+- Windowless calls keep the chat renderer hidden. Open **Chat** yourself for captions, microphone/speaker controls, or approval cards; an approval shows an attention gesture and a menu-bar reminder. Setup failures appear in the menu bar and a desktop notification. Hiding Dot, locking/sleeping, navigation, renderer failure, or connection loss ends the call; it never restarts automatically.
 - Click the body for an acknowledgment and the floating menu. Roaming pauses while the menu is open. Move at least four logical pixels while pressing to pick it up; releasing a drag does not open the menu.
 - Pickup gathers the actual grabbed fur point using the ordinary pointer, with no drawn hand. Dot keeps a wide-eyed, round-mouth expression while held. The body stretches slightly, limbs dangle, and movement gives it bounded sway. Release lets the current motion flow into falling and landing.
 - Move the pointer nearby to draw Dot’s gaze. Gently rub back and forth over its body without pressing to pet it: happy eyes, blush, and three staggered heart bubbles appear above its upper-right. A stationary hover or one pass does not trigger petting.
 - Sitting lowers the rump onto the supporting surface with visible forward paws. Sleep uses the same seated posture with closed eyelids. Short curious gestures alternate with travel and rest; window-ledged peeks happen only near a supported window edge.
 - The transparent area around Dot passes clicks to the application underneath. The ambient panel does not take keyboard focus.
 - Use the menu-bar icon for **Customize Dot**, color presets, volume, mute, pause, reduced motion, hide/show, recovery, tracking status, and Quit. The color picker, master volume, and separate **Walking, Interactions, Climbing, Falls & landings, Rest & idle** levels save automatically. Choose a category in the dropdown, then adjust its slider; its level multiplies the master volume. Zero silences that category without stealing another sound’s voice slot.
+- Hiding folds Dot into a small circle at its body center that pops away; showing pops a circle in at the same center and unfolds it into Dot. A subtle droplet sound follows master and Interactions volume. Quick toggles reverse smoothly, and reduced motion uses a short fade.
 - A second launch reuses the existing companion. The app respects macOS reduced motion and can also suppress automatic roaming through its own controls.
 
-Preferences are separate from web-workspace data, in `~/Library/Application Support/My Own Dots Desktop/preferences.json`. They include color, sound, motion, and a display-relative placement. Native window IDs and active grips are never persisted.
+Preferences are separate from web-workspace data, in `~/Library/Application Support/My Own Dots Desktop/preferences.json`. They include color, sound, motion, the talk shortcut, and a display-relative placement. Native window IDs, active grips, and call intent are never persisted.
 
 If Dot disappears while its menu-bar icon remains, check the status line before choosing **Recover companion**. **Open diagnostic logs…** opens the local `diagnostics` folder beside preferences. It records Dot's visibility, permission/tracking status, position, renderer recovery reason, and startup failures. Event history rotates at 256 KiB with one previous file; a separate small file preserves the last uncaught host exception. Logs stay on this Mac and contain no other application's window titles, contents, or screenshots. They help distinguish a renderer failure, a hidden/suspended companion, and a native window placement problem.
 
@@ -63,7 +67,7 @@ If Dot disappears while its menu-bar icon remains, check the status line before 
 
 The menu reports **Floor-only** when Accessibility is unavailable or native tracking has failed. Floor roaming, dragging, color, and sound remain usable. Choose **Enable window play in System Settings…**, grant this application Accessibility, then choose **Retry window tracking**. The helper checks permission periodically and refreshes geometry when it changes. If Accessibility is already enabled but a rebuilt app stays Floor-only, remove its old entry from Accessibility, use the plus button to add the current `.app`, and enable it again. Then choose **Retry window tracking**. An old row can retain a grant for the previous ad-hoc build even when its toggle appears enabled; retrying the helper cannot renew that app identity. Do this once when moving from ad-hoc signing to a stable certificate identity, too. Keep using the same signing identity for later builds. No privacy database reset is needed. Apple's [code identity guidance](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements) explains why ad-hoc signing ties authorization to one version of the code.
 
-The helper reads public window rectangles, ordering, display information, and Accessibility window-change notifications. It does not read window titles, text, screenshots, or document contents. It never moves or operates another application's windows. The window helper opens no microphone or screen-capture streams. The separate chat call captures microphone audio only after an explicit Talk action or the chat call button.
+The helper reads public window rectangles, ordering, display information, and Accessibility window-change notifications. It does not read window titles, text, screenshots, or document contents. It never moves or operates another application's windows. The window helper opens no microphone or screen-capture streams. The separate chat call captures microphone audio only after an explicit Talk action, talk shortcut, or the chat call button. Hidden capture requires a fresh native windowless request; ordinary background pages cannot start calls.
 
 Window tops are approximate one-way platforms. Only exposed edges with room for Dot are eligible. A fullscreen window flush with the screen ceiling has no usable top perch. The actual screen bottom is the floor. When public Accessibility geometry identifies an exposed Dock list, its limited rectangular footprint supplies a separate perch; beyond either end, Dot falls to the screen floor. Hidden or unavailable Dock geometry supplies no floating platform. Individual icons and magnified contours are not modeled. Ordinary application windows and fullscreen Spaces are the intended stacking scope; lock/login and protected system surfaces remain controlled by macOS.
 
@@ -83,9 +87,12 @@ npm run desktop:build
 npm run desktop:preview
 npm run desktop:smoke
 node scripts/desktop-chat-smoke.mjs
+node scripts/desktop-windowless-smoke.mjs
 ```
 
 `desktop:preview` writes an action/color contact sheet under `artifacts/desktop/`. `desktop:smoke` launches the standalone development bundle from outside its checkout, checks the renderer sandbox and overlay configuration, and writes a screenshot/report. A packaged executable path can be passed to `scripts/desktop-smoke.mjs` to test the installed layout. These checks supplement the actual desktop interaction matrix in [verification.md](verification.md).
+
+`desktop-windowless-smoke.mjs` uses a disposable workspace fixture and real Electron registration to check hidden startup, native user activation, stationary voice poses, toggle/end, shortcut recording/persistence/conflicts, disable/reset, and cleanup on lock or companion-renderer failure. It writes screenshots and a report under `artifacts/desktop/windowless/`. It invokes registered callbacks deterministically, without capturing microphone audio or requesting AI replies. Native shortcut delivery from other applications and live voice remain manual acceptance checks.
 
 The chat smoke needs a running workspace. It checks the click menu, offline/API-only recovery, renderer isolation, compact layout, and close/reopen behavior. Add `--live` to send one tool-free connection-check prompt through the configured AI and verify its reply and history reload. This creates a real workspace conversation. Screenshots and reports go to `artifacts/desktop/`. Run `node scripts/desktop-menu-preview.mjs` to render the production clouds around the plush at their real sizes, including a screen-corner example.
 

@@ -1,8 +1,10 @@
 import {
   app,
   BrowserWindow,
+  globalShortcut,
   ipcMain,
   Menu,
+  Notification,
   nativeImage,
   net,
   powerMonitor,
@@ -18,12 +20,16 @@ import {
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { CompanionSimulation } from './core/simulation.js';
+import { CompanionVisibility } from './core/visibility.js';
 import { hitTestRig } from './core/rig-model.js';
 import { buildWorld } from './core/world.js';
 import { HelperSupervisor } from './host/helper.js';
 import { DesktopDiagnostics } from './host/diagnostics.js';
 import { CompanionChatWindow } from './host/chat-window.js';
 import { CompanionCloudMenu } from './host/cloud-menu.js';
+import { TalkShortcut } from './host/talk-shortcut.js';
+import { shortcutLabel } from './shared/talk-shortcut.js';
+import type { CompanionVoiceState } from './shared/voice-contract.js';
 import {
   CompanionClick,
   companionPanelBounds,
@@ -128,6 +134,9 @@ async function start(): Promise<void> {
   let overlay: BrowserWindow;
   let settingsWindow: BrowserWindow | null = null;
   let voiceActive = false;
+  let voiceState: CompanionVoiceState = null;
+  let voiceError = '';
+  let shortcutError = '';
   const chat = new CompanionChatWindow(
     __dirname,
     app.getPath('userData'),
@@ -141,6 +150,13 @@ async function start(): Promise<void> {
         companionMenu.close();
         rebuildMenu();
       },
+      state(value) {
+        if (value && !voiceState) cancelCapture();
+        voiceState = value;
+        updateOptions();
+        if (!quitting) rebuildMenu();
+      },
+      error: reportVoiceError,
     },
   );
   const clickGesture = new CompanionClick();
@@ -182,12 +198,18 @@ async function start(): Promise<void> {
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   let healthySince: number | null = null;
   const mailbox = new PresentationMailbox();
+  const appearance = new CompanionVisibility();
+  let animatingVisibility = false;
+  let hideAfterSequence: number | null = null;
   const tray = new Tray(
     nativeImage
       .createFromPath(path.join(rendererDirectory, 'desktop-dot/icon.png'))
       .resize({ width: 20, height: 20 }),
   );
   tray.setToolTip('My Own Dots — your desktop companion');
+  const talkShortcut = new TalkShortcut(globalShortcut, () => {
+    toggleWindowlessTalk();
+  });
   const helper = new HelperSupervisor(
     path.join(__dirname, 'native/desktop-observer'),
     {
@@ -219,9 +241,11 @@ async function start(): Promise<void> {
     }
   }
   function updateOptions(): void {
+    animatingVisibility = appearance.sample(performance.now()).active;
     simulation.setOptions({
       paused: preferences.paused || menuOpen,
-      frozen: menuOpen,
+      frozen: menuOpen || animatingVisibility,
+      voice: voiceState,
       reducedMotion:
         preferences.reducedMotion ||
         systemPreferences.getAnimationSettings().prefersReducedMotion,
@@ -248,6 +272,10 @@ async function start(): Promise<void> {
     });
   }
   function changePreferences(change: Partial<Preferences>): void {
+    if (change.talkShortcut !== undefined) {
+      talkShortcut.set(change.talkShortcut);
+      shortcutError = '';
+    }
     preferences = { ...preferences, ...change };
     if (change.color) chat.updateAppearance();
     updateOptions();
@@ -305,6 +333,38 @@ async function start(): Promise<void> {
       });
     });
   }
+  function reportVoiceError(message: string): void {
+    voiceError = message.slice(0, 500);
+    rebuildMenu();
+    if (Notification.isSupported()) {
+      const notice = new Notification({
+        title: 'Dot could not continue talking',
+        body: voiceError,
+      });
+      notice.on('click', openChat);
+      notice.show();
+    }
+  }
+  function toggleWindowlessTalk(): void {
+    if (quitting || osSuspended) return;
+    userHidden = false;
+    voiceError = '';
+    companionMenu.close();
+    syncVisibility();
+    if (!visible && !chat.voiceEngaged) {
+      reportVoiceError(
+        'Dot is unavailable. Choose Recover companion from the menu bar, then try Talk again.',
+      );
+      return;
+    }
+    void chat.toggleWindowless(panelBounds(440, 620)).catch((error) => {
+      reportVoiceError(
+        error instanceof Error
+          ? error.message
+          : 'Could not start Talk. Open Chat to check your connection.',
+      );
+    });
+  }
   function openCompanionMenu(): void {
     if (companionMenu.isOpen) {
       companionMenu.close();
@@ -345,15 +405,28 @@ async function start(): Promise<void> {
       setStatus('Floor-only · window tracking unavailable');
   }
   function syncVisibility(): void {
-    const next =
+    const now = performance.now();
+    const available =
       rendererReady &&
-      !userHidden &&
       !osSuspended &&
-      helper.current(performance.now())?.sceneValid !== false &&
+      helper.current(now)?.sceneValid !== false &&
       !assetError;
+    const next = !!available && !userHidden;
     if (userHidden || osSuspended) chat.hide();
-    if (next === visible || !overlay || overlay.isDestroyed()) return;
+    if ((!rendererReady || assetError) && chat.windowlessVoice)
+      chat.stopVoice('companion-unavailable');
+    if (!overlay || overlay.isDestroyed()) return;
+    // A lock or invalid scene must also interrupt an already-running hide.
+    if (next === visible && (available || !overlay.isVisible())) return;
     visible = next;
+    appearance.setVisible(
+      visible,
+      now,
+      preferences.reducedMotion ||
+        systemPreferences.getAnimationSettings().prefersReducedMotion,
+      !available,
+    );
+    hideAfterSequence = null;
     healthySince = null;
     void diagnostics.record('visibility', {
       visible,
@@ -364,21 +437,37 @@ async function start(): Promise<void> {
       status,
     });
     if (visible) {
-      simulation.resume(performance.now());
-      mailbox.reset();
-      overlay.showInactive();
+      simulation.resume(now);
     } else {
       companionMenu.close();
       cancelCapture();
       simulation.suspend();
-      mailbox.reset();
-      const frame = presentation(false);
-      overlay.webContents.send('dot:frame', frame);
-      overlay.hide();
+      overlay.setIgnoreMouseEvents(true, { forward: true });
+      ignored = true;
+      if (!available) overlay.hide();
     }
+    updateOptions();
+    mailbox.reset();
+    deliver(mailbox.offer(presentation()));
     rebuildMenu();
   }
   function rebuildMenu(): void {
+    const phaseLabel = voiceState
+      ? {
+          connecting: 'Connecting…',
+          listening: 'Listening',
+          thinking: 'Thinking…',
+          speaking: 'Speaking',
+          approval: 'Needs your approval — open Chat',
+        }[voiceState]
+      : '';
+    tray.setToolTip(
+      voiceError
+        ? `Dot: ${voiceError}`
+        : phaseLabel
+          ? `Dot: ${phaseLabel}`
+          : 'My Own Dots — your desktop companion',
+    );
     const items: MenuItemConstructorOptions[] = [
       { label: 'My Own Dots', enabled: false },
       {
@@ -390,6 +479,17 @@ async function start(): Promise<void> {
       { type: 'separator' },
       { label: 'Chat with Dot', click: openChat },
       { label: 'Talk with Dot', click: openTalk },
+      {
+        label: voiceState ? 'End talk' : 'Talk without a window',
+        click: toggleWindowlessTalk,
+      },
+      {
+        label: `Talk shortcut: ${shortcutLabel(preferences.talkShortcut)}`,
+        enabled: false,
+      },
+      ...(phaseLabel ? [{ label: phaseLabel, enabled: false }] : []),
+      ...(voiceError ? [{ label: voiceError, enabled: false }] : []),
+      ...(shortcutError ? [{ label: shortcutError, enabled: false }] : []),
       {
         label: 'Chat connection…',
         click: () => {
@@ -517,7 +617,9 @@ async function start(): Promise<void> {
       preferences: { ...preferences },
       hovered: hitTestRig(cursor, state),
       visible: show,
+      appearance: appearance.sample(performance.now()),
       voiceActive,
+      voiceState,
       displayBounds: (
         currentDisplays.find((d) => d.id === state.displayId) ??
         currentDisplays[0]
@@ -531,6 +633,8 @@ async function start(): Promise<void> {
       overlay.setPosition(frame.origin.x, frame.origin.y, false);
     const actual = overlay.getBounds();
     frame.origin = { x: actual.x, y: actual.y };
+    if (!frame.visible && frame.appearance?.alpha === 0)
+      hideAfterSequence = frame.sequence;
     overlay.webContents.send('dot:frame', frame);
   }
   function trusted(event: IpcMainEvent): boolean {
@@ -544,6 +648,7 @@ async function start(): Promise<void> {
   function recoverRenderer(reason = 'manual'): void {
     // A renderer can report both unresponsive and gone for the same failure.
     if (retryTimer) return;
+    if (chat.windowlessVoice) chat.stopVoice('companion-unavailable');
     healthySince = null;
     void diagnostics.record('renderer-recovery', {
       reason,
@@ -553,6 +658,8 @@ async function start(): Promise<void> {
     companionMenu.close();
     cancelCapture();
     simulation.suspend();
+    appearance.setVisible(false, performance.now(), false, true);
+    hideAfterSequence = null;
     mailbox.reset();
     if (overlay && !overlay.isDestroyed()) overlay.hide();
     visible = false;
@@ -586,8 +693,8 @@ async function start(): Promise<void> {
       return;
     }
     settingsWindow = new BrowserWindow({
-      width: 390,
-      height: 500,
+      width: 430,
+      height: Math.min(730, screen.getPrimaryDisplay().workArea.height),
       resizable: false,
       minimizable: false,
       maximizable: false,
@@ -606,7 +713,11 @@ async function start(): Promise<void> {
     );
     settingsWindow.on('closed', () => {
       settingsWindow = null;
+      resumeShortcut();
     });
+    settingsWindow.on('blur', resumeShortcut);
+    settingsWindow.webContents.on('render-process-gone', resumeShortcut);
+    settingsWindow.webContents.on('unresponsive', resumeShortcut);
     void settingsWindow.loadURL('dots://app/settings.html');
   }
   function createOverlay(): void {
@@ -695,6 +806,12 @@ async function start(): Promise<void> {
       typeof seq === 'number' &&
       Number.isSafeInteger(seq)
     ) {
+      // Show only after the first frame is painted; keep the native window
+      // alive for the entire departure, including its final transparent frame.
+      if (mailbox.isAwaiting(seq)) {
+        if (visible && !overlay.isVisible()) overlay.showInactive();
+        else if (!visible && seq === hideAfterSequence) overlay.hide();
+      }
       if (visible && mailbox.isAwaiting(seq)) {
         const now = performance.now();
         healthySince ??= now;
@@ -705,7 +822,13 @@ async function start(): Promise<void> {
     }
   });
   ipcMain.on('dot:pointer', (event, input: unknown) => {
-    if (!trusted(event) || !visible || !validPointerInput(input)) return;
+    if (
+      !trusted(event) ||
+      !visible ||
+      animatingVisibility ||
+      !validPointerInput(input)
+    )
+      return;
     const actual = screen.getCursorScreenPoint();
     if (input.kind === 'down') {
       if (!hitTestRig(actual, simulation.frame())) return;
@@ -741,6 +864,42 @@ async function start(): Promise<void> {
       recoverRenderer('graphics-context-lost');
   });
   helper.start();
+  try {
+    talkShortcut.set(preferences.talkShortcut);
+  } catch (error) {
+    shortcutError = String(error);
+  }
+  rebuildMenu();
+  function resumeShortcut(): void {
+    if (quitting) return;
+    try {
+      talkShortcut.pause(false);
+      talkShortcut.set(preferences.talkShortcut);
+      shortcutError = '';
+    } catch (error) {
+      shortcutError = String(error);
+    }
+    if (settingsWindow && !settingsWindow.isDestroyed())
+      settingsWindow.webContents.send('dot:preferences:capture-reset');
+    if (!quitting) rebuildMenu();
+  }
+  ipcMain.handle('dot:preferences:shortcut-status', (event) => {
+    if (!settingsTrusted(event)) throw new Error('Invalid settings sender');
+    return shortcutError;
+  });
+  ipcMain.handle(
+    'dot:preferences:capture-shortcut',
+    (event, value: unknown) => {
+      if (
+        !settingsTrusted(event) ||
+        typeof value !== 'boolean' ||
+        (value && !settingsWindow?.isFocused())
+      )
+        throw new Error('Focus Customize Dot to record a shortcut.');
+      if (value) talkShortcut.pause(true);
+      else resumeShortcut();
+    },
+  );
   ipcMain.handle('dot:preferences:read', (event) => {
     if (!settingsTrusted(event)) throw new Error('Invalid settings sender');
     return preferences;
@@ -760,6 +919,7 @@ async function start(): Promise<void> {
     // A live transition hides the panel; an expired/unavailable observation
     // is floor-only mode. It must not leave a latched invisible companion.
     syncVisibility();
+    if (animatingVisibility !== appearance.sample(now).active) updateOptions();
     if (now - lastDiagnostic >= 5000) {
       lastDiagnostic = now;
       const state = simulation.frame();
@@ -780,26 +940,38 @@ async function start(): Promise<void> {
         accessibility: helper.current(now)?.accessibility ?? null,
       });
     }
-    if (!visible) return;
+    if (!visible && !overlay.isVisible()) return;
     if (mailbox.stalled(now)) {
       recoverRenderer('frame-timeout');
       return;
     }
-    const cursor = screen.getCursorScreenPoint();
-    companionMenu.pointer(cursor);
-    handlePointer({
-      kind: capturing ? 'move' : 'hover',
-      point: cursor,
-      atMs: now,
-    });
-    simulation.advance(now);
+    if (visible && !animatingVisibility) {
+      const cursor = screen.getCursorScreenPoint();
+      companionMenu.pointer(cursor);
+      handlePointer({
+        kind: capturing ? 'move' : 'hover',
+        point: cursor,
+        atMs: now,
+      });
+    }
+    // Frozen advancement updates the clock without moving the rig, so a short
+    // reduced-motion fade cannot accumulate a physics jump on completion.
+    if (visible) simulation.advance(now);
     const resting = ['idle', 'sit', 'sleep'].includes(
       simulation.frame().action,
     );
-    if (resting && !capturing && now - lastPresented < 1000 / 30 - 2) return;
+    if (
+      visible &&
+      resting &&
+      !capturing &&
+      !animatingVisibility &&
+      now - lastPresented < 1000 / 30 - 2
+    )
+      return;
     lastPresented = now;
     const frame = presentation();
-    const shouldIgnore = !capturing && !frame.hovered;
+    const shouldIgnore =
+      !visible || animatingVisibility || (!capturing && !frame.hovered);
     if (ignored !== shouldIgnore) {
       overlay.setIgnoreMouseEvents(shouldIgnore, { forward: true });
       ignored = shouldIgnore;
@@ -830,6 +1002,7 @@ async function start(): Promise<void> {
       // A removed physical screen has no continuous visible return route.
       overlay.hide();
       visible = false;
+      appearance.setVisible(false, performance.now(), false, true);
       cancelCapture();
       world = buildWorld(null, currentDisplays, performance.now());
       simulation = new CompanionSimulation(world);
@@ -866,6 +1039,7 @@ async function start(): Promise<void> {
     if (quitting) return;
     event.preventDefault();
     quitting = true;
+    talkShortcut.destroy();
     chat.hide();
     clearInterval(ticker);
     if (retryTimer) clearTimeout(retryTimer);
