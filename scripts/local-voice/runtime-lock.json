@@ -1,0 +1,565 @@
+{
+  "schemaVersion": 1,
+  "resolvedAt": "2026-10-18",
+  "target": {
+    "python": "3.12",
+    "platform": "macOS 14+ arm64",
+    "wheelsOnly": true
+  },
+  "verification": "2026-10-18 owner-consented installation: all selected wheels downloaded and SHA-256/size verified, installed offline on Python 3.12.13/macOS arm64. File-audio and network-denied speech checks passed; embedded native source/redistribution inventory remains incomplete.",
+  "packages": [
+    {
+      "name": "attrs",
+      "version": "26.1.0",
+      "filename": "attrs-26.1.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/64/b4/17d4b0b2a2dc85a6df63d1157e028ed19f90d4cd97c36717afef2bc2f395/attrs-26.1.0-py3-none-any.whl",
+      "sha256": "c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309",
+      "downloadBytes": 67548,
+      "installedBytes": 234084,
+      "licenseExpression": "MIT",
+      "licenseDeclared": null,
+      "licenseClassifiers": [],
+      "requiresDist": [],
+      "metadataUrl": "https://pypi.org/pypi/attrs/26.1.0/json",
+      "projectUrls": {
+        "Changelog": "https://www.attrs.org/en/stable/changelog.html",
+        "Documentation": "https://www.attrs.org/",
+        "Funding": "https://github.com/sponsors/hynek",
+        "GitHub": "https://github.com/python-attrs/attrs",
+        "Tidelift": "https://tidelift.com/subscription/pkg/pypi-attrs?utm_source=pypi-attrs&utm_medium=pypi"
+      },
+      "installedLicenseFiles": ["attrs-26.1.0.dist-info/licenses/LICENSE"]
+    },
+    {
+      "name": "certifi",
+      "version": "2026.7.22",
+      "filename": "certifi-2026.7.22-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/0b/a7/71ac2cff56fec219ed242bb11b8efb69fcc4bec75db06fb7bfe35de520e6/certifi-2026.7.22-py3-none-any.whl",
+      "sha256": "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775",
+      "downloadBytes": 136983,
+      "installedBytes": 249329,
+      "licenseExpression": null,
+      "licenseDeclared": "MPL-2.0",
+      "licenseClassifiers": [
+        "License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)"
+      ],
+      "requiresDist": [],
+      "metadataUrl": "https://pypi.org/pypi/certifi/2026.7.22/json",
+      "projectUrls": {
+        "Homepage": "https://github.com/certifi/python-certifi",
+        "Source": "https://github.com/certifi/python-certifi"
+      },
+      "installedLicenseFiles": ["certifi-2026.7.22.dist-info/licenses/LICENSE"]
+    },
+    {
+      "name": "charset-normalizer",
+      "version": "3.5.2",
+      "filename": "charset_normalizer-3.5.2-cp312-cp312-macosx_10_13_universal2.whl",
+      "url": "https://files.pythonhosted.org/packages/e7/c8/693809898870237d82785a03f3b2b58fe4c9f14669f84a7d4e623c92a59e/charset_normalizer-3.5.2-cp312-cp312-macosx_10_13_universal2.whl",
+      "sha256": "ed2a239c0ea213acc1908150a3037257083c7c083128f1a4cec2ec4b97dca491",
+      "downloadBytes": 367780,
+      "installedBytes": 1126601,
+      "licenseExpression": null,
+      "licenseDeclared": "MIT",
+      "licenseClassifiers": [],
+      "requiresDist": [],
+      "metadataUrl": "https://pypi.org/pypi/charset-normalizer/3.5.2/json",
+      "projectUrls": {
+        "Changelog": "https://github.com/jawah/charset_normalizer/blob/master/CHANGELOG.md",
+        "Code": "https://github.com/jawah/charset_normalizer",
+        "Documentation": "https://charset-normalizer.readthedocs.io/",
+        "Issue tracker": "https://github.com/jawah/charset_normalizer/issues"
+      },
+      "installedLicenseFiles": [
+        "charset_normalizer-3.5.2.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "cloudpickle",
+      "version": "3.1.2",
+      "filename": "cloudpickle-3.1.2-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/88/39/799be3f2f0f38cc727ee3b4f1445fe6d5e4133064ec2e4115069418a5bb6/cloudpickle-3.1.2-py3-none-any.whl",
+      "sha256": "9acb47f6afd73f60dc1df93bb801b472f05ff42fa6c84167d25cb206be1fbf4a",
+      "downloadBytes": 22228,
+      "installedBytes": 69397,
+      "licenseExpression": null,
+      "licenseDeclared": "BSD-3-Clause",
+      "licenseClassifiers": ["License :: OSI Approved :: BSD License"],
+      "requiresDist": [],
+      "metadataUrl": "https://pypi.org/pypi/cloudpickle/3.1.2/json",
+      "projectUrls": {
+        "Homepage": "https://github.com/cloudpipe/cloudpickle"
+      },
+      "installedLicenseFiles": ["cloudpickle-3.1.2.dist-info/licenses/LICENSE"]
+    },
+    {
+      "name": "dlinfo",
+      "version": "2.0.0",
+      "filename": "dlinfo-2.0.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/da/90/022c79d6e5e6f843268c10b84d4a021ee3afba0621d3c176d3ff2024bfc8/dlinfo-2.0.0-py3-none-any.whl",
+      "sha256": "b32cc18e3ea67c0ca9ca409e5b41eed863bd1363dbc9dd3de90fedf11b61e7bc",
+      "downloadBytes": 3654,
+      "installedBytes": 5253,
+      "licenseExpression": null,
+      "licenseDeclared": "MIT",
+      "licenseClassifiers": [],
+      "requiresDist": [],
+      "metadataUrl": "https://pypi.org/pypi/dlinfo/2.0.0/json",
+      "projectUrls": {
+        "Homepage": "https://github.com/fphammerle/python-dlinfo"
+      },
+      "installedLicenseFiles": ["dlinfo-2.0.0.dist-info/LICENSE"]
+    },
+    {
+      "name": "espeakng-loader",
+      "version": "0.2.4",
+      "filename": "espeakng_loader-0.2.4-py3-none-macosx_11_0_arm64.whl",
+      "url": "https://files.pythonhosted.org/packages/a8/26/258c0cd43b9bc1043301c5f61767d6a6c3b679df82790c9cb43a3277b865/espeakng_loader-0.2.4-py3-none-macosx_11_0_arm64.whl",
+      "sha256": "d27cdca31112226e7299d8562e889d3e38a1e48055c9ee381b45d669072ee59f",
+      "downloadBytes": 9892565,
+      "installedBytes": 19925819,
+      "licenseExpression": null,
+      "licenseDeclared": null,
+      "licenseClassifiers": [],
+      "requiresDist": [],
+      "metadataUrl": "https://pypi.org/pypi/espeakng-loader/0.2.4/json",
+      "projectUrls": null,
+      "installedLicenseFiles": []
+    },
+    {
+      "name": "flatbuffers",
+      "version": "25.12.19",
+      "filename": "flatbuffers-25.12.19-py2.py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/e8/2d/d2a548598be01649e2d46231d151a6c56d10b964d94043a335ae56ea2d92/flatbuffers-25.12.19-py2.py3-none-any.whl",
+      "sha256": "7634f50c427838bb021c2d66a3d1168e9d199b0607e6329399f04846d42e20b4",
+      "downloadBytes": 26661,
+      "installedBytes": 88405,
+      "licenseExpression": null,
+      "licenseDeclared": "Apache 2.0",
+      "licenseClassifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "requiresDist": [],
+      "metadataUrl": "https://pypi.org/pypi/flatbuffers/25.12.19/json",
+      "projectUrls": {
+        "Documentation": "https://google.github.io/flatbuffers/",
+        "Homepage": "https://google.github.io/flatbuffers/",
+        "Source": "https://github.com/google/flatbuffers"
+      },
+      "installedLicenseFiles": []
+    },
+    {
+      "name": "idna",
+      "version": "3.20",
+      "filename": "idna-3.20-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl",
+      "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c",
+      "downloadBytes": 69583,
+      "installedBytes": 342919,
+      "licenseExpression": "BSD-3-Clause",
+      "licenseDeclared": null,
+      "licenseClassifiers": [],
+      "requiresDist": [
+        "ruff>=0.16.0; extra == \"all\"",
+        "mypy>=1.11.2; extra == \"all\"",
+        "ty>=0.0.37; extra == \"all\"",
+        "pytest>=8.3.2; extra == \"all\"",
+        "hypothesis>=6.141.1; extra == \"all\"",
+        "coverage>=7.10.0; extra == \"all\""
+      ],
+      "metadataUrl": "https://pypi.org/pypi/idna/3.20/json",
+      "projectUrls": {
+        "Changelog": "https://github.com/kjd/idna/blob/master/HISTORY.md",
+        "Issue tracker": "https://github.com/kjd/idna/issues",
+        "Source": "https://github.com/kjd/idna"
+      },
+      "installedLicenseFiles": ["idna-3.20.dist-info/licenses/LICENSE.md"]
+    },
+    {
+      "name": "joblib",
+      "version": "1.6.0",
+      "filename": "joblib-1.6.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/18/53/84099323c2ec4be98d935f63c033ac4151ee83836ca1050ede3b3aadf155/joblib-1.6.0-py3-none-any.whl",
+      "sha256": "3dbbf9f6e4b592a2357b854608e980fe6390d131d7a82f011a377ef2ebef7aba",
+      "downloadBytes": 306115,
+      "installedBytes": 922295,
+      "licenseExpression": "BSD-3-Clause",
+      "licenseDeclared": null,
+      "licenseClassifiers": [],
+      "requiresDist": [
+        "cloudpickle>=3.0",
+        "distributed; extra == \"test\"",
+        "lz4; extra == \"test\"",
+        "numpy; extra == \"test\"",
+        "memory_profiler; extra == \"test\"",
+        "pytest; extra == \"test\"",
+        "pytest-asyncio; extra == \"test\"",
+        "pytest-cov; extra == \"test\"",
+        "pytest-run-parallel; extra == \"test\"",
+        "pytest-timeout; extra == \"test\"",
+        "threadpoolctl; extra == \"test\"",
+        "distributed; extra == \"docs\"",
+        "lz4; extra == \"docs\"",
+        "numpy; extra == \"docs\"",
+        "numpydoc; extra == \"docs\"",
+        "matplotlib; extra == \"docs\"",
+        "pandas; extra == \"docs\"",
+        "psutil; extra == \"docs\"",
+        "sphinx; extra == \"docs\"",
+        "pydata-sphinx-theme; extra == \"docs\"",
+        "sphinx-gallery; extra == \"docs\"",
+        "sphinx-copybutton; extra == \"docs\"",
+        "sphinx-design; extra == \"docs\"",
+        "tqdm; extra == \"docs\""
+      ],
+      "metadataUrl": "https://pypi.org/pypi/joblib/1.6.0/json",
+      "projectUrls": {
+        "Homepage": "https://joblib.readthedocs.io",
+        "Source": "https://github.com/joblib/joblib"
+      },
+      "installedLicenseFiles": ["joblib-1.6.0.dist-info/licenses/LICENSE.txt"]
+    },
+    {
+      "name": "kokoro-onnx",
+      "version": "0.6.1",
+      "filename": "kokoro_onnx-0.6.1-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/60/e1/a27e5a70a525a5ee1fd5357596f07b724d02ff317f134e86cb6e3d9db968/kokoro_onnx-0.6.1-py3-none-any.whl",
+      "sha256": "50c8de4950d601df41428ee5462a48c8a78bef441bf671f2492e070ef44d8a32",
+      "downloadBytes": 26084,
+      "installedBytes": 69495,
+      "licenseExpression": null,
+      "licenseDeclared": null,
+      "licenseClassifiers": [],
+      "requiresDist": [
+        "espeakng-loader>=0.2.4",
+        "numpy>=2.0.2",
+        "onnxruntime>=1.20.1",
+        "phonemizer>=3.4.0",
+        "onnxruntime-gpu>=1.20.1; (platform_machine == \"x86_64\" and sys_platform != \"darwin\") and extra == \"gpu\""
+      ],
+      "metadataUrl": "https://pypi.org/pypi/kokoro-onnx/0.6.1/json",
+      "projectUrls": {
+        "Homepage": "https://github.com/thewh1teagle/kokoro-onnx",
+        "Issues": "https://github.com/thewh1teagle/kokoro-onnx/issues",
+        "Repository": "https://github.com/thewh1teagle/kokoro-onnx"
+      },
+      "installedLicenseFiles": ["kokoro_onnx-0.6.1.dist-info/licenses/LICENSE"]
+    },
+    {
+      "name": "numpy",
+      "version": "2.5.4",
+      "filename": "numpy-2.5.4-cp312-cp312-macosx_14_0_arm64.whl",
+      "url": "https://files.pythonhosted.org/packages/31/2f/5ea3570fcb8ccd0882bea99436a513b2c85dad8f774a2057849130a8fb99/numpy-2.5.4-cp312-cp312-macosx_14_0_arm64.whl",
+      "sha256": "9cb18a327b49c5c337f972b03682f6a49855525faaf3c0d3e9c96cd0fd8880a8",
+      "downloadBytes": 5451717,
+      "installedBytes": 20599251,
+      "licenseExpression": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+      "licenseDeclared": null,
+      "licenseClassifiers": [],
+      "requiresDist": [],
+      "metadataUrl": "https://pypi.org/pypi/numpy/2.5.4/json",
+      "projectUrls": {
+        "documentation": "https://numpy.org/doc/",
+        "download": "https://pypi.org/project/numpy/#files",
+        "homepage": "https://numpy.org",
+        "release notes": "https://numpy.org/doc/stable/release",
+        "source": "https://github.com/numpy/numpy",
+        "tracker": "https://github.com/numpy/numpy/issues"
+      },
+      "installedLicenseFiles": [
+        "numpy-2.5.4.dist-info/licenses/LICENSE.txt",
+        "numpy-2.5.4.dist-info/licenses/numpy/_core/include/numpy/libdivide/LICENSE.txt",
+        "numpy-2.5.4.dist-info/licenses/numpy/_core/src/common/pythoncapi-compat/COPYING",
+        "numpy-2.5.4.dist-info/licenses/numpy/_core/src/highway/LICENSE",
+        "numpy-2.5.4.dist-info/licenses/numpy/_core/src/multiarray/dragon4_LICENSE.txt",
+        "numpy-2.5.4.dist-info/licenses/numpy/_core/src/npysort/x86-simd-sort/LICENSE.md",
+        "numpy-2.5.4.dist-info/licenses/numpy/_core/src/umath/svml/LICENSE",
+        "numpy-2.5.4.dist-info/licenses/numpy/fft/pocketfft/LICENSE.md",
+        "numpy-2.5.4.dist-info/licenses/numpy/linalg/lapack_lite/LICENSE.txt",
+        "numpy-2.5.4.dist-info/licenses/numpy/ma/LICENSE",
+        "numpy-2.5.4.dist-info/licenses/numpy/random/LICENSE.md",
+        "numpy-2.5.4.dist-info/licenses/numpy/random/src/distributions/LICENSE.md",
+        "numpy-2.5.4.dist-info/licenses/numpy/random/src/mt19937/LICENSE.md",
+        "numpy-2.5.4.dist-info/licenses/numpy/random/src/pcg64/LICENSE.md",
+        "numpy-2.5.4.dist-info/licenses/numpy/random/src/philox/LICENSE.md",
+        "numpy-2.5.4.dist-info/licenses/numpy/random/src/sfc64/LICENSE.md",
+        "numpy-2.5.4.dist-info/licenses/numpy/random/src/splitmix64/LICENSE.md",
+        "numpy/_core/include/numpy/random/LICENSE.txt",
+        "numpy/ma/LICENSE",
+        "numpy/random/LICENSE.md"
+      ]
+    },
+    {
+      "name": "onnxruntime",
+      "version": "1.31.0",
+      "filename": "onnxruntime-1.31.0-cp312-cp312-macosx_14_0_arm64.whl",
+      "url": "https://files.pythonhosted.org/packages/b3/bd/2ac094311163b803e3626c3937461d6900934bd56cca7601f6150ff860c3/onnxruntime-1.31.0-cp312-cp312-macosx_14_0_arm64.whl",
+      "sha256": "aaab9b3af536b06ca27ab5e35e3d429c97457ce76cf298af103f687e8b9975c0",
+      "downloadBytes": 20882054,
+      "installedBytes": 78013163,
+      "licenseExpression": null,
+      "licenseDeclared": "MIT License",
+      "licenseClassifiers": ["License :: OSI Approved :: MIT License"],
+      "requiresDist": [
+        "flatbuffers",
+        "numpy>=1.21.6",
+        "packaging",
+        "protobuf>=4.25.8",
+        "sympy; extra == \"symbolic\"",
+        "ml_dtypes; extra == \"quantization\""
+      ],
+      "metadataUrl": "https://pypi.org/pypi/onnxruntime/1.31.0/json",
+      "projectUrls": {
+        "Download": "https://github.com/microsoft/onnxruntime/tags",
+        "Homepage": "https://onnxruntime.ai"
+      },
+      "installedLicenseFiles": [
+        "onnxruntime/LICENSE",
+        "onnxruntime/ThirdPartyNotices.txt"
+      ]
+    },
+    {
+      "name": "packaging",
+      "version": "26.3",
+      "filename": "packaging-26.3-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/63/34/ba1c580383c9eada3711951fef0795c80b829a078d72188184bcab9dd527/packaging-26.3-py3-none-any.whl",
+      "sha256": "d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c",
+      "downloadBytes": 129956,
+      "installedBytes": 499578,
+      "licenseExpression": "Apache-2.0 OR BSD-2-Clause",
+      "licenseDeclared": null,
+      "licenseClassifiers": [],
+      "requiresDist": [],
+      "metadataUrl": "https://pypi.org/pypi/packaging/26.3/json",
+      "projectUrls": {
+        "Documentation": "https://packaging.pypa.io/",
+        "Source": "https://github.com/pypa/packaging"
+      },
+      "installedLicenseFiles": [
+        "packaging-26.3.dist-info/licenses/LICENSE",
+        "packaging-26.3.dist-info/licenses/LICENSE.APACHE",
+        "packaging-26.3.dist-info/licenses/LICENSE.BSD"
+      ]
+    },
+    {
+      "name": "phonemizer",
+      "version": "3.4.0",
+      "filename": "phonemizer-3.4.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/37/41/09bafd0ccf4f4ddd1530c9f9d10e75a24056e10e120b9daa97f691fcabc3/phonemizer-3.4.0-py3-none-any.whl",
+      "sha256": "5ff1215d0efa3606dd1b92449f6d71b5c1741efcc84c6d40c17bfaf64f6ded5f",
+      "downloadBytes": 108529,
+      "installedBytes": 305763,
+      "licenseExpression": null,
+      "licenseDeclared": "Full license text in PyPI metadata; see metadataUrl.",
+      "licenseClassifiers": [
+        "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)"
+      ],
+      "requiresDist": [
+        "joblib",
+        "attrs>=18.1",
+        "dlinfo",
+        "typing-extensions",
+        "segments; extra == \"segments\"",
+        "pytest>=6.0; extra == \"test\"",
+        "pytest-cov; extra == \"test\"",
+        "coverage[toml]; extra == \"test\"",
+        "segments; extra == \"test\"",
+        "sphinx; extra == \"doc\"",
+        "sphinx_rtd_theme; extra == \"doc\""
+      ],
+      "metadataUrl": "https://pypi.org/pypi/phonemizer/3.4.0/json",
+      "projectUrls": {
+        "Changelog": "https://github.com/bootphon/phonemizer/blob/master/docs/source/changelog.rst",
+        "Documentation": "https://bootphon.github.io/phonemizer/",
+        "Issues": "https://github.com/bootphon/phonemizer",
+        "Repository": "https://github.com/bootphon/phonemizer"
+      },
+      "installedLicenseFiles": ["phonemizer-3.4.0.dist-info/licenses/LICENSE"]
+    },
+    {
+      "name": "platformdirs",
+      "version": "4.13.4",
+      "filename": "platformdirs-4.13.4-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/58/51/5614d0537dd830ca64d95a2f254bd66bdf3ac61d41cffcccaec62121fcfd/platformdirs-4.13.4-py3-none-any.whl",
+      "sha256": "502ce08e9d36cf90579ee44e1e764838842fa658e4975ef47344fd053011d2c8",
+      "downloadBytes": 32782,
+      "installedBytes": 152190,
+      "licenseExpression": "MIT",
+      "licenseDeclared": null,
+      "licenseClassifiers": ["License :: OSI Approved :: MIT License"],
+      "requiresDist": [],
+      "metadataUrl": "https://pypi.org/pypi/platformdirs/4.13.4/json",
+      "projectUrls": {
+        "Changelog": "https://platformdirs.readthedocs.io/en/latest/changelog.html",
+        "Documentation": "https://platformdirs.readthedocs.io",
+        "Homepage": "https://github.com/tox-dev/platformdirs",
+        "Source": "https://github.com/tox-dev/platformdirs",
+        "Tracker": "https://github.com/tox-dev/platformdirs/issues"
+      },
+      "installedLicenseFiles": [
+        "platformdirs-4.13.4.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "protobuf",
+      "version": "7.36.2",
+      "filename": "protobuf-7.36.2-cp310-abi3-macosx_10_9_universal2.whl",
+      "url": "https://files.pythonhosted.org/packages/32/72/98342feb672507c8f3a69e34b4fa8961f608edba5c1a48a6f47156d92cb5/protobuf-7.36.2-cp310-abi3-macosx_10_9_universal2.whl",
+      "sha256": "cbc70b17ee27e28894c7fee8bb04be1abead49e936bc70eb60052531eee2079e",
+      "downloadBytes": 456039,
+      "installedBytes": 1662364,
+      "licenseExpression": null,
+      "licenseDeclared": "3-Clause BSD License",
+      "licenseClassifiers": [],
+      "requiresDist": [],
+      "metadataUrl": "https://pypi.org/pypi/protobuf/7.36.2/json",
+      "projectUrls": {
+        "Homepage": "https://developers.google.com/protocol-buffers/"
+      },
+      "installedLicenseFiles": ["protobuf-7.36.2.dist-info/LICENSE"]
+    },
+    {
+      "name": "pywhispercpp",
+      "version": "1.5.1",
+      "filename": "pywhispercpp-1.5.1-cp312-cp312-macosx_11_0_arm64.whl",
+      "url": "https://files.pythonhosted.org/packages/b3/c1/09d261e4c71944ee51fb6001cc1f5c5667ebf1f4a46cc79b96397bf72b3b/pywhispercpp-1.5.1-cp312-cp312-macosx_11_0_arm64.whl",
+      "sha256": "d929d69b9c9b960114eee2d7ee4a5ec4a3553bcace173c155d951f94f5c835c8",
+      "downloadBytes": 4180193,
+      "installedBytes": 13004590,
+      "licenseExpression": null,
+      "licenseDeclared": "MIT",
+      "licenseClassifiers": [],
+      "requiresDist": [
+        "numpy",
+        "requests",
+        "tqdm",
+        "platformdirs",
+        "sounddevice; extra == \"examples\"",
+        "webrtcvad; extra == \"examples\"",
+        "pyqt5; extra == \"gui\""
+      ],
+      "metadataUrl": "https://pypi.org/pypi/pywhispercpp/1.5.1/json",
+      "projectUrls": {
+        "Documentation": "https://absadiki.github.io/pywhispercpp/",
+        "Source": "https://github.com/absadiki/pywhispercpp",
+        "Tracker": "https://github.com/absadiki/pywhispercpp/issues"
+      },
+      "installedLicenseFiles": ["pywhispercpp-1.5.1.dist-info/licenses/LICENSE"]
+    },
+    {
+      "name": "requests",
+      "version": "2.34.2",
+      "filename": "requests-2.34.2-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl",
+      "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0",
+      "downloadBytes": 73075,
+      "installedBytes": 234799,
+      "licenseExpression": null,
+      "licenseDeclared": "Apache-2.0",
+      "licenseClassifiers": [
+        "License :: OSI Approved :: Apache Software License"
+      ],
+      "requiresDist": [
+        "charset_normalizer<4,>=2",
+        "idna<4,>=2.5",
+        "urllib3<3,>=1.26",
+        "certifi>=2023.5.7",
+        "PySocks!=1.5.7,>=1.5.6; extra == \"socks\"",
+        "chardet<8,>=3.0.2; extra == \"use-chardet-on-py3\""
+      ],
+      "metadataUrl": "https://pypi.org/pypi/requests/2.34.2/json",
+      "projectUrls": {
+        "Documentation": "https://requests.readthedocs.io",
+        "Source": "https://github.com/psf/requests"
+      },
+      "installedLicenseFiles": [
+        "requests-2.34.2.dist-info/licenses/LICENSE",
+        "requests-2.34.2.dist-info/licenses/NOTICE"
+      ]
+    },
+    {
+      "name": "tqdm",
+      "version": "4.70.1",
+      "filename": "tqdm-4.70.1-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/a7/03/921a3d3c75785aca9ebfbfcabfbc3a1be12e2ab5265deb026d55a5a3f83e/tqdm-4.70.1-py3-none-any.whl",
+      "sha256": "c293e525e6fef9c20e8728fd4612df02a0aa31bb5fe91ecd93e123b1b7bffa73",
+      "downloadBytes": 80199,
+      "installedBytes": 234329,
+      "licenseExpression": null,
+      "licenseDeclared": "MPL-2.0 AND MIT",
+      "licenseClassifiers": [],
+      "requiresDist": [
+        "colorama; platform_system == \"Windows\"",
+        "requests; extra == \"discord\"",
+        "envwrap; extra == \"discord\"",
+        "slack-sdk; extra == \"slack\"",
+        "envwrap; extra == \"slack\"",
+        "requests; extra == \"telegram\"",
+        "envwrap; extra == \"telegram\"",
+        "ipywidgets>=6; extra == \"notebook\""
+      ],
+      "metadataUrl": "https://pypi.org/pypi/tqdm/4.70.1/json",
+      "projectUrls": {
+        "changelog": "https://tqdm.github.io/releases",
+        "homepage": "https://tqdm.github.io",
+        "repository": "https://github.com/tqdm/tqdm",
+        "wiki": "https://github.com/tqdm/tqdm/wiki"
+      },
+      "installedLicenseFiles": []
+    },
+    {
+      "name": "typing-extensions",
+      "version": "4.16.0",
+      "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+      "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+      "downloadBytes": 45571,
+      "installedBytes": 183196,
+      "licenseExpression": "PSF-2.0",
+      "licenseDeclared": null,
+      "licenseClassifiers": [],
+      "requiresDist": [],
+      "metadataUrl": "https://pypi.org/pypi/typing-extensions/4.16.0/json",
+      "projectUrls": {
+        "Bug Tracker": "https://github.com/python/typing_extensions/issues",
+        "Changes": "https://github.com/python/typing_extensions/blob/main/CHANGELOG.md",
+        "Documentation": "https://typing-extensions.readthedocs.io/",
+        "Home": "https://github.com/python/typing_extensions",
+        "Q & A": "https://github.com/python/typing/discussions",
+        "Repository": "https://github.com/python/typing_extensions"
+      },
+      "installedLicenseFiles": [
+        "typing_extensions-4.16.0.dist-info/licenses/LICENSE"
+      ]
+    },
+    {
+      "name": "urllib3",
+      "version": "2.8.0",
+      "filename": "urllib3-2.8.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl",
+      "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3",
+      "downloadBytes": 135717,
+      "installedBytes": 450856,
+      "licenseExpression": "MIT",
+      "licenseDeclared": null,
+      "licenseClassifiers": [],
+      "requiresDist": [
+        "brotli>=1.2.0; platform_python_implementation == \"CPython\" and extra == \"brotli\"",
+        "brotlicffi>=1.2.0.0; platform_python_implementation != \"CPython\" and extra == \"brotli\"",
+        "h2<5,>=4; extra == \"h2\"",
+        "pysocks!=1.5.7,<2.0,>=1.5.6; extra == \"socks\"",
+        "backports-zstd>=1.0.0; python_version < \"3.14\" and extra == \"zstd\""
+      ],
+      "metadataUrl": "https://pypi.org/pypi/urllib3/2.8.0/json",
+      "projectUrls": {
+        "Changelog": "https://github.com/urllib3/urllib3/blob/main/CHANGES.rst",
+        "Code": "https://github.com/urllib3/urllib3",
+        "Documentation": "https://urllib3.readthedocs.io",
+        "Issue tracker": "https://github.com/urllib3/urllib3/issues",
+        "Security policy": "https://urllib3.readthedocs.io/en/latest/security.html"
+      },
+      "installedLicenseFiles": ["urllib3-2.8.0.dist-info/licenses/LICENSE.txt"]
+    }
+  ],
+  "installedPackageBytes": 138373676
+}

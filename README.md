@@ -74,7 +74,7 @@ These tools act on real accounts. Start with a read-only request and use a test 
 
 A continuous conversation keeps the Dot's avatar and status above the messages, with text and call controls close at hand. Work updates, source links, and call receipts appear in the timeline; a side panel shows results or the agent's computer.
 
-Calls pair realtime speech with a separate compute agent, so the conversation can continue while longer work runs. Both use the same conversation context and tool permissions. The call screen includes a live timer, separate user and Dot captions, microphone mute, speaker mute, and a minimized view for continuing in chat. Voice needs separate provider configuration.
+Local calls use Whisper, Silero and Kokoro for speech while final transcripts run through the existing chat agent, including its tool approvals and memory. The call screen includes a timer, captions, microphone and speaker mute, interruption, and a minimized view. Local speech requires the pinned runtime/models and explicit opt-in; see [local voice setup](docs/desktop/local-voice-calls.md). The separate paid Realtime feature remains available when configured and local voice is disabled.
 
 <div align="center">
 
@@ -108,7 +108,9 @@ Bring your agents into Slack with [Channels SDK](https://github.com/CopilotKit/c
 
 A separate desktop entry point runs one recolorable plush Dot above ordinary application windows. It supports continuous roaming, exposed window-edge physics, pinching pickup, local sound effects, and menu-bar appearance/sound controls. Window play uses a bundled Swift geometry observer and requires Accessibility; a clear floor-only mode remains available without permission.
 
-Run `npm run desktop:dev` to build and launch, or `npm run desktop:package` for a self-contained Apple Silicon `.app` and ZIP. Packaging defaults to ad-hoc signing; set `DOTS_CODESIGN_IDENTITY` to an installed signing identity for stable permissions across rebuilds. The build is not notarized. Desktop chat/voice/agent execution and Windows/Linux adapters remain future work. See the [desktop guide](docs/desktop/README.md), [artwork notes](docs/desktop/asset-notes.md), and [verification evidence and limits](docs/desktop/verification.md).
+Click Dot for three floating cloud speech bubbles: **Chat · Talk · Hide**. Chat opens a compact window connected to your local workspace, using its existing Dots, conversation history, AI configuration, and tool approvals. Talk opens and starts a local voice call after checking the installed speech setup; see [local voice calls](docs/desktop/local-voice-calls.md). Chat requires the workspace server; the roaming companion still runs independently.
+
+Run `npm run desktop:dev` to build and launch, or `npm run desktop:package` for an Apple Silicon `.app` and ZIP. Packaging defaults to ad-hoc signing; set `DOTS_CODESIGN_IDENTITY` to an installed signing identity for stable permissions across rebuilds. The build is not notarized. Local voice uses the existing chat agent. The owner has tested calls and confirmed improved recognition reliability; automated checks use fixture replies and file audio. Windows/Linux adapters remain future work. See the [desktop guide](docs/desktop/README.md), [artwork notes](docs/desktop/asset-notes.md), and [verification evidence and limits](docs/desktop/verification.md).
 
 ## Architecture
 
@@ -136,7 +138,7 @@ Provider selection and credentials stay server-side. Browser requests cannot cho
 
 ### How subscription AI works
 
-The default path uses your **Codex CLI signed in with ChatGPT**. My Own Dots calls the installed `myown-llm-integrator@0.1.0` npm package, which runs its bundled Python engine and invokes that CLI. The CLI uses your existing account session; the app does not need an OpenAI API key or a CopilotKit Intelligence subscription. Subscription usage limits and model access still apply.
+The default path uses your **Codex CLI signed in with ChatGPT**. My Own Dots calls the installed `myown-llm-integrator@0.2.0` npm package, which runs its bundled Python engine and invokes that CLI. The CLI uses your existing account session; the app does not need an OpenAI API key or a CopilotKit Intelligence subscription. Subscription usage limits and model access still apply.
 
 Each conversation turn follows this flow:
 

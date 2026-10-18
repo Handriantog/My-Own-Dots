@@ -11,6 +11,12 @@ export default defineConfig({
     target: 'es2023',
     rolldownOptions: {
       input: {
+        menu: fileURLToPath(
+          new URL('./src/desktop/renderer/menu.html', import.meta.url),
+        ),
+        chat: fileURLToPath(
+          new URL('./src/desktop/renderer/chat.html', import.meta.url),
+        ),
         overlay: fileURLToPath(
           new URL('./src/desktop/renderer/index.html', import.meta.url),
         ),

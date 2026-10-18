@@ -138,6 +138,7 @@ try {
         frame.simulation,
         frame.preferences,
         frame.displayBounds,
+        frame.voiceActive,
       );
     wasPaused = frame.preferences.paused;
     window.dotDiagnostics = {

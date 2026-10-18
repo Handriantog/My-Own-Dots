@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 1,
+  "inventoriedAt": "2026-10-18",
+  "status": "2026-10-18 owner-consented artifacts downloaded, byte counts and SHA-256 verified; installed local file-audio prototype and network-denied speech/cancellation checks passed. Silero VAD separately consented, downloaded and verified; network-denied generated-PCM smoke passed.",
+  "runtime": {
+    "python": "3.12",
+    "platform": "macOS 14+ arm64",
+    "requirements": "requirements.txt",
+    "inventory": "runtime-lock.json",
+    "downloadBytes": 42495033,
+    "installedBytes": 138373676,
+    "installedSizeStatus": "Sum of installed distribution file sizes on the evaluation Mac, excluding shared Python interpreter and retained wheel archives; filesystem allocation differs.",
+    "licenses": "LICENSES.md"
+  },
+  "speech": {
+    "input": {
+      "format": "PCM16LE",
+      "sampleRate": 16000,
+      "channels": 1,
+      "maxBytes": 960000,
+      "languages": ["en", "id", "auto"]
+    },
+    "output": {
+      "format": "PCM16LE",
+      "sampleRate": 24000,
+      "channels": 1,
+      "maxBytes": 1440000,
+      "language": "en-us",
+      "voice": "af_heart",
+      "buffered": true
+    },
+    "ramBytes": null,
+    "ramStatus": "Full prototype command time -l reported maximum RSS 946208768 bytes. This is not aggregate system memory or a sustained benchmark.",
+    "vad": {
+      "format": "PCM16LE",
+      "sampleRate": 16000,
+      "channels": 1,
+      "frameSamples": 512,
+      "frameBytes": 1024,
+      "stateful": true,
+      "reset": "Explicit reset at independent call/generation boundaries; warm is idempotent."
+    }
+  },
+  "assets": [
+    {
+      "id": "whisper",
+      "filename": "ggml-base.bin",
+      "role": "Multilingual Whisper base STT weights; no English-only .en substitution",
+      "revision": "5359861c739e955e79d9a303bcbc70fb988958b1",
+      "sourceUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.bin",
+      "metadataUrl": "https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/5359861c739e955e79d9a303bcbc70fb988958b1?expand=true",
+      "downloadBytes": 147951465,
+      "installedBytes": 147951465,
+      "sha256": "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+      "license": "MIT",
+      "licenseUrl": "https://github.com/openai/whisper/blob/main/LICENSE",
+      "modelCardUrl": "https://huggingface.co/ggerganov/whisper.cpp/blob/5359861c739e955e79d9a303bcbc70fb988958b1/README.md",
+      "conversion": "Upstream whisper.cpp GGML conversion; conversion environment not independently reproduced"
+    },
+    {
+      "id": "kokoro",
+      "filename": "kokoro-v1.0.onnx",
+      "role": "Kokoro-82M v1.0 float32 ONNX English TTS baseline weights",
+      "revision": "model-files-v1.1",
+      "releaseTagCommit": "b85309f90fd2660ea3309cf0f2581360e4327555",
+      "sourceUrl": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/kokoro-v1.0.onnx",
+      "metadataUrl": "https://api.github.com/repos/thewh1teagle/kokoro-onnx/releases/tags/model-files-v1.1",
+      "downloadBytes": 325505369,
+      "installedBytes": 325505369,
+      "sha256": "beb0d1848dee9a49da392cc3df26958d46cfa35d321edf434f52949153f0df3a",
+      "license": "Apache-2.0",
+      "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+      "modelCardUrl": "https://huggingface.co/hexgrad/Kokoro-82M/blob/f3ff3571791e39611d31c381e3a41a3af07b4987/README.md",
+      "conversion": "Upstream kokoro-onnx release export; exact conversion environment not independently reproduced"
+    },
+    {
+      "id": "voices",
+      "filename": "voices-v1.0.bin",
+      "role": "Kokoro v1.0 bundled voice presets; prototype selects af_heart",
+      "revision": "model-files-v1.1",
+      "releaseTagCommit": "b85309f90fd2660ea3309cf0f2581360e4327555",
+      "sourceUrl": "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1/voices-v1.0.bin",
+      "metadataUrl": "https://api.github.com/repos/thewh1teagle/kokoro-onnx/releases/tags/model-files-v1.1",
+      "downloadBytes": 28214398,
+      "installedBytes": 28214398,
+      "sha256": "bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d",
+      "license": "Apache-2.0 (upstream Kokoro-82M model-card declaration)",
+      "licenseUrl": "https://www.apache.org/licenses/LICENSE-2.0",
+      "voiceProvenanceUrl": "https://huggingface.co/hexgrad/Kokoro-82M/blob/f3ff3571791e39611d31c381e3a41a3af07b4987/VOICES.md",
+      "distributionStatus": "Confirm exact archive contents, voice provenance and notices before redistribution",
+      "modelCardUrl": "https://huggingface.co/hexgrad/Kokoro-82M/blob/f3ff3571791e39611d31c381e3a41a3af07b4987/README.md"
+    },
+    {
+      "id": "vad",
+      "filename": "silero_vad.onnx",
+      "role": "Silero VAD 6.2.1 ONNX voice activity model; optional for the default file prototype, required for live calls",
+      "revision": "7e30209a3e901f9842f81b225f3e93d8199902b1",
+      "releaseTag": "v6.2.1",
+      "sourceUrl": "https://raw.githubusercontent.com/snakers4/silero-vad/7e30209a3e901f9842f81b225f3e93d8199902b1/src/silero_vad/data/silero_vad.onnx",
+      "metadataUrl": "https://api.github.com/repos/snakers4/silero-vad/contents/src/silero_vad/data/silero_vad.onnx?ref=7e30209a3e901f9842f81b225f3e93d8199902b1",
+      "downloadBytes": 2327524,
+      "installedBytes": 2327524,
+      "sha256": "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3",
+      "gitBlobSha1": "80c5592ef1f4c9ede3e357bbd02eb863358a6a9d",
+      "checksumMetadataUrl": "https://files.pythonhosted.org/packages/0b/2b/48566f29a8b53d856ceb1994f209122749b3fda0a733a07e82047257de7a/silero_vad-6.2.1-py3-none-any.whl",
+      "checksumProvenance": "Official PyPI silero-vad 6.2.1 wheel RECORD: silero_vad/data/silero_vad.onnx,sha256=GhU6IvRQnikqlOZ9b5uF6N6yW0mIaCt-F0xlJ52HiOM,2327524. Only ZIP/RECORD metadata fetched before owner download consent.",
+      "license": "MIT",
+      "licenseUrl": "https://github.com/snakers4/silero-vad/blob/7e30209a3e901f9842f81b225f3e93d8199902b1/LICENSE",
+      "noticeFile": "silero-vad.LICENSE",
+      "apiReferenceUrl": "https://github.com/snakers4/silero-vad/blob/7e30209a3e901f9842f81b225f3e93d8199902b1/src/silero_vad/utils_vad.py",
+      "runtime": "Existing numpy 2.5.4 and onnxruntime 1.31.0; no silero-vad, torch or torchaudio package installation",
+      "verificationStatus": "Owner-consented artifact downloaded; exact byte count/SHA-256 verified; network-denied generated-PCM frame/reset smoke passed. No microphone or listening assessment."
+    }
+  ],
+  "totals": {
+    "modelDownloadBytes": 503998756,
+    "modelInstalledBytes": 503998756,
+    "modelAndWheelDownloadBytes": 546493789
+  },
+  "distributionStatus": "Not a cleared distribution bundle. See LICENSES.md for GPL phonemizer/eSpeak and unresolved wheel notice/source inventory.",
+  "verification": {
+    "machine": "Apple M3 Max, macOS 26.6.2, arm64, Python 3.12.13",
+    "downloadedBytes": 544166265,
+    "allocatedSetupBytes": 699838464,
+    "realPipelineTurns": 2,
+    "coldWarmupMs": 13245.528583,
+    "fileEndToPcmMs": [1723.798083, 1197.832416],
+    "networkDeniedSpeechPassed": true,
+    "workerCancelToCloseMs": 10.686708,
+    "microphoneUsed": false,
+    "liveProviderInvoked": false,
+    "audioPlayed": false,
+    "qualityObservation": "Recognition omitted Dot in generated Hello Dot phrase; no listening assessment or Indonesian check."
+  },
+  "vadVerification": {
+    "date": "2026-10-18",
+    "networkDenied": true,
+    "generatedPcmFrames": 31,
+    "resetRestoredInitialSilenceProbability": true,
+    "firstSilenceProbability": 0.0016698241233825684,
+    "totalProcessMs": 380.038,
+    "microphoneUsed": false,
+    "speakerUsed": false,
+    "liveProviderUsed": false,
+    "qualityOrLatencyBenchmark": false
+  }
+}

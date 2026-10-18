@@ -2164,6 +2164,65 @@ h3 {
   margin-left: auto;
   gap: 8px;
 }
+.voice-settings {
+  flex-shrink: 0;
+  padding-top: 8px;
+  font-size: 11px;
+}
+.voice-settings-toggle {
+  padding: 5px 7px;
+  border-color: transparent;
+  background: transparent;
+  gap: 6px;
+  color: #5c665e;
+}
+.voice-settings-toggle[aria-expanded='true'] > svg:last-child {
+  transform: rotate(180deg);
+}
+.voice-settings-panel {
+  margin-top: 6px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fafaf8;
+}
+.voice-settings-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.voice-settings-fields label {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+  font-weight: 500;
+}
+.voice-settings-fields select {
+  padding: 7px 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+.voice-settings-panel p {
+  margin: 9px 0;
+  line-height: 1.5;
+  color: #5c665e;
+}
+.voice-settings-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.voice-settings-actions button {
+  padding: 6px 9px;
+  gap: 5px;
+}
+.voice-settings-actions [role='status'] {
+  color: #5c665e;
+}
+.voice-settings-panel .voice-settings-error {
+  color: #9b454b;
+}
 .chat-transcript {
   overflow: auto;
   flex: 1;
@@ -4406,4 +4465,126 @@ h3 {
     margin: 8px;
     padding: 10px;
   }
+}
+
+.local-voice-invitation {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 20px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  font-size: 13px;
+}
+.local-voice-invitation > span {
+  flex: 1;
+}
+.call-view.approval {
+  position: relative;
+  inset: auto;
+  width: auto;
+  margin: 8px 20px;
+  flex-shrink: 0;
+}
+.call-view.approval .call-persona .mascot,
+.call-view.approval .call-persona h2,
+.call-view.approval .call-timer {
+  display: none;
+}
+
+.folder-access-card .page-review-body h3 {
+  font-size: 16px;
+  letter-spacing: 0;
+}
+.folder-access-selection {
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid #dfe3df;
+  border-radius: 9px;
+  background: #f7f9f7;
+}
+.folder-access-selection dt {
+  color: #738078;
+  font-size: 11px;
+}
+.folder-access-selection dd {
+  margin: 4px 0 0;
+}
+.folder-access-selection code,
+.folder-access-grant code {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.folder-access-permission {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.folder-access-permission select {
+  padding: 7px;
+  border: 1px solid #dfe3df;
+  border-radius: 7px;
+  background: #fff;
+}
+.folder-access-settings {
+  flex: 0 0 auto;
+  padding: 0 22px 8px;
+}
+.folder-access-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  padding: 6px 0;
+  background: transparent;
+  color: #66776d;
+  font-size: 12px;
+  cursor: pointer;
+}
+.folder-access-toggle[aria-expanded='true'] > svg:last-child {
+  transform: rotate(180deg);
+}
+.folder-access-panel {
+  padding: 12px;
+  border: 1px solid #dfe3df;
+  border-radius: 10px;
+  background: #f7f9f7;
+  font-size: 12px;
+}
+.folder-access-panel > p {
+  margin: 0 0 8px;
+}
+.folder-access-panel [role='alert'] {
+  color: #a33e35;
+}
+.folder-access-grant {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid #dfe3df;
+}
+.folder-access-grant > div {
+  min-width: 0;
+}
+.folder-access-grant small {
+  display: block;
+  margin-top: 4px;
+  color: #66776d;
+}
+.folder-access-panel button {
+  padding: 6px 9px;
+  border: 1px solid #dfe3df;
+  border-radius: 7px;
+  background: #fff;
+  cursor: pointer;
+}
+.folder-access-panel button:disabled {
+  opacity: 0.55;
+  cursor: default;
 }

@@ -1,3 +1,4 @@
+import { MemoryStore } from './fixtures/memory-conversations.js';
 import { afterEach, expect, it, vi } from 'vitest';
 import {
   AbstractAgent,
@@ -7,83 +8,7 @@ import {
 } from '@ag-ui/client';
 import { Observable, Subject, lastValueFrom, of, toArray } from 'rxjs';
 import { LocalAgentRunner } from '../src/server/local-runner.js';
-import {
-  replayRun,
-  type ConversationSnapshot,
-  type LocalConversationStore,
-  type ThreadLease,
-} from '../src/server/local-conversations.js';
 
-class MemoryStore implements LocalConversationStore {
-  ownerId = 'owner';
-  snapshot: ConversationSnapshot = { messages: [], state: {} };
-  locked = false;
-  failure?: 'begin' | 'append' | 'read' | 'finish';
-  ids = new Set<string>();
-  async getOrCreateThread() {
-    return {
-      id: 'thread',
-      agentId: 'dot',
-      organizationId: 'local',
-      createdById: 'owner',
-      name: null,
-      archived: false,
-      createdAt: '',
-      updatedAt: '',
-    };
-  }
-  async getSnapshot() {
-    if (this.failure === 'read') throw new Error('offline');
-    const copy = structuredClone(this.snapshot);
-    return copy.lastRun
-      ? {
-          ...copy,
-          ...(await replayRun(copy.lastRun.input, copy.lastRun.events)),
-        }
-      : copy;
-  }
-  async isRunning() {
-    return this.locked;
-  }
-  async acquireThread(): Promise<ThreadLease | null> {
-    if (this.locked) return null;
-    this.locked = true;
-    return {
-      signal: new AbortController().signal,
-      read: () => this.getSnapshot(),
-      beginRun: async (input) => {
-        if (this.failure === 'begin') throw new Error('offline');
-        if (this.ids.has(input.runId)) throw new Error('Run already used');
-        this.ids.add(input.runId);
-        this.snapshot = {
-          messages: structuredClone(input.messages),
-          state: structuredClone(input.state),
-          lastRun: {
-            input: structuredClone(input),
-            runId: input.runId,
-            events: [],
-            status: 'running',
-          },
-        };
-      },
-      appendEvent: async (event) => {
-        if (this.failure === 'append') throw new Error('offline');
-        this.snapshot.lastRun!.events.push(structuredClone(event));
-      },
-      finishRun: async (messages, state, status, terminal) => {
-        if (this.failure === 'finish') throw new Error('offline');
-        if (terminal)
-          this.snapshot.lastRun!.events.push(structuredClone(terminal));
-        this.snapshot.messages = structuredClone(messages);
-        this.snapshot.state = structuredClone(state);
-        this.snapshot.lastRun!.status = status;
-      },
-      release: async () => {
-        this.locked = false;
-      },
-    };
-  }
-}
 class TestAgent extends AbstractAgent {
   calls: RunAgentInput[] = [];
   aborted = false;
@@ -126,6 +51,41 @@ const answer = (i: RunAgentInput) =>
     { type: EventType.RUN_FINISHED, threadId: i.threadId, runId: i.runId },
   );
 afterEach(() => vi.restoreAllMocks());
+
+it('notifies voice observers only after each text event is saved and reports run failure', async () => {
+  for (const failTextWrite of [false, true]) {
+    const store = new MemoryStore();
+    const acquire = store.acquireThread.bind(store);
+    vi.spyOn(store, 'acquireThread').mockImplementation(async () => {
+      const lease = await acquire();
+      const append = lease!.appendEvent;
+      lease!.appendEvent = async (event) => {
+        if (failTextWrite && event.type === EventType.TEXT_MESSAGE_CONTENT)
+          throw Error('offline');
+        await append(event);
+      };
+      return lease;
+    });
+    const heard: string[] = [];
+    const settled = vi.fn();
+    const agent = Object.assign(new TestAgent(answer), {
+      onPersistedEvent: (_input: RunAgentInput, event: BaseEvent) => {
+        if (event.type !== EventType.TEXT_MESSAGE_CONTENT) return;
+        expect(store.snapshot.lastRun!.events).toContainEqual(event);
+        heard.push(String(event.delta));
+      },
+      onRunSettled: settled,
+    });
+    const runner = new LocalAgentRunner(store);
+    await collect(runner.run({ threadId: 'thread', agent, input: input() }));
+    expect(heard).toEqual(failTextWrite ? [] : ['Saved answer']);
+    expect(settled).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: 'thread' }),
+      failTextWrite,
+    );
+    await runner.close();
+  }
+});
 
 it('runs with saved history and reconnects after replacing the runner instance', async () => {
   const store = new MemoryStore();
@@ -321,7 +281,11 @@ it('reports lock cleanup failure without emitting a preceding success terminal',
   expect(events.some((e) => e.type === EventType.RUN_FINISHED)).toBe(false);
 });
 
-it('retains pending approvals and accepts their result on a later turn', async () => {
+it.each([
+  'review_space_page',
+  'request_connection_action',
+  'review_local_folder_access',
+])('continues a pending %s approval through the local runner', async (name) => {
   const store = new MemoryStore();
   const first = new TestAgent((i) =>
     of<BaseEvent[]>(
@@ -329,7 +293,7 @@ it('retains pending approvals and accepts their result on a later turn', async (
       {
         type: EventType.TOOL_CALL_START,
         toolCallId: 'approval',
-        toolCallName: 'review_space_page',
+        toolCallName: name,
         parentMessageId: 'a',
       },
       { type: EventType.TOOL_CALL_ARGS, toolCallId: 'approval', delta: '{}' },
@@ -427,7 +391,7 @@ it('waits for an in-flight durable write before stop releases the thread lock', 
   const acquire = store.acquireThread.bind(store);
   store.acquireThread = async () => {
     const lease = (await acquire())!;
-    const append = lease.appendEvent;
+    const append = lease!.appendEvent;
     lease.appendEvent = async (event) => {
       if (event.type === EventType.TEXT_MESSAGE_CONTENT) {
         writing = true;
@@ -542,4 +506,56 @@ it('reserves foreground activity before the conversation lock and releases it af
   expect(events.at(-1)?.type).toBe(EventType.RUN_FINISHED);
   expect(store.snapshot.lastRun?.status).toBe('finished');
   expect(order).toEqual(['reserve', 'release']);
+});
+
+it('settles streamed approval continuations with the canonical user context on failure', async () => {
+  const store = new MemoryStore();
+  store.snapshot.messages = [
+    { id: 'u', role: 'user', content: 'Choose a folder' },
+    {
+      id: 'a',
+      role: 'assistant',
+      toolCalls: [
+        {
+          id: 'approval',
+          type: 'function',
+          function: { name: 'review_local_folder_access', arguments: '{}' },
+        },
+      ],
+    },
+  ];
+  const provider = new TestAgent((i) =>
+    of<BaseEvent[]>(
+      { type: EventType.RUN_STARTED, threadId: i.threadId, runId: i.runId },
+      { type: EventType.RUN_ERROR, message: 'Provider stopped' },
+    ),
+  );
+  const settled = vi.fn();
+  Object.assign(provider, { onRunSettled: settled });
+  const runner = new LocalAgentRunner(store);
+  await collect(
+    runner.run({
+      threadId: 'thread',
+      agent: provider,
+      input: {
+        ...input(),
+        messages: [
+          {
+            id: 'result',
+            role: 'tool',
+            toolCallId: 'approval',
+            content: '{"approved":false}',
+          },
+        ],
+      },
+    }),
+  );
+  expect(settled).toHaveBeenCalledWith(
+    expect.objectContaining({
+      messages: expect.arrayContaining([
+        { id: 'u', role: 'user', content: 'Choose a folder' },
+      ]),
+    }),
+    true,
+  );
 });

@@ -32,27 +32,43 @@ it('preserves canonical history when clients send only new messages', () => {
   ]);
 });
 
-it('accepts a pending human review once and rejects invented or rewritten results', () => {
-  const result: Message = {
-    id: 'result',
-    role: 'tool',
-    toolCallId: 'review',
-    content: '{"approved":true}',
-  };
-  const merged = mergeInputMessages([approval], [result]);
-  expect(merged).toEqual([approval, result]);
-  expect(mergeInputMessages(merged, [result])).toEqual(merged);
-  expect(() =>
-    mergeInputMessages(merged, [{ ...result, content: '{"approved":false}' }]),
-  ).toThrow(/rewrite/i);
-  expect(() =>
-    mergeInputMessages([approval], [{ ...result, toolCallId: 'invented' }]),
-  ).toThrow(/pending/i);
-  expect(() =>
-    mergeInputMessages([approval], [{ ...approval, toolCalls: [] }]),
-  ).toThrow(/rewrite/i);
-  expect(() => mergeInputMessages([], [approval])).toThrow(/assistant/i);
-});
+it.each([
+  'review_space_page',
+  'request_connection_action',
+  'review_local_folder_access',
+])(
+  'accepts pending %s once and rejects invented or rewritten results',
+  (name) => {
+    const pending: Message = {
+      ...approval,
+      toolCalls: approval.toolCalls!.map((call) => ({
+        ...call,
+        function: { ...call.function, name },
+      })),
+    };
+    const result: Message = {
+      id: 'result',
+      role: 'tool',
+      toolCallId: 'review',
+      content: '{"approved":true}',
+    };
+    const merged = mergeInputMessages([pending], [result]);
+    expect(merged).toEqual([pending, result]);
+    expect(mergeInputMessages(merged, [result])).toEqual(merged);
+    expect(() =>
+      mergeInputMessages(merged, [
+        { ...result, content: '{"approved":false}' },
+      ]),
+    ).toThrow(/rewrite/i);
+    expect(() =>
+      mergeInputMessages([pending], [{ ...result, toolCallId: 'invented' }]),
+    ).toThrow(/pending/i);
+    expect(() =>
+      mergeInputMessages([pending], [{ ...pending, toolCalls: [] }]),
+    ).toThrow(/rewrite/i);
+    expect(() => mergeInputMessages([], [pending])).toThrow(/assistant/i);
+  },
+);
 
 it('does not accept a client result for a server tool or forged instructions', () => {
   const serverCall: Message = {

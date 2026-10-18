@@ -126,6 +126,28 @@ afterEach(() => {
 });
 
 describe('desktop sound category mixer', () => {
+  it('ducks active and new plush effects during a call, then restores the saved volume', () => {
+    audio.consume(
+      [event(1, 'pat')],
+      frame,
+      DEFAULT_PREFERENCES,
+      display.bounds,
+    );
+    const before = ContextDouble.current.sources[0].level();
+    audio.consume([], frame, DEFAULT_PREFERENCES, display.bounds, true);
+    expect(ContextDouble.current.sources[0].level()).toBeCloseTo(before * 0.1);
+    audio.consume(
+      [event(2, 'pickup')],
+      frame,
+      DEFAULT_PREFERENCES,
+      display.bounds,
+      true,
+    );
+    expect(ContextDouble.current.sources[1].level()).toBeCloseTo(0.04);
+    audio.consume([], frame, DEFAULT_PREFERENCES, display.bounds, false);
+    expect(ContextDouble.current.sources[1].level()).toBeCloseTo(0.4);
+    expect(DEFAULT_PREFERENCES.volume).toBe(0.4);
+  });
   it.each([
     ['step', 'walking'],
     ['turn', 'walking'],

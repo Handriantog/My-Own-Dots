@@ -7,19 +7,30 @@ import {
   Volume2,
   VolumeX,
   Maximize2,
+  Square,
 } from 'lucide-react';
 import { Mascot } from './Mascot';
 import type { Dot } from '../shared/types';
 import type { useVoice } from './useVoice';
+import type { VoicePhase } from '../shared/local-voice';
+
+export type VoiceControls = Omit<ReturnType<typeof useVoice>, 'phase'> & {
+  phase: VoicePhase;
+  notice?: string;
+  interrupt?: () => void | Promise<void>;
+};
 
 export function CallView({
   dot,
   voice,
+  companionColor,
 }: {
   dot: Dot;
-  voice: ReturnType<typeof useVoice>;
+  voice: VoiceControls;
+  companionColor?: string;
 }) {
-  const [minimized, setMinimized] = useState(false);
+  const [collapsed, setMinimized] = useState(false);
+  const minimized = collapsed || voice.phase === 'approval';
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (voice.status !== 'active') return;
@@ -35,17 +46,19 @@ export function CallView({
     voice.status === 'connecting'
       ? 'Connecting…'
       : voice.status === 'ending'
-        ? 'Saving call…'
-        : voice.muted
-          ? 'Microphone muted'
-          : voice.phase === 'speaking'
-            ? `${dot.name} is speaking`
-            : voice.phase === 'thinking'
-              ? 'Working on it…'
-              : 'Listening';
+        ? 'Ending call…'
+        : voice.phase === 'approval'
+          ? 'Review the action in chat'
+          : voice.muted
+            ? 'Microphone muted'
+            : voice.phase === 'speaking'
+              ? `${dot.name} is speaking`
+              : voice.phase === 'thinking'
+                ? 'Working on it…'
+                : 'Listening';
   return (
     <section
-      className={`call-view ${minimized ? 'minimized' : ''}`}
+      className={`call-view ${minimized ? 'minimized' : ''} ${voice.phase === 'approval' ? 'approval' : ''}`}
       aria-label={`Voice call with ${dot.name}`}
     >
       <div className="call-heading">
@@ -56,12 +69,17 @@ export function CallView({
           className="call-minimize"
           aria-label={minimized ? 'Expand call view' : 'Minimize call view'}
           onClick={() => setMinimized(!minimized)}
+          disabled={voice.phase === 'approval'}
         >
           {minimized ? <Maximize2 size={18} /> : <ChevronDown size={20} />}
         </button>
       </div>
       <div className={`call-persona ${voice.phase}`}>
-        <Mascot identity={dot.id} name={dot.name} />
+        <Mascot
+          identity={dot.id}
+          name={dot.name}
+          companionColor={companionColor}
+        />
         <h2>{dot.name}</h2>
         <span className="call-timer" aria-label="Call duration">
           {duration}
@@ -82,12 +100,29 @@ export function CallView({
           </p>
         </div>
       )}
+      {voice.notice && (
+        <p className="call-warning" role="status">
+          {voice.notice}
+        </p>
+      )}
       {voice.error && (
         <p className="call-warning" role="alert">
           {voice.error}
         </p>
       )}
       <div className="call-controls">
+        {voice.interrupt && (
+          <button
+            aria-label="Interrupt response"
+            onClick={() => void voice.interrupt?.()}
+            disabled={voice.status !== 'active'}
+          >
+            <span>
+              <Square />
+            </span>
+            <small>Interrupt</small>
+          </button>
+        )}
         <button
           aria-label={
             voice.speakerMuted ? 'Enable call audio' : 'Mute call audio'

@@ -1,6 +1,11 @@
+import {
+  decisionRecords,
+  type DecisionStreamBinding,
+} from './subscription-stream.js';
 import { measured } from './memory-metrics.js';
 import type { InferenceScheduler } from './inference-scheduler.js';
-import type { AgentOptions } from 'myown-llm-integrator';
+import type { AgentOptions, AgentResult } from 'myown-llm-integrator';
+import type { VoiceTurnTiming } from './local-voice/timing.js';
 import {
   serializeChatOptions,
   renderSubscriptionPrompt,
@@ -26,6 +31,10 @@ export interface SubscriptionConfig {
   model?: string;
   timeoutMs?: number;
   scheduler?: InferenceScheduler;
+  /** Server-bound call session only; absent for the ordinary text path. */
+  invoke?: (options: AgentOptions) => Promise<AgentResult>;
+  stream?: DecisionStreamBinding;
+  timing?: VoiceTurnTiming;
   prepare?: (
     payload: SubscriptionPayload,
     signal: AbortSignal,
@@ -120,8 +129,10 @@ function parseDecision(result: unknown, names: string[]) {
 }
 
 function tokenUsage(usage: Record<string, unknown>): TokenUsage | undefined {
-  const promptTokens = usage.input_tokens ?? usage.prompt_tokens;
-  const completionTokens = usage.output_tokens ?? usage.completion_tokens;
+  const promptTokens =
+    usage.input_tokens ?? usage.prompt_tokens ?? usage.inputTokens;
+  const completionTokens =
+    usage.output_tokens ?? usage.completion_tokens ?? usage.outputTokens;
   const validCount = (value: unknown): value is number =>
     typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
   // Unknown counts must not be reported as zero.
@@ -130,11 +141,16 @@ function tokenUsage(usage: Record<string, unknown>): TokenUsage | undefined {
   return {
     promptTokens,
     completionTokens,
-    totalTokens: validCount(usage.total_tokens)
-      ? usage.total_tokens
+    totalTokens: validCount(usage.total_tokens ?? usage.totalTokens)
+      ? ((usage.total_tokens ?? usage.totalTokens) as number)
       : promptTokens + completionTokens,
-    ...(validCount(usage.cached_input_tokens)
-      ? { promptTokensDetails: { cachedTokens: usage.cached_input_tokens } }
+    ...(validCount(usage.cached_input_tokens ?? usage.cachedInputTokens)
+      ? {
+          promptTokensDetails: {
+            cachedTokens: (usage.cached_input_tokens ??
+              usage.cachedInputTokens) as number,
+          },
+        }
       : {}),
   };
 }
@@ -150,28 +166,60 @@ class SubscriptionTextAdapter extends BaseTextAdapter<
   private readonly subscription: SubscriptionConfig;
   private readonly prepare?: SubscriptionConfig['prepare'];
   private readonly scheduler?: InferenceScheduler;
+  private readonly stream?: DecisionStreamBinding;
+  private readonly timing?: VoiceTurnTiming;
+  private readonly invoke: (options: AgentOptions) => Promise<AgentResult>;
 
   constructor(config: SubscriptionConfig) {
     super({}, config.model ?? 'cli-default');
     this.subscription = requestConfig(config);
     this.prepare = config.prepare;
     this.scheduler = config.scheduler;
+    this.invoke = config.invoke ?? runAgent;
+    this.stream = config.stream;
+    this.timing = config.timing;
   }
 
-  private request(options: AgentOptions) {
+  private async timedProvider<T>(
+    step: number,
+    signal: AbortSignal | undefined,
+    work: () => Promise<T>,
+  ) {
+    this.timing?.mark('provider_started', step);
+    try {
+      const response = await work();
+      this.timing?.mark('provider_finished', step);
+      this.timing?.providerResult(response, step);
+      return response;
+    } catch (error) {
+      this.timing?.mark(
+        signal?.aborted ? 'provider_cancelled' : 'provider_failed',
+        step,
+      );
+      throw error;
+    }
+  }
+  private request(options: AgentOptions, step?: number) {
+    const invoke = (signal = options.signal) =>
+      step === undefined
+        ? this.invoke({ ...options, signal })
+        : this.timedProvider(step, signal, () =>
+            this.invoke({ ...options, signal }),
+          );
     return this.scheduler
       ? this.scheduler.run(
           'foreground',
           options.signal ?? new AbortController().signal,
-          (signal) => runAgent({ ...options, signal }),
+          (signal) => invoke(signal),
         )
-      : measured('providerExecution', () => runAgent(options));
+      : measured('providerExecution', () => invoke());
   }
   async *chatStream(options: ChatOptions): AsyncIterable<StreamChunk> {
     const signal = abortSignal(options);
     const runId = options.runId ?? randomUUID();
     const threadId = options.threadId ?? randomUUID();
     const messageId = randomUUID();
+    const step = this.timing?.nextStep() ?? 0;
     try {
       signal?.throwIfAborted();
       yield {
@@ -191,23 +239,95 @@ class SubscriptionTextAdapter extends BaseTextAdapter<
         ...serializeChatOptions(options),
         responseSchema: schema,
       };
+      this.timing?.mark('context_started', step);
       if (this.prepare)
         payload = (await this.prepare(
           payload,
           signal ?? new AbortController().signal,
         )) as typeof payload;
-      const response = await this.request({
-        ...this.subscription,
-        signal,
-        prompt: renderSubscriptionPrompt(payload),
-        schema,
-      });
+      this.timing?.mark('context_ready', step);
+      this.timing?.mark('provider_queued', step);
+      let response: AgentResult;
+      let streamed = '';
+      if (this.stream) {
+        const binding = this.stream;
+        let result: AgentResult | undefined;
+        const run: DecisionStreamBinding['runDecision'] = (request) =>
+          this.scheduler
+            ? this.scheduler.run('foreground', request.signal!, (active) =>
+                this.timedProvider(step, active, () =>
+                  binding.runDecision({ ...request, signal: active }),
+                ),
+              )
+            : measured('providerExecution', () =>
+                this.timedProvider(step, request.signal, () =>
+                  binding.runDecision(request),
+                ),
+              );
+        for await (const record of decisionRecords(run, {
+          model: this.subscription.model,
+          timeoutMs: this.subscription.timeoutMs,
+          signal,
+          toolNames: names,
+          prompt:
+            'Complete this authoritative application conversation, following its system instructions. Use only the provider session decision-record protocol. Application actions must use availableTools and remain subject to host approval. Never claim an action succeeded without a tool result.\n\n' +
+            JSON.stringify({
+              systemPrompts: payload.systemPrompts,
+              messages: payload.messages,
+              availableTools: payload.availableTools,
+            }),
+        })) {
+          if (record.kind === 'result') {
+            result = record.response;
+            continue;
+          }
+          signal?.throwIfAborted();
+          if (!streamed)
+            yield {
+              type: EventType.TEXT_MESSAGE_START,
+              messageId,
+              role: 'assistant',
+              timestamp: Date.now(),
+            };
+          binding.authorizeText(messageId, record.sequence, record.text);
+          this.timing?.mark('first_validated_text', step);
+          streamed += record.text;
+          yield {
+            type: EventType.TEXT_MESSAGE_CONTENT,
+            messageId,
+            delta: record.text,
+            timestamp: Date.now(),
+          };
+        }
+        if (!result) throw Error('Provider returned no decision');
+        response = result;
+        const checked = parseDecision(response.result, names);
+        if (checked.text !== streamed || (streamed && checked.toolCalls.length))
+          throw Error('Provider final decision does not match committed text');
+        if (streamed)
+          yield {
+            type: EventType.TEXT_MESSAGE_END,
+            messageId,
+            timestamp: Date.now(),
+          };
+      } else {
+        response = await this.request(
+          {
+            ...this.subscription,
+            signal,
+            prompt: renderSubscriptionPrompt(payload),
+            schema,
+          },
+          step,
+        );
+      }
       signal?.throwIfAborted();
       options.logger?.provider('subscription decision response', { response });
       const decision = parseDecision(response.result, names);
 
       // The integrator returns one complete result; each step emits one delta.
-      if (decision.text) {
+      if (decision.text && !streamed) {
+        this.timing?.mark('first_validated_text', step);
         yield {
           type: EventType.TEXT_MESSAGE_START,
           messageId,
@@ -260,6 +380,10 @@ class SubscriptionTextAdapter extends BaseTextAdapter<
         timestamp: Date.now(),
       };
     } catch (error) {
+      this.timing?.mark(
+        signal?.aborted ? 'adapter_cancelled' : 'adapter_failed',
+        step,
+      );
       if (signal?.aborted) return;
       const message =
         error instanceof Error

@@ -1,4 +1,5 @@
 import './local-defaults.js';
+import { LocalVoiceService, localVoiceConfig } from './local-voice/service.js';
 import { webSearchProvider } from './parallel.js';
 import { createShutdown } from './shutdown.js';
 import { reportChannelFailure, safeFailure } from './slack-channel.js';
@@ -73,6 +74,10 @@ const config: PlatformConfig = {
   ownerToken,
 };
 const platform = new Platform(store, workspace, config);
+const localVoice = new LocalVoiceService(
+  platform,
+  localVoiceConfig(process.env),
+);
 const researchConfig = {
   mode: 'live' as const,
   ...localAi,
@@ -114,6 +119,7 @@ const app = createApp({
   ownerToken,
   origin: resolveAppOrigins(process.env.APP_ORIGIN, process.env.NODE_ENV),
   platform,
+  localVoice,
 });
 app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');
@@ -141,7 +147,10 @@ const server = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
 });
 const shutdown = createShutdown({
   stopRunner: () => runner.stop(),
-  stopPlatform: () => platform.stop(),
+  stopPlatform: async () => {
+    await localVoice.close();
+    await platform.stop();
+  },
   closeServer: () =>
     new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),

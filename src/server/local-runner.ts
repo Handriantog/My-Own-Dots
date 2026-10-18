@@ -6,6 +6,7 @@ import {
   transformChunks,
   verifyEvents,
   type BaseEvent,
+  type RunAgentInput,
 } from '@ag-ui/client';
 import {
   AgentRunner,
@@ -33,6 +34,9 @@ import {
 interface EvidenceAgent extends AbstractAgent {
   evidenceGuard?(threadId: string): EvidenceGuard;
   setEvidenceRecorder?(record?: (guard: EvidenceGuard) => Promise<void>): void;
+  onPersistedEvent?(input: RunAgentInput, event: BaseEvent): void;
+  onRunSettled?(input: RunAgentInput, failed: boolean): void;
+  onRunRequested?(input: RunAgentInput): void;
 }
 interface ActiveRun {
   runId: string;
@@ -78,6 +82,7 @@ export class LocalAgentRunner extends AgentRunner {
   }
 
   run(request: AgentRunnerRunRequest): Observable<BaseEvent> {
+    (request.agent as EvidenceAgent).onRunRequested?.(request.input);
     const subject = new ReplaySubject<BaseEvent>();
     if (this.closed || this.active.has(request.threadId)) {
       subject.next(
@@ -163,6 +168,8 @@ export class LocalAgentRunner extends AgentRunner {
               }
             }
             active.events.push(structuredClone(persisted));
+            if (!isTerminal(persisted))
+              (agent as EvidenceAgent).onPersistedEvent?.(input, persisted);
             if (!isTerminal(persisted)) active.subject.next(persisted);
             return persisted;
           };
@@ -187,6 +194,7 @@ export class LocalAgentRunner extends AgentRunner {
       active.agent.abortRun();
       void active.agent.detachActiveRun();
     };
+    let canonicalInput = request.input;
     try {
       if (request.threadId !== request.input.threadId)
         throw new Error('Conversation scope mismatch.');
@@ -224,6 +232,7 @@ export class LocalAgentRunner extends AgentRunner {
         request.persistedInputMessages ?? request.input.messages,
       );
       const input = { ...request.input, messages, state: snapshot.state };
+      canonicalInput = input;
       const evidenceAgent = request.agent as EvidenceAgent;
       await lease.beginRun(
         input,
@@ -360,6 +369,19 @@ export class LocalAgentRunner extends AgentRunner {
       releaseForeground?.();
       memoryMetrics.observe('turn', performance.now() - turnStarted, false);
       this.active.delete(request.threadId);
+      try {
+        (request.agent as EvidenceAgent).onRunSettled?.(
+          canonicalInput,
+          Boolean(
+            failure ||
+            active.storageFailed ||
+            active.stopRequested ||
+            active.events.some((event) => event.type === EventType.RUN_ERROR),
+          ),
+        );
+      } catch {
+        failure ??= new Error('Voice delivery cleanup failed.');
+      }
       if (failure) active.subject.next(runError(failure));
       else if (active.events.length) active.subject.next(active.events.at(-1)!);
       active.subject.complete();

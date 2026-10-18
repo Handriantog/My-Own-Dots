@@ -49,6 +49,24 @@ await build({
   external: ['electron'],
 });
 await build({
+  entryPoints: [path.join(root, 'src/desktop/menu-preload.ts')],
+  outfile: path.join(out, 'menu-preload.cjs'),
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  target: 'node24',
+  external: ['electron'],
+});
+await build({
+  entryPoints: [path.join(root, 'src/desktop/chat-preload.ts')],
+  outfile: path.join(out, 'chat-preload.cjs'),
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  target: 'node24',
+  external: ['electron'],
+});
+await build({
   entryPoints: [path.join(root, 'src/desktop/settings-preload.ts')],
   outfile: path.join(out, 'settings-preload.cjs'),
   bundle: true,
