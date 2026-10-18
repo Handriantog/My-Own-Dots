@@ -670,3 +670,47 @@ it('ends instead of retaining malformed or unbounded SSE data', async () => {
   expect(audio.instances[0].stop).toHaveBeenCalledTimes(1);
   expect(voice.error).toMatch(/event|stream|large/i);
 });
+
+it('keeps windowless audio alive when hidden, forwards phases, and still ends on native stop', async () => {
+  const phase = vi.fn(async () => {});
+  Object.assign(bridge, { isWindowless: () => true, phase });
+  await act(async () => {
+    await voice.start();
+  });
+  await act(async () => {
+    documentEvents.visibilityState = 'hidden';
+    documentEvents.dispatchEvent(new Event('visibilitychange'));
+  });
+  expect(audio.instances[0].stop).not.toHaveBeenCalled();
+  await emit({ type: 'phase', phase: 'thinking' });
+  expect(phase).toHaveBeenCalledWith('call', 'thinking');
+  await act(async () => nativeStop('shortcut'));
+  expect(audio.instances[0].stop).toHaveBeenCalled();
+  expect(bridge.end).toHaveBeenCalledWith('call');
+});
+
+it('releases the native starting state when the user ends before a call handle arrives', async () => {
+  const pending = deferred<Response>();
+  const normal = fetchMock.getMockImplementation() as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<Response>;
+  fetchMock.mockImplementation((url: string, init?: RequestInit) =>
+    url.endsWith('/calls') ? pending.promise : normal(url, init),
+  );
+  const cancelStart = vi.fn(async () => {});
+  Object.assign(bridge, { cancelStart });
+  let starting!: Promise<void>;
+  await act(async () => {
+    starting = voice.start();
+  });
+  await act(async () => {
+    await voice.end();
+  });
+  expect(cancelStart).toHaveBeenCalledOnce();
+  pending.resolve(json({ id: 'late-call', token: 'capability' }));
+  await act(async () => {
+    await starting;
+  });
+  expect(audio.instances[0].startCapture).not.toHaveBeenCalled();
+});

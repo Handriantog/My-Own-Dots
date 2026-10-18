@@ -157,6 +157,8 @@ export interface RigPose {
   rightFoot: Point;
   eyeOpen: number;
   mouth: number;
+  /** Opening of the authored smile during speech, separate from surprise/yawn. */
+  speech: number;
   effort: number;
   pinch: number;
   facing: number;
@@ -190,6 +192,7 @@ export interface Preferences {
   muted: boolean;
   paused: boolean;
   reducedMotion: boolean;
+  talkShortcut: string;
   displayId: string | null;
   placement: Point | null;
   /** Legacy v1 files used workArea; new saves use the whole display. */
@@ -204,8 +207,10 @@ export interface PresentationFrame {
   preferences: Preferences;
   hovered: boolean;
   visible: boolean;
+  appearance?: import('../core/visibility.js').VisibilityPose;
   displayBounds: Rect;
   voiceActive?: boolean;
+  voiceState?: import('./voice-contract.js').CompanionVoiceState;
 }
 export interface DesktopBridge {
   onFrame(callback: (frame: PresentationFrame) => void): () => void;

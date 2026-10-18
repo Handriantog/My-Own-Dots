@@ -4,6 +4,7 @@ import {
   type SoundCategory,
 } from '../core/sound-categories.js';
 import { AudioPolicy, parseSoundManifest } from '../core/audio-policy.js';
+import { dropletPop } from '../core/pop-sound.js';
 import type {
   InteractionEvent,
   Preferences,
@@ -24,6 +25,9 @@ export class CompanionAudio {
   private policy: AudioPolicy | null = null;
   private disposed = false;
   private suspended = false;
+  private popBuffer: AudioBuffer | null = null;
+  private popSource: AudioBufferSourceNode | null = null;
+  private lastPopId = 0;
   constructor() {
     this.master.gain.value = 0.4;
     this.master.connect(this.context.destination);
@@ -57,6 +61,7 @@ export class CompanionAudio {
     prefs: Preferences,
     display: { x: number; width: number },
     voiceActive = false,
+    popId: number | null = null,
   ): void {
     if (this.disposed || !this.policy) return;
     this.suspended = false;
@@ -73,6 +78,34 @@ export class CompanionAudio {
         .gain.setTargetAtTime(prefs.categoryVolumes[category], now, 0.018);
     this.policy.setMuted(prefs.muted);
     this.cancelVoices();
+    if (popId !== null && popId > this.lastPopId) {
+      this.lastPopId = popId;
+      if (
+        !prefs.muted &&
+        prefs.volume > 0 &&
+        prefs.categoryVolumes.interactions > 0
+      ) {
+        if (!this.popBuffer) {
+          const samples = dropletPop(this.context.sampleRate);
+          this.popBuffer = this.context.createBuffer(
+            1,
+            samples.length,
+            this.context.sampleRate,
+          );
+          this.popBuffer.getChannelData(0).set(samples);
+        }
+        this.popSource?.stop();
+        const source = this.context.createBufferSource();
+        source.buffer = this.popBuffer;
+        source.connect(this.categories.get('interactions')!);
+        source.onended = () => {
+          source.disconnect();
+          if (this.popSource === source) this.popSource = null;
+        };
+        this.popSource = source;
+        source.start();
+      }
+    }
     for (const event of events) {
       // Silent events still deduplicate and cancel previous actions, without
       // taking an audible voice's slot or advancing cooldown/variant selection.
@@ -134,6 +167,8 @@ export class CompanionAudio {
     this.suspended = true;
     this.policy?.suspend();
     this.cancelVoices();
+    this.popSource?.stop();
+    this.popSource = null;
     this.master.gain.setTargetAtTime(0, this.context.currentTime, 0.01);
   }
   stats(): { decoded: number; voices: number; state: AudioContextState } {

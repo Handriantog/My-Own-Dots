@@ -9,10 +9,12 @@ const host = vi.hoisted(() => ({
 }));
 interface WindowDouble extends EventEmitter {
   visible: boolean;
+  options: { show?: boolean };
   webContents: EventEmitter & {
     mainFrame: { url: string };
     send: ReturnType<typeof vi.fn>;
     reload: ReturnType<typeof vi.fn>;
+    executeJavaScript: ReturnType<typeof vi.fn>;
   };
 }
 vi.mock('electron', async () => {
@@ -37,11 +39,13 @@ vi.mock('electron', async () => {
         },
         send: vi.fn(),
         reload: vi.fn(),
+        executeJavaScript: vi.fn(async () => {}),
         getURL: () => this.webContents.mainFrame.url,
         setWindowOpenHandler() {},
       });
-      constructor() {
+      constructor(readonly options: { show?: boolean }) {
         super();
+        this.visible = options.show !== false;
         host.windows.push(this);
       }
       async loadURL(url: string) {
@@ -82,7 +86,7 @@ import { CompanionChatWindow } from '../../src/desktop/host/chat-window.js';
 
 let chat: CompanionChatWindow;
 const bounds = { x: 0, y: 0, width: 440, height: 620 };
-function invoke(name: string, payload: unknown) {
+function invoke(name: string, payload?: unknown) {
   const window = host.windows[0];
   return host.handlers.get(`dot:voice:${name}`)!(
     {
@@ -190,4 +194,67 @@ it('attaches folder selection to chat lifecycle and removes its IPC on destroy',
   chat.destroy();
   expect(host.handlers.has('dot:folders:choose')).toBe(false);
   expect(host.ipc!.listenerCount('dot:folders:context')).toBe(0);
+});
+
+it('toggles a hidden call without showing or duplicating chat, and stops on the next shortcut', async () => {
+  const window = host.windows[0];
+  await chat.toggleWindowless(bounds);
+  expect(window.visible).toBe(false);
+  expect(window.webContents.send).toHaveBeenCalledWith('dot:voice:talk', true);
+  await invoke('activate');
+  invoke('begin', 'call-12345678');
+  invoke('phase', { callId: 'call-12345678', phase: 'thinking' });
+  await chat.toggleWindowless(bounds);
+  expect(window.webContents.send).toHaveBeenLastCalledWith(
+    'dot:voice:stop',
+    'shortcut',
+  );
+  invoke('end', 'call-12345678');
+  expect(chat.voiceEngaged).toBe(false);
+  expect(window.visible).toBe(false);
+  expect(host.windows).toHaveLength(1);
+});
+
+it('cancels a cold hidden start while the workspace loads and never replays it', async () => {
+  chat.destroy();
+  host.windows = [];
+  const state = vi.fn();
+  chat = new CompanionChatWindow('/bundle', '/unused', undefined, {
+    active() {},
+    ready() {},
+    state,
+  });
+  let resolve!: (value: Response) => void;
+  vi.stubGlobal(
+    'fetch',
+    () =>
+      new Promise<Response>((done) => {
+        resolve = done;
+      }),
+  );
+  const opening = chat.toggleWindowless(bounds);
+  expect(chat.voiceEngaged).toBe(true);
+  await chat.toggleWindowless(bounds);
+  expect(chat.voiceEngaged).toBe(false);
+  // Let the file read finish and the first readiness request begin.
+  await vi.waitFor(() => expect(resolve).toBeDefined());
+  resolve(new Response('', { status: 503 }));
+  await opening;
+  expect(host.windows[0].options.show).toBe(false);
+  expect(host.windows[0].visible).toBe(false);
+  expect(host.windows[0].webContents.send).not.toHaveBeenCalledWith(
+    'dot:voice:talk',
+    true,
+  );
+  expect(state).toHaveBeenLastCalledWith(null);
+});
+
+it('reports a cold offline windowless start without displaying a connection window', async () => {
+  chat.destroy();
+  host.windows = [];
+  chat = new CompanionChatWindow('/bundle', '/unused');
+  vi.stubGlobal('fetch', async () => new Response('', { status: 503 }));
+  await expect(chat.toggleWindowless(bounds)).rejects.toThrow(/offline/);
+  expect(chat.voiceEngaged).toBe(false);
+  expect(host.windows[0].visible).toBe(false);
 });

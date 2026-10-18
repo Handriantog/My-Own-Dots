@@ -209,6 +209,7 @@ export function useLocalVoice(options: Options) {
       let nativeEnd: Promise<void> | undefined;
       try {
         if (current.handle) nativeEnd = window.dotVoice?.end(current.handle.id);
+        else nativeEnd = window.dotVoice?.cancelStart?.();
       } catch {
         /* Audio is already released. */
       }
@@ -258,6 +259,7 @@ export function useLocalVoice(options: Options) {
     (current: Session, failure: unknown) => {
       if (current.cancelled || session.current !== current) return;
       if (mounted.current) setError(message(failure));
+      window.dotVoice?.reportError?.(message(failure));
       void finish(current);
     },
     [finish],
@@ -365,10 +367,17 @@ export function useLocalVoice(options: Options) {
     const handleEvent = (event: LocalVoiceEvent) => {
       if (current.cancelled) return;
       if (event.type === 'ended') {
-        if (event.error) setError(event.error);
+        if (event.error) {
+          setError(event.error);
+          window.dotVoice?.reportError?.(event.error);
+        }
         void finish(current);
       } else if (event.type === 'phase') {
         setPhase(event.phase);
+        if (current.handle)
+          void window.dotVoice
+            ?.phase?.(current.handle.id, event.phase)
+            .catch(() => {});
         if (event.phase === 'thinking' || event.phase === 'speaking')
           setNotice('');
       } else if (event.type === 'caption') {
@@ -612,7 +621,11 @@ export function useLocalVoice(options: Options) {
       void finish();
     };
     const hidden = () => {
-      if (document.visibilityState === 'hidden') stop();
+      if (
+        document.visibilityState === 'hidden' &&
+        !window.dotVoice?.isWindowless?.()
+      )
+        stop();
     };
     window.addEventListener('pagehide', stop);
     document.addEventListener('visibilitychange', hidden);

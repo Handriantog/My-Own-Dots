@@ -12,3 +12,46 @@ canvas {
   display: block;
   touch-action: none;
 }
+.voice-status {
+  position: absolute;
+  top: 0;
+  left: 0;
+  box-sizing: border-box;
+  width: 88px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #dbcbb6;
+  border-radius: 14px;
+  background: #fff7e9;
+  color: #513d2b;
+  font:
+    600 12px/1 -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  letter-spacing: 0.1px;
+  filter: drop-shadow(0 2px 3px #281d1d26);
+  pointer-events: none;
+}
+.voice-status[hidden] {
+  display: none;
+}
+.voice-status::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 11px;
+  width: 6px;
+  height: 6px;
+  transform: rotate(45deg);
+  background: #fff7e9;
+  border-left: 1px solid #dbcbb6;
+  border-bottom: 1px solid #dbcbb6;
+}
+.voice-status[data-side='left']::before {
+  left: auto;
+  right: -4px;
+  transform: rotate(225deg);
+}

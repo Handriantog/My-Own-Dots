@@ -10,6 +10,7 @@ import type { Rect } from '../shared/contracts.js';
 import { workspaceAddress } from './interaction.js';
 import { CompanionVoiceSession } from './voice-session.js';
 import { CompanionFolderPicker } from './folder-picker.js';
+import type { CompanionVoiceState } from '../shared/voice-contract.js';
 
 const connectionPage = 'dots://app/chat.html';
 
@@ -20,6 +21,8 @@ export class CompanionChatWindow {
   private error = '';
   private loading = false;
   private opening: Promise<void> | null = null;
+  private request = 0;
+  private requestSequence = 0;
   private readonly voice: CompanionVoiceSession;
   private readonly folders: CompanionFolderPicker;
 
@@ -27,9 +30,11 @@ export class CompanionChatWindow {
     private readonly bundle: string,
     private readonly data: string,
     private readonly getColor: () => string = () => '#45a7ff',
-    voiceChanged: {
+    private readonly voiceChanged: {
       active(value: boolean): void;
       ready(value: boolean): void;
+      state?(value: CompanionVoiceState): void;
+      error?(message: string): void;
     } = {
       active() {},
       ready() {},
@@ -38,7 +43,12 @@ export class CompanionChatWindow {
     this.voice = new CompanionVoiceSession(
       () => this.window,
       () => this.address,
-      voiceChanged,
+      {
+        ...voiceChanged,
+        state: (value) => {
+          if (!this.request || value !== null) voiceChanged.state?.(value);
+        },
+      },
     );
     this.folders = new CompanionFolderPicker(
       () => this.window,
@@ -88,6 +98,43 @@ export class CompanionChatWindow {
     this.voice.talk();
   }
 
+  get voiceEngaged(): boolean {
+    return !!this.request || this.voice.engaged;
+  }
+  get windowlessVoice(): boolean {
+    return !!this.request || this.voice.isWindowless;
+  }
+
+  async toggleWindowless(bounds: Rect): Promise<void> {
+    if (this.voiceEngaged) {
+      this.stopVoice('shortcut');
+      return;
+    }
+    const request = ++this.requestSequence;
+    this.request = request;
+    this.voiceChanged.state?.('connecting');
+    try {
+      await this.ensureWindow(bounds);
+      if (this.request !== request) return;
+      if (!this.voice.talk(true))
+        throw new Error(
+          this.error ||
+            'Open Chat connection to connect your workspace, then try Talk again.',
+        );
+      this.request = 0;
+      if (this.window?.isVisible()) this.window.hide();
+    } catch (error) {
+      if (this.request !== request) return;
+      this.stopVoice('error');
+      throw error;
+    }
+  }
+
+  stopVoice(reason: string): void {
+    this.request = 0;
+    this.voice.stop(reason);
+  }
+
   private requireConnectionPage(event: IpcMainInvokeEvent): void {
     if (
       !this.window ||
@@ -99,13 +146,19 @@ export class CompanionChatWindow {
       throw new Error('Invalid chat sender');
   }
 
-  open(bounds: Rect): Promise<void> {
+  async open(bounds: Rect): Promise<void> {
+    await this.ensureWindow(bounds);
+    const window = this.window;
+    if (!window || window.isDestroyed()) return;
+    this.updateAppearance();
+    window.setBounds(bounds);
+    window.show();
+    window.focus();
+  }
+
+  private ensureWindow(bounds: Rect): Promise<void> {
     if (this.opening) return this.opening;
     if (this.window && !this.window.isDestroyed()) {
-      this.updateAppearance();
-      this.window.setBounds(bounds);
-      this.window.show();
-      this.window.focus();
       return Promise.resolve();
     }
     this.opening = this.create(bounds).finally(() => {
@@ -131,6 +184,7 @@ export class CompanionChatWindow {
     }
     const window = new BrowserWindow({
       ...bounds,
+      show: false,
       title: 'Chat with Dot',
       backgroundColor: '#fafaf8',
       minWidth: Math.min(360, bounds.width),
@@ -145,6 +199,7 @@ export class CompanionChatWindow {
         contextIsolation: true,
         nodeIntegration: false,
         webSecurity: true,
+        backgroundThrottling: false,
       },
     });
     this.window = window;
@@ -191,8 +246,10 @@ export class CompanionChatWindow {
       },
     );
     window.webContents.on('did-navigate', () => this.voice.reset());
-    window.on('hide', () => this.voice.stop('hidden'));
-    // No native background call controls exist yet, so minimize ends capture.
+    window.on('hide', () => {
+      if (!this.voice.isWindowless) this.stopVoice('hidden');
+    });
+    // Explicitly minimizing or closing visible controls still ends the call.
     window.on('minimize', () => this.voice.stop('minimized'));
     // Keep the conversation and in-flight response alive when the box is closed.
     window.on('close', (event) => {
@@ -255,7 +312,7 @@ export class CompanionChatWindow {
   }
 
   hide(): void {
-    this.voice.stop('hidden');
+    this.stopVoice('hidden');
     if (this.window?.isVisible()) this.window.hide();
   }
   updateAppearance(): void {
@@ -281,6 +338,7 @@ export class CompanionChatWindow {
       .catch(() => {});
   }
   destroy(): void {
+    this.request = 0;
     this.folders.destroy();
     this.voice.destroy();
     this.window?.destroy();

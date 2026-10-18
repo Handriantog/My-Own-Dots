@@ -475,3 +475,24 @@ describe('continuous companion simulation', () => {
     expect(actions.has('pull_up')).toBe(true);
   });
 });
+
+it('animates conversation phases without moving, then resumes physics after the call', () => {
+  const sim = resting(world(), 400, 300);
+  const position = sim.frame().root;
+  sim.setOptions({ paused: false, reducedMotion: false, voice: 'listening' });
+  run(sim, 17, 500);
+  const listening = sim.frame().pose;
+  sim.setWorld(world([]));
+  sim.setOptions({ paused: false, reducedMotion: false, voice: 'speaking' });
+  run(sim, 534, 600);
+  const speaking = sim.frame().pose;
+  expect(sim.frame().root).toEqual(position);
+  expect(speaking.speech).toBeGreaterThan(listening.speech);
+  sim.setOptions({ paused: false, reducedMotion: false, voice: 'thinking' });
+  run(sim, 1150, 600);
+  expect(sim.frame().root).toEqual(position);
+  expect(sim.frame().pose.look.y).toBeLessThan(-0.2);
+  sim.setOptions({ paused: true, reducedMotion: false, voice: null });
+  run(sim, 1770, 1000);
+  expect(sim.frame().root.y).toBeGreaterThan(position.y);
+});

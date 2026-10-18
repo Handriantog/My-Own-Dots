@@ -66,7 +66,7 @@ const harness = vi.hoisted(() => {
   return {
     stopVoicePreview: vi.fn(),
     startLocalVoice: vi.fn(async () => {}),
-    localVoiceStatus: 'idle' as 'idle' | 'active',
+    localVoiceStatus: 'idle' as 'idle' | 'active' | 'ending',
     localVoiceOptions: undefined as
       | undefined
       | {
@@ -810,4 +810,35 @@ it('accepts the next voice turn after cancellation before React commits the idle
   });
   expect(harness.agent.addMessage).toHaveBeenCalledTimes(2);
   expect(alertText()).toEqual([]);
+});
+
+it('waits for the previous call to finish saving before consuming a fresh Talk', async () => {
+  harness.localVoiceStatus = 'ending';
+  const target = new EventTarget();
+  const activate = vi.fn(async () => {
+    target.dispatchEvent(new Event('dot-voice-start'));
+  });
+  vi.stubGlobal(
+    'window',
+    Object.assign(target, {
+      dotVoice: { activate, setReady: vi.fn(async () => {}) },
+    }),
+  );
+  const consumed = vi.fn();
+  const next = {
+    ...props,
+    localVoiceReady: true,
+    voiceIntent: 2,
+    onVoiceConsumed: consumed,
+  };
+  await act(async () => {
+    root = create(createElement(Chat, next));
+  });
+  expect(consumed).not.toHaveBeenCalled();
+  expect(activate).not.toHaveBeenCalled();
+  harness.localVoiceStatus = 'idle';
+  await act(async () => root.update(createElement(Chat, { ...next })));
+  expect(activate).toHaveBeenCalledOnce();
+  expect(harness.startLocalVoice).toHaveBeenCalledOnce();
+  expect(consumed).toHaveBeenCalledOnce();
 });

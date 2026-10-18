@@ -259,3 +259,72 @@ describe('desktop microphone scope', () => {
     expect(permission()).toBe(false);
   });
 });
+
+describe('windowless voice authorization', () => {
+  it('permits a hidden call only after consuming a native windowless request, and revokes on stop', async () => {
+    ready();
+    window.visible = false;
+    window.focused = false;
+    expect(() => invoke('begin', 'call-12345678')).toThrow();
+    voice.talk(true);
+    expect(() => invoke('begin', 'call-12345678')).toThrow();
+    await invoke('activate');
+    invoke('begin', 'call-12345678');
+    expect(permission()).toBe(true);
+    expect(permission('video')).toBe(false);
+    expect(permission('audio', { isMainFrame: false })).toBe(false);
+    invoke('phase', { callId: 'call-12345678', phase: 'speaking' });
+    expect(() =>
+      invoke('phase', { callId: 'call-87654321', phase: 'listening' }),
+    ).toThrow();
+    expect(() =>
+      invoke('phase', { callId: 'call-12345678', phase: 'invalid' }),
+    ).toThrow();
+    voice.stop('shortcut');
+    expect(permission()).toBe(false);
+    invoke('end', 'call-12345678');
+    expect(() => invoke('begin', 'call-87654321')).toThrow();
+  });
+  it('clears pending windowless requests on cancel, timeout and navigation', async () => {
+    ready();
+    window.visible = false;
+    window.focused = false;
+    voice.talk(true);
+    expect(voice.engaged).toBe(true);
+    invoke('cancel-talk');
+    expect(voice.engaged).toBe(false);
+    expect(() => invoke('activate')).toThrow();
+    voice.talk(true);
+    await vi.advanceTimersByTimeAsync(30001);
+    expect(voice.engaged).toBe(false);
+    voice.talk(true);
+    await invoke('activate');
+    voice.reset();
+    ready();
+    expect(() => invoke('begin', 'call-12345678')).toThrow();
+  });
+});
+
+it('releases windowless startup without waiting for a call identity', async () => {
+  ready();
+  window.visible = false;
+  window.focused = false;
+  voice.talk(true);
+  await invoke('activate');
+  invoke('cancel-talk'); // Consuming App's intent must not cancel audio initialization.
+  expect(voice.engaged).toBe(true);
+  invoke('cancel-start');
+  expect(voice.engaged).toBe(false);
+  expect(() => invoke('begin', 'call-12345678')).toThrow();
+});
+
+it('does not let a duplicate end acknowledgement erase the next shortcut request', async () => {
+  ready();
+  invoke('begin', 'call-12345678');
+  invoke('end', 'call-12345678');
+  window.visible = false;
+  window.focused = false;
+  voice.talk(true);
+  invoke('end', 'call-12345678');
+  await expect(invoke('activate')).resolves.toBeUndefined();
+});

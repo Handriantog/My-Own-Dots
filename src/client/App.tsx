@@ -94,9 +94,15 @@ export function App({ desktop = false }: { desktop?: boolean }) {
     const offTalk = window.dotVoice?.onTalk(() =>
       setVoiceIntent(++nextVoiceIntent.current),
     );
-    const offStop = window.dotVoice?.onStop(consumeVoiceIntent);
+    // The host already revoked this request. Echoing cancelTalk can cancel a
+    // newer shortcut request queued while this renderer was busy.
+    const offStop = window.dotVoice?.onStop(() => setVoiceIntent(0));
     const hidden = () => {
-      if (document.visibilityState === 'hidden') consumeVoiceIntent();
+      if (
+        document.visibilityState === 'hidden' &&
+        !window.dotVoice?.isWindowless?.()
+      )
+        consumeVoiceIntent();
     };
     document.addEventListener('visibilitychange', hidden);
     window.addEventListener('pagehide', consumeVoiceIntent);
@@ -364,6 +370,10 @@ export function App({ desktop = false }: { desktop?: boolean }) {
       setView('chat');
       setMobile(false);
     } catch (e) {
+      if (voiceIntent)
+        window.dotVoice?.reportError?.(
+          e instanceof Error ? e.message : 'Could not create the conversation.',
+        );
       consumeVoiceIntent();
       setError(
         e instanceof Error ? e.message : 'Could not create the conversation.',
@@ -380,17 +390,17 @@ export function App({ desktop = false }: { desktop?: boolean }) {
       state?.settings.paused ||
       (localVoiceResolved && !localVoice.ready)
     ) {
+      const reason = needsAuth
+        ? 'Unlock your workspace, then choose Talk again.'
+        : !configured
+          ? 'Complete your workspace setup before starting a call.'
+          : state?.settings.paused
+            ? 'Resume your Dot before starting a call.'
+            : localVoice.reason ||
+              'Complete local voice setup before starting a call.';
+      window.dotVoice?.reportError?.(reason);
       consumeVoiceIntent();
-      setError(
-        needsAuth
-          ? 'Unlock your workspace, then choose Talk again.'
-          : !configured
-            ? 'Complete your workspace setup before starting a call.'
-            : state?.settings.paused
-              ? 'Resume your Dot before starting a call.'
-              : localVoice.reason ||
-                'Complete local voice setup before starting a call.',
-      );
+      setError(reason);
       return;
     }
     if (!configured || !dot) return;

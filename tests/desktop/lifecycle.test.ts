@@ -18,6 +18,7 @@ const host = vi.hoisted(() => ({
   accessibilityTrusted: false,
   menu: [] as Array<{ label?: string; click?: () => void }>,
   loads: 0,
+  autoAck: true,
   diagnosticEvents: [] as Array<{
     event: string;
     details: Record<string, unknown>;
@@ -54,7 +55,7 @@ vi.mock('electron', async () => {
       send: (channel: string, frame: PresentationFrame) => {
         if (channel === 'dot:frame') {
           host.frame = frame;
-          ipc.emit('dot:ack', this.event(), frame.sequence);
+          if (host.autoAck) ipc.emit('dot:ack', this.event(), frame.sequence);
         }
       },
     });
@@ -113,6 +114,8 @@ vi.mock('electron', async () => {
       quit: vi.fn(),
     }),
     BrowserWindow: Window,
+    globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
+    Notification: { isSupported: () => false },
     ipcMain: Object.assign(ipc, { handle: vi.fn() }),
     Menu: { buildFromTemplate: (items: unknown) => items },
     nativeImage: { createFromPath: () => ({ resize: () => ({}) }) },
@@ -174,6 +177,7 @@ beforeEach(async () => {
   host.menu = [];
   host.diagnosticEvents = [];
   host.loads = 0;
+  host.autoAck = true;
   vi.useFakeTimers({
     toFake: [
       'setTimeout',
@@ -193,6 +197,7 @@ beforeEach(async () => {
     senderFrame: window.webContents.mainFrame,
   });
   expect(window.visible).toBe(true);
+  await vi.advanceTimersByTimeAsync(450);
 });
 afterEach(async () => {
   Object.defineProperty(process, 'platform', platformDescriptor);
@@ -245,6 +250,7 @@ describe('companion click menu', () => {
     );
   }
   it('opens the cloud menu on a body click and can restore the hidden Dot', async () => {
+    await vi.advanceTimersByTimeAsync(350);
     host.cursor = {
       x: host.frame!.simulation.root.x,
       y: host.frame!.simulation.root.y - 55,
@@ -261,9 +267,87 @@ describe('companion click menu', () => {
       { sender: menu.webContents, senderFrame: menu.webContents.mainFrame },
       'hide',
     );
+    expect(host.windows[0].visible).toBe(true);
+    await vi.advanceTimersByTimeAsync(440);
     expect(host.windows[0].visible).toBe(false);
     host.menu.find((item) => item.label === 'Show Dot')!.click!();
     expect(host.windows[0].visible).toBe(true);
+  });
+  it('keeps the root in place through hide/show and cancels a pending hide on a quick toggle', async () => {
+    await vi.advanceTimersByTimeAsync(400);
+    const position = host.frame!.simulation.root;
+    host.menu.find((item) => item.label === 'Hide Dot')!.click!();
+    expect(host.windows[0].visible).toBe(true);
+    expect(host.frame!.visible).toBe(false);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(host.frame!.simulation.root).toEqual(position);
+    const fading = host.frame!.appearance!.scaleX;
+    expect(fading).toBeGreaterThan(0);
+    expect(fading).toBeLessThan(1);
+    host.menu.find((item) => item.label === 'Show Dot')!.click!();
+    await vi.advanceTimersByTimeAsync(180);
+    expect(host.windows[0].visible).toBe(true);
+    expect(host.frame!.simulation.root).toEqual(position);
+    expect(host.frame!.appearance!.scaleX).toBeGreaterThan(fading);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(host.windows[0].visible).toBe(true);
+    expect(host.frame!.appearance!.alpha).toBe(1);
+  });
+  it('hides immediately on lock even during a user-requested fade', async () => {
+    await vi.advanceTimersByTimeAsync(400);
+    host.menu.find((item) => item.label === 'Hide Dot')!.click!();
+    expect(host.windows[0].visible).toBe(true);
+    host.power!.emit('lock-screen');
+    expect(host.windows[0].visible).toBe(false);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(host.windows[0].visible).toBe(false);
+  });
+  it('ignores a drag during arrival while the sprite is smaller than its normal hit region', async () => {
+    host.menu.find((item) => item.label === 'Hide Dot')!.click!();
+    await vi.advanceTimersByTimeAsync(250);
+    const position = host.frame!.simulation.root;
+    host.menu.find((item) => item.label === 'Show Dot')!.click!();
+    host.cursor = { x: position.x, y: position.y - 55 };
+    pointer('down');
+    host.cursor.x += 50;
+    pointer('move');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(host.frame!.simulation.grip).toBeNull();
+    expect(host.frame!.simulation.root).toEqual(position);
+  });
+  it('resumes falling without catching up hidden animation time after a reduced-motion fade', async () => {
+    host.cursor = {
+      x: host.frame!.simulation.root.x,
+      y: host.frame!.simulation.root.y - 55,
+    };
+    pointer('down');
+    host.cursor.y -= 200;
+    pointer('move');
+    host.menu.find((item) => item.label === 'Reduce motion')!.click!();
+    host.menu.find((item) => item.label === 'Hide Dot')!.click!();
+    await vi.advanceTimersByTimeAsync(200);
+    const root = host.frame!.simulation.root;
+    host.menu.find((item) => item.label === 'Show Dot')!.click!();
+    await vi.advanceTimersByTimeAsync(160);
+    expect(host.frame!.simulation.root.y - root.y).toBeLessThan(1);
+  });
+  it('waits for the transparent frame to be drawn before hiding the native window', async () => {
+    await vi.advanceTimersByTimeAsync(400);
+    host.autoAck = false;
+    host.menu.find((item) => item.label === 'Hide Dot')!.click!();
+    const first = host.frame!.sequence;
+    await vi.advanceTimersByTimeAsync(440);
+    expect(host.windows[0].visible).toBe(true);
+    const window = host.windows[0];
+    const event = {
+      sender: window.webContents,
+      senderFrame: window.webContents.mainFrame,
+    };
+    host.ipc!.emit('dot:ack', event, first);
+    expect(host.frame!.appearance!.alpha).toBe(0);
+    expect(window.visible).toBe(true);
+    host.ipc!.emit('dot:ack', event, host.frame!.sequence);
+    expect(window.visible).toBe(false);
   });
   it('preserves pickup without opening a menu on release', () => {
     host.cursor = {

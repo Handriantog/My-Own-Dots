@@ -1,13 +1,15 @@
-import { Application } from 'pixi.js';
+import { Application, Graphics } from 'pixi.js';
 // Pixi's static uniform/UBO implementations support CSP without unsafe-eval.
 import 'pixi.js/unsafe-eval';
 import { PlushRig } from './rig.js';
 import { CompanionAudio } from './audio.js';
+import { VoiceStatusBubble } from './voice-status.js';
 import type {
   DesktopBridge,
   Point,
   PresentationFrame,
 } from '../shared/contracts.js';
+import type { CompanionVoiceState } from '../shared/voice-contract.js';
 import './style.css';
 
 declare global {
@@ -27,6 +29,8 @@ let captured: number | null = null;
 let frames = 0;
 let audio: CompanionAudio | null = null;
 let wasPaused = false;
+let wasVisible = false;
+let lastVoiceState: CompanionVoiceState | undefined;
 const app = new Application();
 try {
   await app.init({
@@ -40,6 +44,8 @@ try {
     autoStart: false,
   });
   document.body.appendChild(app.canvas);
+  const voiceStatus = new VoiceStatusBubble();
+  document.body.appendChild(voiceStatus.element);
   const rig = await PlushRig.create('./desktop-dot');
   try {
     audio = new CompanionAudio();
@@ -52,6 +58,8 @@ try {
     );
   }
   app.stage.addChild(rig.container);
+  const popRipple = new Graphics();
+  app.stage.addChild(popRipple);
   document.body.style.cursor = 'default';
   app.canvas.addEventListener('webglcontextlost', (event) => {
     event.preventDefault();
@@ -127,20 +135,73 @@ try {
       local.climb.hand.x -= frame.origin.x;
       local.climb.hand.y -= frame.origin.y;
     }
+    if (frame.appearance) {
+      local.pose.eyeOpen *= frame.appearance.eyeOpen;
+      local.pose.love *= frame.appearance.eyeOpen;
+    }
     rig.update(local, frame.preferences.color);
-    app.stage.visible = frame.visible;
+    let popCenter = local.root;
+    if (frame.appearance) {
+      // Fade the finished canvas as one image: fading each plush layer makes
+      // the hidden legs/arms show through the fur during the transition.
+      popCenter = rig.appearance(frame.appearance);
+    }
+    popRipple.clear();
+    const burst = frame.appearance?.burst ?? 1;
+    if (burst > 0 && burst < 1) {
+      popRipple.position.set(popCenter.x, popCenter.y);
+      const radius = 5 + burst * 15;
+      popRipple.circle(0, 0, radius).stroke({
+        color: frame.preferences.color,
+        alpha: (1 - burst) * 0.45,
+        width: 1.2,
+      });
+      for (const angle of [-2.5, -0.65, 0.65, 2.5]) {
+        const distance = radius + 3;
+        popRipple
+          .circle(
+            Math.cos(angle) * distance,
+            Math.sin(angle) * distance,
+            (1 - burst) * 1.7,
+          )
+          .fill({ color: frame.preferences.color, alpha: 1 - burst });
+      }
+    }
+    app.canvas.style.opacity = String(frame.appearance?.alpha ?? 1);
+    const drawn = frame.appearance ? frame.appearance.alpha > 0 : frame.visible;
+    if (frame.visible) lastVoiceState = frame.voiceState;
+    voiceStatus.update(
+      frame.visible ? frame.voiceState : lastVoiceState,
+      local.root,
+      drawn,
+    );
+    voiceStatus.element.style.opacity = String(
+      (frame.appearance?.alpha ?? 1) * (1 - (frame.appearance?.circle ?? 0)),
+    );
+    app.stage.visible = drawn;
     app.render();
     const justPaused = frame.preferences.paused && !wasPaused;
-    if (!frame.visible || justPaused) audio?.suspend();
-    if (frame.visible)
+    if (
+      (!frame.visible && wasVisible) ||
+      justPaused ||
+      (!frame.visible && !frame.appearance?.active)
+    )
+      audio?.suspend();
+    if (frame.visible || frame.appearance?.active)
       audio?.consume(
-        justPaused ? [] : frame.events,
+        justPaused || !frame.visible
+          ? []
+          : frame.events.filter(
+              (event) => !(frame.appearance?.active && event.name === 'appear'),
+            ),
         frame.simulation,
         frame.preferences,
         frame.displayBounds,
         frame.voiceActive,
+        frame.appearance?.popId,
       );
     wasPaused = frame.preferences.paused;
+    wasVisible = frame.visible;
     window.dotDiagnostics = {
       frame,
       renderMs: performance.now() - started,

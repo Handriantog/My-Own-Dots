@@ -197,7 +197,8 @@ export function Chat({
     if (
       voiceIntent &&
       consumedIntent.current !== voiceIntent &&
-      localVoice.status !== 'idle'
+      localVoice.status !== 'idle' &&
+      localVoice.status !== 'ending'
     )
       consumeTalk();
   }, [voiceIntent, localVoice.status]);
@@ -225,6 +226,7 @@ export function Chat({
     const fail = (reason: string) => {
       if (!current()) return;
       setTalkError(reason);
+      window.dotVoice?.reportError?.(reason);
       consumeTalk();
     };
     if (paused) return fail('Resume your Dot before starting a call.');
@@ -273,6 +275,9 @@ export function Chat({
     const timeout = setTimeout(() => {
       if (consumedIntent.current === voiceIntent) return;
       setTalkError(
+        'The conversation took too long to connect. Choose Talk to try again.',
+      );
+      window.dotVoice?.reportError?.(
         'The conversation took too long to connect. Choose Talk to try again.',
       );
       consumeTalk();

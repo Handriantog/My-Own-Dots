@@ -1,4 +1,5 @@
 import type { Action, Point, RigPose } from '../shared/contracts.js';
+import type { CompanionVoiceState } from '../shared/voice-contract.js';
 
 export function initialPose(): RigPose {
   return {
@@ -18,6 +19,7 @@ export function initialPose(): RigPose {
     rightFoot: { x: 20, y: 0 },
     eyeOpen: 1,
     mouth: 0,
+    speech: 0,
     effort: 0,
     pinch: 0,
     facing: 1,
@@ -35,6 +37,7 @@ export interface PoseInput {
   reducedMotion: boolean;
   look?: Point;
   loved?: boolean;
+  voice?: CompanionVoiceState;
 }
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 function foot(phase: number): Point {
@@ -205,11 +208,60 @@ export function samplePose(
       action === 'yawn' || held || action === 'fall' ? 1 : effort * 0.8,
       easing,
     ),
+    speech: mix(previous.speech, 0, 1 - Math.exp(-dt / 0.045)),
     effort: mix(previous.effort, effort, easing),
     pinch: mix(previous.pinch, held ? 1 : 0, easing),
     facing: mix(previous.facing, facing, easing),
     breathing: Math.sin(time * 2.2) * secondary * (sleepy ? 1.8 : 0.65),
   };
+  if (input.voice) {
+    const thinking = input.voice === 'thinking' || input.voice === 'connecting';
+    const speaking = input.voice === 'speaking';
+    const listening = input.voice === 'listening';
+    const wave = reducedMotion ? 0 : Math.sin(time * 2.5);
+    next.lean = mix(
+      previous.lean,
+      listening ? -0.055 : thinking ? 0.045 : wave * 0.018,
+      easing,
+    );
+    next.look = {
+      x: mix(previous.look.x, thinking ? 0.35 : 0, easing),
+      y: mix(previous.look.y, thinking ? -0.55 : -0.05, easing),
+    };
+    next.eyeOpen = mix(
+      previous.eyeOpen,
+      thinking ? 0.65 : blink * 1.08,
+      easing,
+    );
+    next.mouth = mix(previous.mouth, 0, easing);
+    // A varied, soft syllable rhythm with occasional closed-mouth pauses.
+    // This is a stylized speaking cue, not phoneme/audio synchronization.
+    const syllable =
+      (1 + Math.sin(time * 18 + 0.65 * Math.sin(time * 2.3))) / 2;
+    const phrase = Math.max(0, Math.min(1, (Math.sin(time * 2.1) + 0.86) * 5));
+    const opening = reducedMotion
+      ? 0.3
+      : Math.pow(syllable, 1.5) *
+        (0.55 + 0.25 * Math.sin(time * 4.1) ** 2) *
+        phrase;
+    next.speech = mix(
+      previous.speech,
+      speaking ? opening : 0,
+      1 - Math.exp(-dt / 0.045),
+    );
+    // A hand cupped toward the headphones means listening; a tucked hand and
+    // upward gaze mean thinking. Speech opens/closes the mouth and gestures.
+    next.leftArm = mix(
+      previous.leftArm,
+      listening ? 1.85 : thinking ? -1.15 : 0.15 + wave * 0.12,
+      easing,
+    );
+    next.rightArm = mix(
+      previous.rightArm,
+      input.voice === 'approval' ? -1.9 : speaking ? -0.35 - wave * 0.15 : 0,
+      easing,
+    );
+  }
   // The rump rests on the surface; seated feet remain in front on that same
   // surface. This lowers the body by its actual sole gap rather than crushing it.
   next.bodyY = next.seated * 7 * next.stretch * Math.cos(next.lean);

@@ -1,6 +1,10 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
+import {
+  DEFAULT_TALK_SHORTCUT,
+  validTalkShortcut,
+} from '../shared/talk-shortcut.js';
 import { DEFAULT_CATEGORY_VOLUMES } from '../core/sound-categories.js';
 import {
   BODY,
@@ -17,6 +21,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   muted: false,
   paused: false,
   reducedMotion: false,
+  talkShortcut: DEFAULT_TALK_SHORTCUT,
   displayId: null,
   placement: null,
 };
@@ -39,6 +44,11 @@ const schema = z.object({
   muted: z.boolean(),
   paused: z.boolean(),
   reducedMotion: z.boolean(),
+  talkShortcut: z
+    .string()
+    .max(100)
+    .refine(validTalkShortcut)
+    .default(DEFAULT_TALK_SHORTCUT),
   displayId: z.string().max(128).nullable(),
   placementSpace: z.literal('bounds').optional(),
   placement: z
@@ -57,8 +67,12 @@ const changeSchema = schema
     muted: true,
     paused: true,
     reducedMotion: true,
+    talkShortcut: true,
   })
-  .extend({ categoryVolumes: categoryVolumeSchema.optional() })
+  .extend({
+    categoryVolumes: categoryVolumeSchema.optional(),
+    talkShortcut: schema.shape.talkShortcut.removeDefault().optional(),
+  })
   .partial()
   .strict();
 export function parsePreferenceChange(
