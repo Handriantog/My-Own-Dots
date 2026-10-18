@@ -35,8 +35,14 @@ export function localVoiceConfig(env: NodeJS.ProcessEnv): LocalVoiceConfig {
     providerSession: env.LOCAL_VOICE_PROVIDER_SESSION === '1',
     python: env.LOCAL_VOICE_PYTHON || join(root, 'venv/bin/python'),
     assets: env.LOCAL_VOICE_ASSETS || join(root, 'assets'),
-    worker: resolve('scripts/local-voice/worker.py'),
-    manifest: resolve('scripts/local-voice/manifest.json'),
+    worker: resolve(
+      env.DOTS_RUNTIME_ROOT || '.',
+      'scripts/local-voice/worker.py',
+    ),
+    manifest: resolve(
+      env.DOTS_RUNTIME_ROOT || '.',
+      'scripts/local-voice/manifest.json',
+    ),
   };
 }
 export class LocalVoiceService {

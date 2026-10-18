@@ -9,10 +9,16 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { build } from 'esbuild';
+import { buildDesktopRuntime } from './desktop-runtime.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const out = path.join(root, 'dist/desktop');
 mkdirSync(path.join(out, 'native'), { recursive: true });
+await buildDesktopRuntime(root, path.join(out, 'app'));
+writeFileSync(
+  path.join(out, 'dev-source.json'),
+  JSON.stringify({ sourceRoot: root }),
+);
 if (process.platform !== 'darwin')
   throw new Error('The desktop observer currently builds on macOS only.');
 const architecture = process.arch === 'arm64' ? 'arm64' : 'x86_64';
@@ -103,7 +109,7 @@ writeFileSync(
       productName: 'My Own Dots',
       version: '0.1.0',
       main: 'main.cjs',
-      description: 'A plush desktop companion',
+      description: 'A local AI desktop workspace and companion',
       author: 'My Own Dots',
       license: 'MIT',
     },

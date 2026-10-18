@@ -1,10 +1,13 @@
 import './local-defaults.js';
+import {
+  claimWorkspaceDatabase,
+  workspaceIdentity,
+} from './workspace-identity.js';
 import { LocalVoiceService, localVoiceConfig } from './local-voice/service.js';
 import { webSearchProvider } from './parallel.js';
 import { createShutdown } from './shutdown.js';
 import { reportChannelFailure, safeFailure } from './slack-channel.js';
 import { serve } from '@hono/node-server';
-import { serveStatic } from '@hono/node-server/serve-static';
 import { Store } from './store.js';
 import { Runner } from './runner.js';
 import { createApp } from './app.js';
@@ -30,6 +33,8 @@ if (
     'External binding requires an OWNER_TOKEN of at least 24 characters.',
   );
 const database = process.env.DATABASE_PATH ?? 'data/opendots.sqlite';
+claimWorkspaceDatabase(database);
+const workspaceId = workspaceIdentity(database);
 const store = new Store(database);
 const workspace = new WorkspaceStore(
   database,
@@ -130,9 +135,15 @@ app.use('*', async (c, next) => {
   );
   await next();
 });
+app.get('/api/desktop/identity', (c) =>
+  c.json({
+    service: 'my-own-dots',
+    protocol: 1,
+    workspaceId,
+    setup: platform.setup(),
+  }),
+);
 app.get('/api/*', (c) => c.json({ error: 'Not found.' }, 404));
-app.use('/*', serveStatic({ root: './dist/client' }));
-app.get('*', serveStatic({ path: './dist/client/index.html' }));
 const server = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
   console.log(`My Own Dots listening on http://${host}:${info.port}`);
   runner.start();
