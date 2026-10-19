@@ -342,6 +342,7 @@ async function start(): Promise<void> {
     return companionPanelBounds(frame.root, display.workArea, width, height);
   }
   function openChat(): void {
+    if (quitting) return;
     userHidden = false;
     syncVisibility();
     void chat.open(panelBounds(440, 620)).catch((error) => {
@@ -351,6 +352,7 @@ async function start(): Promise<void> {
     });
   }
   function openTalk(): void {
+    if (quitting) return;
     userHidden = false;
     syncVisibility();
     void chat.talk(panelBounds(440, 620)).catch((error) => {
@@ -392,6 +394,7 @@ async function start(): Promise<void> {
     });
   }
   function openCompanionMenu(): void {
+    if (quitting) return;
     if (companionMenu.isOpen) {
       companionMenu.close();
       return;
@@ -719,6 +722,7 @@ async function start(): Promise<void> {
     );
   }
   function openSettings(): void {
+    if (quitting) return;
     if (settingsWindow && !settingsWindow.isDestroyed()) {
       settingsWindow.show();
       settingsWindow.focus();
@@ -1065,10 +1069,12 @@ async function start(): Promise<void> {
   powerMonitor.on('unlock-screen', resume);
   installWorkspaceMenu(workspace, () => openSettings());
   app.on('activate', () => {
+    if (quitting) return;
     void workspace.open();
   });
   void workspace.open();
   app.on('second-instance', () => {
+    if (quitting) return;
     void workspace.open();
     userHidden = false;
     if (rendererReady) syncVisibility();
@@ -1078,8 +1084,9 @@ async function start(): Promise<void> {
     if (quitting) return;
     event.preventDefault();
     quitting = true;
+    const workspaceShutdown = workspace.destroy();
     talkShortcut.destroy();
-    chat.hide();
+    chat.destroy();
     clearInterval(ticker);
     if (retryTimer) clearTimeout(retryTimer);
     cancelCapture();
@@ -1088,12 +1095,11 @@ async function start(): Promise<void> {
     void Promise.allSettled([
       savePreferences(),
       backend.stop(),
-      workspace.destroy(),
+      workspaceShutdown,
     ]).finally(() => {
       tray.destroy();
       settingsWindow?.destroy();
       companionMenu.destroy();
-      chat.destroy();
       overlay.destroy();
       app.exit(0);
     });

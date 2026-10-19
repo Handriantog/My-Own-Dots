@@ -25,6 +25,8 @@ import { CompanionFolderPicker } from './folder-picker.js';
 const recovery = 'dots://app/recovery.html';
 /** Owns one persistent workspace window; handoff is an event so the editor can guard drafts. */
 export class WorkspaceWindow {
+  private disposed = false;
+  private destroying?: Promise<void>;
   private window: BrowserWindow | null = null;
   private opening?: Promise<void>;
   private retrying?: Promise<void>;
@@ -87,7 +89,8 @@ export class WorkspaceWindow {
         title: 'Choose an existing Dots workspace',
         properties: ['openDirectory'],
       });
-      if (selected.canceled || !selected.filePaths[0]) return false;
+      if (this.disposed || selected.canceled || !selected.filePaths[0])
+        return false;
       this.requireRecovery(event);
       if (this.loaded.size) {
         const confirm = await dialog.showMessageBox(window, {
@@ -99,12 +102,13 @@ export class WorkspaceWindow {
           defaultId: 0,
           cancelId: 0,
         });
-        if (confirm.response !== 1) return false;
+        if (this.disposed || confirm.response !== 1) return false;
       }
       this.requireRecovery(event);
       this.loaded.clear();
       this.connection = undefined;
       await this.backend.setWorkspaceDirectory(selected.filePaths[0]);
+      if (this.disposed) return false;
       await this.retry();
       return true;
     });
@@ -120,9 +124,11 @@ export class WorkspaceWindow {
       )
         throw new Error('Invalid configuration');
       if (this.connection?.owned) await this.backend.stop();
+      if (this.disposed) return;
       await this.backend.configure(value as Record<string, string>);
     });
     this.unsubscribe = backend.subscribe((status) => {
+      if (this.disposed) return;
       this.failure = undefined;
       if (status.phase === 'error' || status.phase === 'stopped')
         this.connection = undefined;
@@ -135,20 +141,27 @@ export class WorkspaceWindow {
     return this.connection;
   }
   private trusted(event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>) {
-    return [...this.windows].some(
-      (w) =>
-        !w.isDestroyed() &&
-        event.sender === w.webContents &&
-        event.senderFrame === w.webContents.mainFrame &&
-        (isWorkspacePage(event.senderFrame.url) ||
-          event.senderFrame.url === recovery),
+    return (
+      !this.disposed &&
+      [...this.windows].some(
+        (w) =>
+          !w.isDestroyed() &&
+          event.sender === w.webContents &&
+          event.senderFrame === w.webContents.mainFrame &&
+          (isWorkspacePage(event.senderFrame.url) ||
+            event.senderFrame.url === recovery),
+      )
     );
   }
   private requireRecovery(event: IpcMainInvokeEvent) {
-    if (event.senderFrame?.url !== recovery)
+    if (!this.trusted(event) || event.senderFrame?.url !== recovery)
       throw new Error('Configuration is available in workspace recovery.');
   }
   register(window: BrowserWindow, initializing = false): () => void {
+    if (this.disposed) {
+      if (!window.isDestroyed()) window.destroy();
+      return () => {};
+    }
     if (initializing) this.initializing.add(window);
     this.windows.add(window);
     window.on('closed', () => {
@@ -160,6 +173,7 @@ export class WorkspaceWindow {
       this.loaded.delete(window),
     );
     window.webContents.on('did-finish-load', () => {
+      if (this.disposed || window.isDestroyed()) return;
       if (isWorkspacePage(window.webContents.getURL())) this.loaded.add(window);
       else this.loaded.delete(window);
     });
@@ -168,26 +182,34 @@ export class WorkspaceWindow {
     };
   }
   ready(): Promise<void> {
+    if (this.disposed) return Promise.resolve();
     return (this.connecting ??= this.establish().finally(() => {
       this.connecting = undefined;
     }));
   }
   private async establish() {
-    const connection = await this.backend.start();
-    if (
-      this.connection === connection ||
-      (this.connection?.url === connection.url &&
-        this.connection?.ownerToken === connection.ownerToken)
-    )
-      return;
-    const next: WorkspaceProtocolConnection = { ...connection };
-    this.connection = next;
-    next.connectOrigin = await workspaceRealtimeOrigin(connection);
-    if (this.connection !== next)
-      throw new Error('Workspace stopped while connecting.');
+    try {
+      if (this.disposed) return;
+      const connection = await this.backend.start();
+      if (this.disposed) return;
+      if (
+        this.connection === connection ||
+        (this.connection?.url === connection.url &&
+          this.connection?.ownerToken === connection.ownerToken)
+      )
+        return;
+      const next: WorkspaceProtocolConnection = { ...connection };
+      this.connection = next;
+      next.connectOrigin = await workspaceRealtimeOrigin(connection);
+      if (this.disposed) return;
+      if (this.connection !== next)
+        throw new Error('Workspace stopped while connecting.');
+    } catch (error) {
+      if (!this.disposed) throw error;
+    }
   }
   transportFailed() {
-    if (this.failure) return;
+    if (this.disposed || this.failure) return;
     this.failure = {
       phase: 'error',
       message:
@@ -198,14 +220,18 @@ export class WorkspaceWindow {
         window.webContents.send('dot:workspace:status', this.failure);
   }
   retry(): Promise<void> {
+    if (this.disposed) return Promise.resolve();
     return (this.retrying ??= this.reconnect().finally(() => {
       this.retrying = undefined;
     }));
   }
   private async reconnect() {
     try {
+      if (this.disposed) return;
       if (this.failure) await this.backend.stop();
+      if (this.disposed) return;
       await this.ready();
+      if (this.disposed) return;
       for (const window of this.windows)
         if (
           window !== this.setup &&
@@ -216,6 +242,7 @@ export class WorkspaceWindow {
           await window.loadURL(
             `dots://workspace/?surface=${window === this.window ? 'workspace' : 'companion'}`,
           );
+          if (this.disposed || window.isDestroyed()) return;
           if (window === this.window && this.pendingDestination) {
             window.webContents.send(
               'dot:workspace:navigate',
@@ -229,75 +256,94 @@ export class WorkspaceWindow {
     }
   }
   async open(target?: WorkspaceDestination) {
-    if (this.opening) await this.opening;
-    if (!this.window || this.window.isDestroyed()) {
-      this.opening ??= this.create().finally(() => {
-        this.opening = undefined;
-      });
-      await this.opening;
-    }
-    const window = this.window!;
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
-    if (target && Object.keys(target).length) {
-      if (isWorkspacePage(window.webContents.getURL()))
-        window.webContents.send('dot:workspace:navigate', target);
-      else this.pendingDestination = target;
+    try {
+      if (this.disposed) return;
+      if (this.opening) await this.opening;
+      if (this.disposed) return;
+      if (!this.window || this.window.isDestroyed()) {
+        this.opening ??= this.create().finally(() => {
+          this.opening = undefined;
+        });
+        await this.opening;
+      }
+      if (this.disposed) return;
+      const window = this.window!;
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+      if (target && Object.keys(target).length) {
+        if (isWorkspacePage(window.webContents.getURL()))
+          window.webContents.send('dot:workspace:navigate', target);
+        else this.pendingDestination = target;
+      }
+    } catch (error) {
+      if (!this.disposed) throw error;
     }
   }
   async command(command: WorkspaceCommand) {
     await this.open();
-    this.window!.webContents.send('dot:workspace:command', command);
+    if (this.disposed || !this.window || this.window.isDestroyed()) return;
+    this.window.webContents.send('dot:workspace:command', command);
   }
   suspend() {
+    if (this.disposed) return;
     this.voice.stop('suspended');
   }
   async recover() {
     await this.openBackendSettings();
   }
   async openBackendSettings() {
-    if (this.setup && !this.setup.isDestroyed()) {
-      this.setup.show();
-      this.setup.focus();
-      return;
+    try {
+      if (this.disposed) return;
+      if (this.setup && !this.setup.isDestroyed()) {
+        this.setup.show();
+        this.setup.focus();
+        return;
+      }
+      const window = new BrowserWindow({
+        width: 720,
+        height: 780,
+        minWidth: 560,
+        minHeight: 600,
+        title: 'Workspace setup',
+        show: false,
+        webPreferences: {
+          preload: path.join(this.bundle, 'chat-preload.cjs'),
+          sandbox: true,
+          contextIsolation: true,
+          nodeIntegration: false,
+          webSecurity: true,
+        },
+      });
+      this.setup = window;
+      this.register(window);
+      window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+      const guard = (event: Electron.Event, url: string) => {
+        if (url !== recovery) event.preventDefault();
+      };
+      window.webContents.on('will-navigate', guard);
+      window.webContents.on('will-redirect', guard);
+      window.on('closed', () => {
+        if (this.setup === window) this.setup = null;
+      });
+      await window.loadURL(recovery);
+      if (this.disposed || window.isDestroyed()) return;
+      window.show();
+      window.focus();
+    } catch (error) {
+      if (!this.disposed) throw error;
     }
-    const window = new BrowserWindow({
-      width: 720,
-      height: 780,
-      minWidth: 560,
-      minHeight: 600,
-      title: 'Workspace setup',
-      show: false,
-      webPreferences: {
-        preload: path.join(this.bundle, 'chat-preload.cjs'),
-        sandbox: true,
-        contextIsolation: true,
-        nodeIntegration: false,
-        webSecurity: true,
-      },
-    });
-    this.setup = window;
-    this.register(window);
-    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    const guard = (event: Electron.Event, url: string) => {
-      if (url !== recovery) event.preventDefault();
-    };
-    window.webContents.on('will-navigate', guard);
-    window.webContents.on('will-redirect', guard);
-    window.on('closed', () => {
-      if (this.setup === window) this.setup = null;
-    });
-    await window.loadURL(recovery);
-    window.show();
-    window.focus();
   }
   private async create() {
+    if (this.disposed) return;
     let bounds = { width: 1280, height: 840 };
     try {
-      const saved = JSON.parse(
-        await readFile(path.join(this.data, 'workspace-window.json'), 'utf8'),
-      ) as Electron.Rectangle;
+      const contents = await readFile(
+        path.join(this.data, 'workspace-window.json'),
+        'utf8',
+      );
+      if (this.disposed) return;
+      const saved = JSON.parse(contents) as Electron.Rectangle;
       if (
         ['x', 'y', 'width', 'height'].every((k) =>
           Number.isFinite(saved[k as keyof Electron.Rectangle]),
@@ -318,6 +364,7 @@ export class WorkspaceWindow {
     } catch {
       /* Default geometry on first launch or removed monitor. */
     }
+    if (this.disposed) return;
     const window = new BrowserWindow({
       ...bounds,
       minWidth: 900,
@@ -339,6 +386,7 @@ export class WorkspaceWindow {
     this.voice.attach(window);
     this.folders.attach(window);
     const external = (url: string) => {
+      if (this.disposed) return;
       const target = destinationFromUrl(url);
       if (target) {
         void this.open(target);
@@ -371,9 +419,10 @@ export class WorkspaceWindow {
     );
     window.webContents.on('did-navigate', () => this.voice.reset());
     window.webContents.on('render-process-gone', () => {
+      if (this.disposed || window.isDestroyed()) return;
       this.voice.reset();
       this.loaded.delete(window);
-      void window.loadURL(recovery);
+      void window.loadURL(recovery).catch(() => {});
     });
     window.webContents.on('unresponsive', () =>
       this.voice.stop('unresponsive'),
@@ -385,6 +434,7 @@ export class WorkspaceWindow {
       window.hide();
     });
     const save = () => {
+      if (this.disposed) return;
       if (this.saving) clearTimeout(this.saving);
       this.saving = setTimeout(() => {
         void this.saveGeometry().catch(() => {});
@@ -393,21 +443,28 @@ export class WorkspaceWindow {
     window.on('resize', save);
     window.on('move', save);
     await window.loadURL(recovery);
+    if (this.disposed || window.isDestroyed()) return;
     window.show();
     await this.retry();
   }
   private async saveGeometry() {
     if (!this.window || this.window.isDestroyed()) return;
+    const bounds = this.window.getNormalBounds();
     await mkdir(this.data, { recursive: true });
     await writeFile(
       path.join(this.data, 'workspace-window.json'),
-      JSON.stringify(this.window.getNormalBounds()),
+      JSON.stringify(bounds),
       { mode: 0o600 },
     );
   }
-  async destroy() {
+  destroy(): Promise<void> {
+    if (this.destroying) return this.destroying;
+    // Synchronous terminal barrier: no suspended operation may restart the backend.
+    this.disposed = true;
+    this.connection = undefined;
+    this.pendingDestination = undefined;
     if (this.saving) clearTimeout(this.saving);
-    await this.saveGeometry().catch(() => {});
+    const saved = this.saveGeometry().catch(() => {});
     this.unsubscribe();
     this.voice.destroy();
     this.folders.destroy();
@@ -424,5 +481,11 @@ export class WorkspaceWindow {
       ipcMain.removeHandler(`dot:workspace:${name}`);
     this.setup?.destroy();
     this.window?.destroy();
+    this.setup = null;
+    this.window = null;
+    this.windows.clear();
+    this.loaded.clear();
+    this.initializing.clear();
+    return (this.destroying = saved);
   }
 }

@@ -13,6 +13,8 @@ const host = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   ipc: null as EventEmitter | null,
   external: vi.fn(),
+  geometry: null as Promise<string> | null,
+  load: null as Promise<void> | null,
 }));
 interface WindowDouble extends EventEmitter {
   options: BrowserWindowConstructorOptions;
@@ -23,8 +25,17 @@ interface WindowDouble extends EventEmitter {
     getURL(): string;
   };
   loadURL: ReturnType<typeof vi.fn>;
+  show: ReturnType<typeof vi.fn>;
   destroy(): void;
 }
+vi.mock('node:fs/promises', async (original) => {
+  const actual = await original<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    readFile: (file: string, encoding: 'utf8') =>
+      host.geometry ?? actual.readFile(file, encoding),
+  };
+});
 vi.mock('electron', async () => {
   const { EventEmitter } = await import('node:events');
   host.ipc = Object.assign(new EventEmitter(), {
@@ -60,6 +71,8 @@ vi.mock('electron', async () => {
         host.windows.push(this);
       }
       loadURL = vi.fn(async (url: string) => {
+        if (host.load) await host.load;
+        if (this.destroyed) throw new Error('Window destroyed during load');
         this.webContents.mainFrame.url = url;
         this.webContents.emit('did-finish-load');
       });
@@ -77,9 +90,10 @@ vi.mock('electron', async () => {
       }
       restore() {}
       focus() {}
-      show() {
+      show = vi.fn(() => {
+        if (this.destroyed) throw new Error('Showing destroyed window');
         this.visible = true;
-      }
+      });
       hide() {
         this.visible = false;
         this.emit('hide');
@@ -104,7 +118,8 @@ let workspace: WorkspaceWindow;
 let notify: (status: WorkspaceBackendStatus) => void;
 let backend: {
   start: ReturnType<typeof vi.fn>;
-  stop: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  configure: ReturnType<typeof vi.fn>;
   status: WorkspaceBackendStatus;
   subscribe: (fn: typeof notify) => () => void;
 };
@@ -115,9 +130,12 @@ beforeEach(async () => {
   );
   data = await mkdtemp(path.join(os.tmpdir(), 'dots-window-'));
   host.windows = [];
+  host.geometry = null;
+  host.load = null;
   host.external.mockClear();
   backend = {
     status: { phase: 'idle', message: 'Starting' },
+    configure: vi.fn(async () => {}),
     stop: vi.fn(async () => notify({ phase: 'stopped', message: 'Stopped' })),
     start: vi.fn(async () => ({
       url: 'http://127.0.0.1:5999',
@@ -311,4 +329,107 @@ it('reports transport failure and retries the backend without reloading loaded d
   expect(backend.stop).toHaveBeenCalledOnce();
   expect(backend.start).toHaveBeenCalledTimes(2);
   expect(main.loadURL).toHaveBeenCalledTimes(count);
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+it('makes teardown terminal while geometry is pending, including later activation and setup requests', async () => {
+  const geometry = deferred<string>();
+  host.geometry = geometry.promise;
+  const pending = workspace.open({ dotId: 'dot-1' });
+  await workspace.destroy();
+  geometry.resolve('{}');
+  await expect(pending).resolves.toBeUndefined();
+  await workspace.open();
+  await workspace.openBackendSettings();
+  await workspace.retry();
+  await workspace.ready();
+  await workspace.command('new-chat');
+  expect(host.windows).toHaveLength(0);
+  expect(backend.start).not.toHaveBeenCalled();
+  expect(workspace.activeConnection).toBeUndefined();
+});
+it.each(['workspace', 'setup'])(
+  'cancels pending %s document loading without showing or starting after teardown',
+  async (surface) => {
+    const load = deferred<void>();
+    host.load = load.promise;
+    const pending =
+      surface === 'workspace'
+        ? workspace.open()
+        : workspace.openBackendSettings();
+    await vi.waitFor(() =>
+      expect(host.windows[0]?.loadURL).toHaveBeenCalledOnce(),
+    );
+    const window = host.windows[0];
+    await workspace.destroy();
+    load.resolve();
+    await expect(pending).resolves.toBeUndefined();
+    expect(window.show).not.toHaveBeenCalled();
+    expect(window.loadURL).toHaveBeenCalledOnce();
+    expect(backend.start).not.toHaveBeenCalled();
+  },
+);
+it.each(['resolve', 'reject'])(
+  'does not resume startup after teardown when pending backend start later %ss',
+  async (outcome) => {
+    const started = deferred<{ url: string; owned: boolean }>();
+    backend.start.mockReturnValueOnce(started.promise);
+    const pending = workspace.open();
+    await vi.waitFor(() => expect(backend.start).toHaveBeenCalledOnce());
+    const window = host.windows[0];
+    const loads = window.loadURL.mock.calls.length;
+    await workspace.destroy();
+    await backend.stop();
+    window.show.mockClear();
+    if (outcome === 'resolve')
+      started.resolve({ url: 'http://127.0.0.1:5999', owned: true });
+    else started.reject(new Error('Startup stopped'));
+    await expect(pending).resolves.toBeUndefined();
+    expect(window.show).not.toHaveBeenCalled();
+    expect(window.loadURL).toHaveBeenCalledTimes(loads);
+    expect(backend.start).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(workspace.activeConnection).toBeUndefined();
+  },
+);
+it('does not restart after a retry stop finishes during teardown', async () => {
+  await workspace.open();
+  const stop = deferred<void>();
+  backend.stop.mockReturnValueOnce(stop.promise);
+  workspace.transportFailed();
+  const pending = workspace.retry();
+  expect(backend.stop).toHaveBeenCalledOnce();
+  await workspace.destroy();
+  stop.resolve();
+  await expect(pending).resolves.toBeUndefined();
+  expect(backend.start).toHaveBeenCalledOnce();
+  expect(workspace.activeConnection).toBeUndefined();
+});
+it('invalidates pending native configuration and rejects stale IPC after teardown', async () => {
+  await workspace.open();
+  await workspace.openBackendSettings();
+  const setup = host.windows[1];
+  const event = {
+    sender: setup.webContents,
+    senderFrame: setup.webContents.mainFrame,
+  };
+  const configure = host.handlers.get('dot:workspace:configure')!;
+  const open = host.handlers.get('dot:workspace:open')!;
+  const stop = deferred<void>();
+  backend.stop.mockReturnValueOnce(stop.promise);
+  const pending = configure(event, { PORT: '5999' });
+  expect(backend.stop).toHaveBeenCalledOnce();
+  await workspace.destroy();
+  stop.resolve();
+  await expect(pending).resolves.toBeUndefined();
+  expect(backend.configure).not.toHaveBeenCalled();
+  expect(() => open(event, {})).toThrow('Invalid workspace sender');
 });
