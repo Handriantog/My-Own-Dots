@@ -31,6 +31,13 @@ const environment = nativeExecutableEnvironment({
   ...process.env,
   ...existing,
 });
+// uv resolves relative environment paths from the Python project/workspace root.
+// Pin that destination so installation and the saved interpreter always agree.
+const pythonEnvironment = path.resolve(
+  python,
+  environment.UV_PROJECT_ENVIRONMENT || '.venv',
+);
+environment.UV_PROJECT_ENVIRONMENT = pythonEnvironment;
 const result = spawnSync(
   environment.UV_BIN || 'uv',
   ['sync', '--project', python, '--frozen', '--no-dev'],
@@ -41,7 +48,7 @@ if (result.error || result.status !== 0)
     'Python setup failed. Install uv, retry this command, and keep your provider CLI signed in.',
   );
 if (!existing.MYOWN_LLM_PYTHON) {
-  const executable = path.join(python, '.venv/bin/python');
+  const executable = path.join(pythonEnvironment, 'bin/python');
   const quote = ["'", '`', '"'].find(
     (candidate) =>
       !executable.includes(candidate) &&

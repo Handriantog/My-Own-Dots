@@ -2,7 +2,7 @@ import { afterEach, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile, cp } from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import { parseEnv, promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { localVoiceConfig } from '../../src/server/local-voice/service.js';
@@ -147,5 +147,97 @@ it.skipIf(process.platform !== 'darwin')(
     expect(await readFile(path.join(workspace, '.env'), 'utf8')).toContain(
       'MYOWN_LLM_PYTHON=/kept/python',
     );
+  },
+);
+
+it.each(
+  ['default', 'absolute', 'relative'].flatMap((environment) =>
+    ['absent', 'empty', 'explicit'].map((interpreter) => ({
+      environment,
+      interpreter,
+    })),
+  ),
+)(
+  'records the installed Python environment ($environment environment, $interpreter interpreter)',
+  async ({ environment: setting, interpreter }) => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dots-setup-python-'));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    const support = path.join(root, 'support');
+    const workspace = path.join(root, 'workspace');
+    const shippedPython = path.join(
+      root,
+      'node_modules/myown-llm-integrator/python',
+    );
+    const project = path.join(workspace, 'integrations/llm/python');
+    for (const directory of [support, workspace, shippedPython])
+      await mkdir(directory, { recursive: true });
+    for (const name of [
+      'setup-desktop-integrations.mjs',
+      'native-executable-environment.mjs',
+    ])
+      await cp(
+        path.join(process.cwd(), 'scripts', name),
+        path.join(support, name),
+      );
+    await writeFile(path.join(shippedPython, 'pyproject.toml'), '[project]');
+    const uv = path.join(root, 'fixture-uv');
+    // This executable models uv's documented environment-path contract and creates its interpreter.
+    await writeFile(
+      uv,
+      `#!${process.execPath}\nconst fs=require('node:fs'),path=require('node:path');
+const project=process.argv[process.argv.indexOf('--project')+1];
+const environment=process.env.UV_PROJECT_ENVIRONMENT || '.venv';
+const destination=path.isAbsolute(environment)?environment:path.resolve(project,environment);
+fs.mkdirSync(path.join(destination,'bin'),{recursive:true});
+fs.writeFileSync(path.join(destination,'bin/python'),'installed fixture interpreter');
+`,
+      { mode: 0o755 },
+    );
+    const environmentPath =
+      setting === 'absolute'
+        ? path.join(root, 'external-environment')
+        : setting === 'relative'
+          ? '../custom-environment'
+          : undefined;
+    const expected =
+      setting === 'absolute'
+        ? path.join(root, 'external-environment/bin/python')
+        : setting === 'relative'
+          ? path.join(
+              workspace,
+              'integrations/llm/custom-environment/bin/python',
+            )
+          : path.join(project, '.venv/bin/python');
+    const configured = interpreter === 'explicit' ? '/kept/python' : '';
+    const contents =
+      [
+        `UV_BIN=${uv}`,
+        ...(environmentPath
+          ? [`UV_PROJECT_ENVIRONMENT=${environmentPath}`]
+          : []),
+        ...(interpreter === 'absent' ? [] : [`MYOWN_LLM_PYTHON=${configured}`]),
+      ].join('\n') + '\n';
+    await writeFile(path.join(workspace, '.env'), contents);
+    await promisify(execFile)(
+      process.execPath,
+      [path.join(support, 'setup-desktop-integrations.mjs'), workspace],
+      {
+        cwd: root,
+        env: { HOME: root, PATH: '/usr/bin:/bin:/usr/sbin:/sbin' },
+      },
+    );
+    const saved = parseEnv(
+      await readFile(path.join(workspace, '.env'), 'utf8'),
+    );
+    expect(saved.MYOWN_LLM_PYTHON).toBe(
+      interpreter === 'explicit' ? configured : expected,
+    );
+    expect(await readFile(expected, 'utf8')).toBe(
+      'installed fixture interpreter',
+    );
+    if (interpreter !== 'explicit')
+      expect(await readFile(saved.MYOWN_LLM_PYTHON!, 'utf8')).toBe(
+        'installed fixture interpreter',
+      );
   },
 );
