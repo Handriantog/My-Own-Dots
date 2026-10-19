@@ -25,46 +25,8 @@ export function recoveryView(
           ? 'loading'
           : 'ready';
   const stage = state.stage ?? 'workspace';
-  const activeStep =
-    error || stopped
-      ? -1
-      : state.phase === 'ready'
-        ? 3
-        : ['workspace', 'services', 'backend'].indexOf(stage);
   return {
     mode,
-    activeStep,
-    eyebrow: setup
-      ? 'MAKE YOURSELF AT HOME'
-      : error
-        ? 'A LITTLE HELP, THEN WE’RE OFF'
-        : stopped
-          ? 'READY WHEN YOU ARE'
-          : state.phase === 'ready'
-            ? 'LET’S MAKE SOMETHING'
-            : 'DOT IS GETTING THINGS READY',
-    headline: setup
-      ? 'Your space. Your way.'
-      : error
-        ? 'Let’s get you connected.'
-        : stopped
-          ? 'Pick up where you left off.'
-          : state.phase === 'ready'
-            ? 'Your next idea awaits.'
-            : 'Good things are\ncoming together.',
-    description: setup
-      ? 'Keep your workspace and connections just the way you like them.'
-      : error
-        ? 'Dot is here. Your workspace just needs a little attention.'
-        : stopped
-          ? 'Your workspace is here whenever you’re ready.'
-          : waiting
-            ? 'A little longer this time. We’re still getting your workspace ready.'
-            : state.phase === 'ready'
-              ? state.warning
-                ? 'Your workspace is ready. One connection needs attention.'
-                : 'Everything is in place. Come on in.'
-              : 'A little space to think. A companion to make it happen.',
     status: error
       ? 'Connection needs attention'
       : stopped

@@ -5,7 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>My Own Dots</title>
   </head>
-  <body data-state="loading">
+  <body
+    data-state="loading"
+    data-view="startup"
+    data-warning="false"
+    data-actions="false"
+  >
     <div class="atmosphere" aria-hidden="true">
       <div class="aurora aurora-one"></div>
       <div class="aurora aurora-two"></div>
@@ -17,9 +22,6 @@
           ><i></i><i></i><i></i><i></i></span
         ><span>My Own Dots</span>
       </div>
-      <span class="local-badge"
-        ><span aria-hidden="true">◌</span> A SPACE OF YOUR OWN</span
-      >
     </header>
     <main>
       <div class="mascot-stage">
@@ -47,7 +49,6 @@
               id="mascot"
               type="button"
               aria-label="Say hello to Dot"
-              aria-describedby="mascot-hint"
             >
               <img
                 src="./desktop-dot/icon.png"
@@ -66,13 +67,7 @@
           </div>
         </div>
       </div>
-      <div class="introduction">
-        <p class="eyebrow" id="eyebrow">DOT IS GETTING THINGS READY</p>
-        <h1 id="headline">Good things are<br />coming together.</h1>
-        <p class="description" id="description">
-          A little space to think. A companion to make it happen.
-        </p>
-      </div>
+      <h1 class="setup-heading">Workspace setup</h1>
       <section class="status-card" aria-label="Workspace startup">
         <div class="status-heading">
           <span class="status-indicator" aria-hidden="true"><i></i></span
@@ -90,17 +85,6 @@
         >
           <span></span>
         </div>
-        <ol class="steps" aria-label="Startup stages">
-          <li data-step="0">
-            <span class="step-marker" aria-hidden="true"></span>Workspace
-          </li>
-          <li data-step="1">
-            <span class="step-marker" aria-hidden="true"></span>Connections
-          </li>
-          <li data-step="2">
-            <span class="step-marker" aria-hidden="true"></span>Ready to create
-          </li>
-        </ol>
       </section>
       <div class="actions" id="recovery-actions" hidden>
         <button class="primary" id="retry" type="button">
@@ -163,17 +147,7 @@
           </p>
         </div>
       </details>
-      <p class="mascot-hint" id="mascot-hint">
-        Dot is keeping you company. Say hello.
-      </p>
     </main>
-    <footer>
-      <span class="footer-note"
-        ><span aria-hidden="true">✧</span> YOUR IDEAS HAVE A HOME HERE</span
-      ><span class="tip" id="tip"
-        ><kbd>⌘ K</kbd> Jump to a Dot, Space, or conversation</span
-      >
-    </footer>
     <script type="module" src="./recovery.ts"></script>
   </body>
 </html>

@@ -13,7 +13,6 @@ const panel = element<HTMLDetailsElement>('setup-panel');
 const scene = element('scene');
 const mascot = element<HTMLButtonElement>('mascot');
 const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')];
-const steps = [...document.querySelectorAll<HTMLElement>('[data-step]')];
 const motion = matchMedia('(prefers-reduced-motion: reduce)');
 let status: WorkspaceStatus = {
   phase: 'idle',
@@ -26,12 +25,6 @@ let greetingTimer: ReturnType<typeof setTimeout> | undefined;
 let pointerFrame = 0;
 let pointerX = 0;
 let pointerY = 0;
-const tips = [
-  ['⌘ K', 'Jump to a Dot, Space, or conversation'],
-  ['⌘ N', 'Start a fresh conversation'],
-  ['⌘ ,', 'Make this workspace yours'],
-];
-let shownTip = 0;
 function text(id: string, value: string) {
   const node = element(id);
   if (node.textContent !== value) node.textContent = value;
@@ -45,9 +38,6 @@ function render() {
   document.body.dataset.warning = String(view.warning);
   document.body.dataset.loading = String(view.loading);
   document.body.dataset.actions = String(view.showActions || panel.open);
-  text('eyebrow', view.eyebrow);
-  text('headline', view.headline);
-  text('description', view.description);
   text('status', view.status);
   text(
     'status-detail',
@@ -58,26 +48,9 @@ function render() {
     status.phase === 'ready' || status.phase === 'stopped'
       ? 'Open workspace ↗'
       : 'Try again ↗';
-  for (const [index, step] of steps.entries()) {
-    step.dataset.active = String(index === view.activeStep);
-    step.dataset.complete = String(view.activeStep > index);
-    if (index === view.activeStep) step.setAttribute('aria-current', 'step');
-    else step.removeAttribute('aria-current');
-  }
   buttons.forEach((button) => {
     button.disabled = busy;
   });
-  if (!setup && view.loading && !motion.matches) {
-    const nextTip = Math.floor(elapsedMs / 8000) % tips.length;
-    if (nextTip !== shownTip) {
-      const [key, description] = tips[nextTip];
-      const tip = element('tip');
-      const shortcut = document.createElement('kbd');
-      shortcut.textContent = key;
-      tip.replaceChildren(shortcut, document.createTextNode(` ${description}`));
-      shownTip = nextTip;
-    }
-  }
 }
 function applyStatus(next: WorkspaceStatus) {
   if (

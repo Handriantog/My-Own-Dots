@@ -12,14 +12,13 @@ it('shows real startup stages without inventing a completion percentage', () => 
     message: 'Starting local PostgreSQL with Docker Compose…',
   });
   expect(view.mode).toBe('loading');
-  expect(view.activeStep).toBe(1);
   expect(view.status).toBe('Checking your connections');
   expect(view.detail).toContain('PostgreSQL');
   expect(view.showActions).toBe(false);
   expect(view).not.toHaveProperty('percentage');
 });
 
-it('reassures during a longer wait without promising an ETA or advancing the stage', () => {
+it('offers recovery during a longer wait without advancing the stage', () => {
   const state: WorkspaceStatus = {
     phase: 'starting',
     stage: 'backend',
@@ -27,8 +26,8 @@ it('reassures during a longer wait without promising an ETA or advancing the sta
   };
   const initial = recoveryView(state);
   const waiting = recoveryView(state, { elapsedMs: 20_000 });
-  expect(waiting.activeStep).toBe(initial.activeStep);
-  expect(waiting.description).toMatch(/longer|moment/);
+  expect(waiting.status).toBe(initial.status);
+  expect(initial.showActions).toBe(false);
   expect(waiting.showActions).toBe(true);
 });
 
@@ -40,7 +39,6 @@ it('exposes recovery actions and preserves actionable error details', () => {
   expect(view.mode).toBe('error');
   expect(view.showActions).toBe(true);
   expect(view.detail).toBe('Port 4310 is occupied.');
-  expect(view.activeStep).toBe(-1);
 });
 
 it('distinguishes opening the workspace from deliberately opening setup', () => {
@@ -66,7 +64,7 @@ it('keeps a degraded ready state actionable and a stopped state restartable', ()
   ).toMatchObject({
     detail: warning,
     showActions: true,
-    description: expect.stringContaining('needs attention'),
+    warning: true,
   });
   expect(
     recoveryView({ phase: 'stopped', message: 'Configuration saved.' }),
