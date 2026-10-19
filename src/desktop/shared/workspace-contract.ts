@@ -11,6 +11,7 @@ export interface WorkspaceStatus {
   phase: 'idle' | 'starting' | 'ready' | 'error' | 'stopped';
   message: string;
   warning?: string;
+  stage?: 'workspace' | 'services' | 'backend' | 'ready';
 }
 export interface DesktopWorkspaceBridge {
   openWorkspace(destination?: WorkspaceDestination): Promise<void>;

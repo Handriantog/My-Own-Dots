@@ -6,6 +6,7 @@ import path from 'node:path';
 import { parseEnv } from 'node:util';
 import { nativeExecutableEnvironment } from '../../../scripts/native-executable-environment.mjs';
 import { workspaceIdentity } from '../../server/workspace-identity.js';
+import type { WorkspaceStatus } from '../shared/workspace-contract.js';
 
 export interface WorkspaceBackendOptions {
   bundle: string;
@@ -23,11 +24,7 @@ export interface WorkspaceBackendConnection {
   owned: boolean;
   warning?: string;
 }
-export interface WorkspaceBackendStatus {
-  phase: 'idle' | 'starting' | 'ready' | 'error' | 'stopped';
-  message: string;
-  warning?: string;
-}
+export type WorkspaceBackendStatus = WorkspaceStatus;
 export interface WorkspaceBackendConfiguration {
   workspace: string;
   envFile: string;
@@ -155,6 +152,7 @@ export class WorkspaceBackend {
   private current: WorkspaceBackendStatus = {
     phase: 'idle',
     message: 'Workspace has not started.',
+    stage: 'workspace',
   };
   private config?: WorkspaceBackendConfiguration;
   constructor(private readonly options: WorkspaceBackendOptions) {}
@@ -175,8 +173,15 @@ export class WorkspaceBackend {
     phase: WorkspaceBackendStatus['phase'],
     message: string,
     warning?: string,
+    stage?: WorkspaceStatus['stage'],
   ) {
-    this.current = { phase, message, ...(warning ? { warning } : {}) };
+    const nextStage = stage ?? (phase === 'ready' ? 'ready' : undefined);
+    this.current = {
+      phase,
+      message,
+      ...(warning ? { warning } : {}),
+      ...(nextStage ? { stage: nextStage } : {}),
+    };
     for (const listener of this.listeners) listener(this.status);
   }
   private async load() {
@@ -310,7 +315,12 @@ export class WorkspaceBackend {
   private async launch(
     generation: number,
   ): Promise<WorkspaceBackendConnection> {
-    this.update('starting', 'Reading workspace configuration…');
+    this.update(
+      'starting',
+      'Reading workspace configuration…',
+      undefined,
+      'workspace',
+    );
     const { env } = await this.load();
     if (generation !== this.generation)
       throw new Error('Workspace startup was cancelled.');
@@ -372,6 +382,7 @@ export class WorkspaceBackend {
       return this.active;
     }
     let warning: string | undefined;
+    this.update('starting', 'Checking local services…', undefined, 'services');
     try {
       await this.prepareDatabase(env);
     } catch (error) {
@@ -387,7 +398,12 @@ export class WorkspaceBackend {
     }
     if (generation !== this.generation)
       throw new Error('Workspace startup was cancelled.');
-    this.update('starting', 'Starting the bundled workspace backend…');
+    this.update(
+      'starting',
+      'Starting the bundled workspace backend…',
+      warning,
+      'backend',
+    );
     const child = spawn(
       this.options.executable || process.execPath,
       [path.join(this.options.bundle, 'server/index.js')],
@@ -484,7 +500,12 @@ export class WorkspaceBackend {
       throw new Error(
         'Configured PostgreSQL is unavailable. Start your database service or update LOCAL_DATABASE_URL.',
       );
-    this.update('starting', 'Starting local PostgreSQL with Docker Compose…');
+    this.update(
+      'starting',
+      'Starting local PostgreSQL with Docker Compose…',
+      undefined,
+      'services',
+    );
     await new Promise<void>((resolve, reject) => {
       const child = spawn(
         env.DOCKER_BIN || 'docker',

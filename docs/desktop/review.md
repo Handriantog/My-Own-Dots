@@ -1,5 +1,11 @@
 # Desktop review and resolutions
 
+## Dot startup screen — October 19, 2026
+
+A scoped read-only review found two P2 issues, both fixed and confirmed on re-review. Recovery after a renderer crash now keeps an **Open workspace** action when the backend is already healthy; a host-plus-view regression test failed before the fix and passes afterward. Dark primary buttons now have 5.02:1 text contrast, with 5.86:1 on hover.
+
+Native preview exposed a cramped longer-wait layout, corrected by centering the scaled scene in its reserved height. During concurrent build/test work the owner reported severe desktop lag. Those jobs were stopped, the preview closed, and subsequent checks ran sequentially with one test worker. Animated full-window blur layers and backdrop filters were removed; the glow is painted with static gradients and the small animations use transforms/opacity. Fresh local process samples showed the preview graphics process near 5% CPU instead of the earlier roughly 60%; this is an observation under different system load, not a controlled benchmark or guarantee. No operating-system performance or privacy settings were changed.
+
 ## Full Electron workspace — October 19, 2026
 
 The whole-branch review of `c14599c..cf52242` found four Important and five Minor issues, with no Critical issue. A single combined fix at `ae60a1a` addressed all nine; the scoped reviewer confirmed each resolution. That review identified one additional setup-helper issue, fixed at `31e0585` and checked directly by the controller. No reported correctness finding remains open. This is a local review milestone, not a merge or public release.

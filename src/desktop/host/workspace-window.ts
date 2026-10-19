@@ -27,6 +27,8 @@ import { destination, destinationFromUrl } from './workspace-navigation.js';
 import { CompanionVoiceSession } from './voice-session.js';
 import { CompanionFolderPicker } from './folder-picker.js';
 const recovery = 'dots://app/recovery.html';
+const setupPage = `${recovery}#setup`;
+const isRecoveryPage = (url: string) => url === recovery || url === setupPage;
 /** Owns one persistent workspace window; handoff is an event so the editor can guard drafts. */
 export class WorkspaceWindow {
   private disposed = false;
@@ -216,12 +218,12 @@ export class WorkspaceWindow {
           event.sender === w.webContents &&
           event.senderFrame === w.webContents.mainFrame &&
           (isWorkspacePage(event.senderFrame.url) ||
-            event.senderFrame.url === recovery),
+            isRecoveryPage(event.senderFrame.url)),
       )
     );
   }
   private requireRecovery(event: IpcMainInvokeEvent) {
-    if (!this.trusted(event) || event.senderFrame?.url !== recovery)
+    if (!this.trusted(event) || !isRecoveryPage(event.senderFrame?.url ?? ''))
       throw new Error('Configuration is available in workspace recovery.');
   }
   register(window: BrowserWindow, initializing = false): () => void {
@@ -414,14 +416,14 @@ export class WorkspaceWindow {
       this.register(window);
       window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
       const guard = (event: Electron.Event, url: string) => {
-        if (url !== recovery) event.preventDefault();
+        if (url !== setupPage) event.preventDefault();
       };
       window.webContents.on('will-navigate', guard);
       window.webContents.on('will-redirect', guard);
       window.on('closed', () => {
         if (this.setup === window) this.setup = null;
       });
-      await window.loadURL(recovery);
+      await window.loadURL(setupPage);
       if (this.disposed || window.isDestroyed()) return;
       window.show();
       window.focus();

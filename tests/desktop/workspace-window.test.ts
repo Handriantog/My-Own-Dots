@@ -119,6 +119,7 @@ vi.mock('electron', async () => {
   };
 });
 import { WorkspaceWindow } from '../../src/desktop/host/workspace-window.js';
+import { recoveryView } from '../../src/desktop/renderer/recovery-state.js';
 import {
   destination,
   destinationFromUrl,
@@ -304,12 +305,35 @@ it('opens separate backend setup while retaining the loaded workspace', async ()
   const count = main.loadURL.mock.calls.length;
   await workspace.openBackendSettings();
   expect(host.windows).toHaveLength(2);
-  expect(host.windows[1].webContents.getURL()).toBe('dots://app/recovery.html');
+  expect(host.windows[1].webContents.getURL()).toBe(
+    'dots://app/recovery.html#setup',
+  );
   await workspace.retry();
   expect(main.loadURL).toHaveBeenCalledTimes(count);
-  expect(host.windows[1].webContents.getURL()).toBe('dots://app/recovery.html');
+  expect(host.windows[1].webContents.getURL()).toBe(
+    'dots://app/recovery.html#setup',
+  );
   await workspace.openBackendSettings();
   expect(host.windows).toHaveLength(2);
+});
+it('keeps recovery actionable after a renderer crash with a healthy backend', async () => {
+  await workspace.open();
+  backend.status = { phase: 'ready', message: 'Workspace ready.' };
+  const window = host.windows[0];
+  window.webContents.emit('render-process-gone');
+  expect(window.webContents.getURL()).toBe('dots://app/recovery.html');
+  const event = {
+    sender: window.webContents,
+    senderFrame: window.webContents.mainFrame,
+  };
+  const status = host.handlers.get('dot:workspace:status')!(
+    event,
+  ) as WorkspaceBackendStatus;
+  expect(recoveryView(status).showActions).toBe(true);
+  await host.handlers.get('dot:workspace:retry')!(event);
+  expect(window.webContents.getURL()).toBe(
+    'dots://workspace/?surface=workspace',
+  );
 });
 it('accepts omitted optional IDs and maps internal page/thread links without admitting foreign schemes', () => {
   expect(destination({ dotId: 'dot-1', threadId: undefined })).toEqual({

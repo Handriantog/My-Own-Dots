@@ -12,6 +12,8 @@ My Own Dots is a macOS Electron workspace with a plush desktop companion. The ma
 
 Closing the main window hides it and preserves ongoing work. Click the Dock icon, choose **File → Open Workspace**, or use **Open Workspace** in the menu-bar icon to return. Launching again reuses the existing app. Quit closes the app and stops only the backend it started; PostgreSQL volumes remain intact and externally managed services keep running.
 
+On launch, Dot floats above a glowing platform while the app reads your workspace, checks local services and starts its backend. The stage indicators follow actual startup events; the app opens your workspace immediately when ready. Longer waits reveal retry and workspace selection controls. Click Dot for a greeting. The screen follows system light/dark appearance and reduced-motion preferences, and pauses animation when hidden. **Workspace Setup…** opens the same design with configuration controls expanded.
+
 ## Run or install
 
 Source builds require Node 24+, Xcode command-line tools and `npm ci`. For subscription chat, install Docker with Compose, Python/uv and your chosen AI CLI, and sign in to that CLI. From the checkout:

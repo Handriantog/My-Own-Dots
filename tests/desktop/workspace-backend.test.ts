@@ -53,6 +53,8 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
 describe('workspace backend ownership', () => {
   it('starts the bundled backend in its configured workspace and stops only its child', async () => {
     const { backend, workspace, port } = await fixture();
+    const stages: (string | undefined)[] = [];
+    backend.subscribe((status) => stages.push(status.stage));
     const state = await backend.start();
     expect(state).toMatchObject({
       url: `http://127.0.0.1:${port}`,
@@ -62,6 +64,13 @@ describe('workspace backend ownership', () => {
       path.join(workspace, 'relative/state.sqlite'),
     );
     expect(backend.status.phase).toBe('ready');
+    expect(stages.filter(Boolean)).toEqual([
+      'workspace',
+      'workspace',
+      'services',
+      'backend',
+      'ready',
+    ]);
     await backend.stop();
     await expect(fetch(`${state.url}/api/desktop/identity`)).rejects.toThrow();
   });
