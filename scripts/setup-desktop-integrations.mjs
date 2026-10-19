@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseEnv } from 'node:util';
 import path from 'node:path';
+import { nativeExecutableEnvironment } from './native-executable-environment.mjs';
 const workspace = process.argv[2] && path.resolve(process.argv[2]);
 if (!workspace)
   throw new Error(
@@ -23,18 +24,22 @@ await cp(
       !['.venv', '__pycache__'].includes(path.basename(source)),
   },
 );
+const envFile = path.join(workspace, '.env');
+const contents = await readFile(envFile, 'utf8');
+const existing = parseEnv(contents);
+const environment = nativeExecutableEnvironment({
+  ...process.env,
+  ...existing,
+});
 const result = spawnSync(
-  'uv',
+  environment.UV_BIN || 'uv',
   ['sync', '--project', python, '--frozen', '--no-dev'],
-  { stdio: 'inherit', env: process.env },
+  { stdio: 'inherit', env: environment },
 );
 if (result.error || result.status !== 0)
   throw new Error(
     'Python setup failed. Install uv, retry this command, and keep your provider CLI signed in.',
   );
-const envFile = path.join(workspace, '.env');
-const contents = await readFile(envFile, 'utf8');
-const existing = parseEnv(contents);
 if (!existing.MYOWN_LLM_PYTHON) {
   const executable = path.join(python, '.venv/bin/python');
   const quote = ["'", '`', '"'].find(

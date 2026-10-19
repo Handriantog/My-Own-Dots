@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
+  lstatSync,
   readFileSync,
   realpathSync,
   rmdirSync,
@@ -10,12 +11,21 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 
-export function workspaceIdentity(database: string) {
+/** Identity and ownership must use the same path before and after first creation. */
+function canonicalDatabase(database: string) {
   const absolute = path.resolve(database);
-  const canonical = existsSync(absolute)
-    ? realpathSync(absolute)
-    : path.join(realpathSync(path.dirname(absolute)), path.basename(absolute));
-  return createHash('sha256').update(canonical).digest('hex');
+  if (existsSync(absolute)) return realpathSync(absolute);
+  if (lstatSync(absolute, { throwIfNoEntry: false })?.isSymbolicLink())
+    throw new Error(
+      'Database symlink target is missing. Set DATABASE_PATH to the intended target file directly, or restore the symlink target before retrying.',
+    );
+  return path.join(
+    realpathSync(path.dirname(absolute)),
+    path.basename(absolute),
+  );
+}
+export function workspaceIdentity(database: string) {
+  return createHash('sha256').update(canonicalDatabase(database)).digest('hex');
 }
 
 function withOwnershipGuard<T>(lock: string, action: () => T): T {
@@ -41,9 +51,7 @@ function withOwnershipGuard<T>(lock: string, action: () => T): T {
 /** A serialized, process-owned lease prevents duplicate runners sharing SQLite. */
 export function claimWorkspaceDatabase(database: string) {
   mkdirSync(path.dirname(path.resolve(database)), { recursive: true });
-  const canonical = existsSync(database)
-    ? realpathSync(database)
-    : path.resolve(database);
+  const canonical = canonicalDatabase(database);
   const lock = `${canonical}.runtime-lock`;
   const record = JSON.stringify({ pid: process.pid, lease: randomUUID() });
   withOwnershipGuard(lock, () => {

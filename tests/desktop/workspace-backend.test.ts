@@ -180,7 +180,11 @@ it('keeps the SQLite workspace available with an actionable warning when Docker 
     bundle,
     data: root,
     sourceRoot: workspace,
-    environment: { PATH: '/nonexistent', CONVERSATION_BACKEND: 'local' },
+    environment: {
+      PATH: '/nonexistent',
+      DOCKER_BIN: '/nonexistent/docker',
+      CONVERSATION_BACKEND: 'local',
+    },
     startupTimeoutMs: 2000,
   });
   cleanups.push(() => backend.stop());
@@ -374,4 +378,122 @@ process.on('SIGTERM',()=>setTimeout(()=>server.close(()=>process.exit(0)),100));
     release();
     globalThis.fetch = original;
   }
+});
+
+it('applies a changed token when detaching and reattaching without killing the external service', async () => {
+  const { backend: owner, bundle, workspace, root } = await fixture();
+  const service = await owner.start();
+  const attached = new WorkspaceBackend({
+    bundle,
+    data: root,
+    sourceRoot: workspace,
+    environment: {},
+  });
+  cleanups.push(() => attached.stop());
+  const old = await attached.start();
+  await attached.configure({ OWNER_TOKEN: 'changed-token' });
+  const fresh = await attached.start();
+  expect(fresh).not.toBe(old);
+  expect(fresh).toMatchObject({ owned: false, ownerToken: 'changed-token' });
+  expect((await fetch(`${service.url}/api/desktop/identity`)).ok).toBe(true);
+});
+it('rejects invalid configuration before stopping an owned backend or writing its file', async () => {
+  const { backend, workspace } = await fixture();
+  const connection = await backend.start();
+  const before = await readFile(path.join(workspace, '.env'), 'utf8');
+  await expect(backend.configure({ PORT: 'not-a-port' })).rejects.toThrow(
+    /PORT/,
+  );
+  expect(await backend.start()).toBe(connection);
+  expect(await readFile(path.join(workspace, '.env'), 'utf8')).toBe(before);
+});
+it.skipIf(process.platform !== 'darwin')(
+  'finds user-local prerequisites with a native minimal PATH and preserves explicit executable overrides',
+  async () => {
+    const { bundle, workspace, root } = await fixture(`
+const {spawnSync}=require('node:child_process');
+const http=require('node:http');
+const server=http.createServer((req,res)=>res.end(JSON.stringify({service:'my-own-dots',protocol:1,workspaceId:process.env.DOTS_WORKSPACE_ID,uv:spawnSync('uv',[],{encoding:'utf8'}).stdout,provider:spawnSync(process.env.CODEX_BIN,[],{encoding:'utf8'}).stdout,path:process.env.PATH})));
+server.listen(Number(process.env.PORT),process.env.HOST);
+process.on('SIGTERM',()=>server.close(()=>process.exit(0)));
+`);
+    const bin = path.join(root, '.local/bin');
+    await mkdir(bin, { recursive: true });
+    for (const name of ['docker', 'uv', 'custom-codex'])
+      await writeFile(
+        path.join(bin, name),
+        `#!${process.execPath}\nprocess.stdout.write('${name} fixture');`,
+        { mode: 0o755 },
+      );
+    const backend = new WorkspaceBackend({
+      bundle,
+      data: root,
+      sourceRoot: workspace,
+      environment: {
+        HOME: root,
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+        CODEX_BIN: path.join(bin, 'custom-codex'),
+      },
+    });
+    cleanups.push(() => backend.stop());
+    const pgPort = await freePort();
+    await backend.configure({
+      CONVERSATION_BACKEND: 'local',
+      LOCAL_DATABASE_URL: `postgresql://dots:fixture@127.0.0.1:${pgPort}/dots`,
+      LOCAL_POSTGRES_PORT: String(pgPort),
+      LOCAL_POSTGRES_PASSWORD: 'fixture',
+    });
+    const connection = await backend.start();
+    expect(connection.warning).toBeUndefined();
+    const result = await (
+      await fetch(`${connection.url}/api/desktop/identity`)
+    ).json();
+    expect(result).toMatchObject({
+      uv: 'uv fixture',
+      provider: 'custom-codex fixture',
+    });
+    expect(result.path).toContain('/opt/homebrew/bin');
+    expect(result.path).toContain('/usr/local/bin');
+    expect(result.path).toContain(
+      '/Applications/Docker.app/Contents/Resources/bin',
+    );
+  },
+);
+it('retries failed Docker preparation after stop and clears the degraded status on success', async () => {
+  const { bundle, workspace, root } = await fixture();
+  const docker = path.join(root, 'docker-fixture');
+  const log = path.join(root, 'attempts');
+  await writeFile(
+    docker,
+    `#!${process.execPath}\nconst fs=require('node:fs');fs.appendFileSync(process.env.ATTEMPTS,'attempt\\n');process.exit(fs.existsSync(process.env.AVAILABLE)?0:1);`,
+    { mode: 0o755 },
+  );
+  const backend = new WorkspaceBackend({
+    bundle,
+    data: root,
+    sourceRoot: workspace,
+    environment: {
+      DOCKER_BIN: docker,
+      ATTEMPTS: log,
+      AVAILABLE: path.join(root, 'available'),
+    },
+  });
+  cleanups.push(() => backend.stop());
+  const pgPort = await freePort();
+  await backend.configure({
+    CONVERSATION_BACKEND: 'local',
+    LOCAL_DATABASE_URL: `postgresql://dots:fixture@127.0.0.1:${pgPort}/dots`,
+    LOCAL_POSTGRES_PORT: String(pgPort),
+    LOCAL_POSTGRES_PASSWORD: 'fixture',
+  });
+  expect((await backend.start()).warning).toMatch(/Docker/);
+  expect(backend.status).toMatchObject({
+    phase: 'ready',
+    warning: expect.stringMatching(/Docker/),
+  });
+  await writeFile(path.join(root, 'available'), 'yes');
+  await backend.stop();
+  expect((await backend.start()).warning).toBeUndefined();
+  expect(backend.status).not.toHaveProperty('warning');
+  expect((await readFile(log, 'utf8')).trim().split('\n')).toHaveLength(2);
 });

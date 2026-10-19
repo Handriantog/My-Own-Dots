@@ -106,7 +106,7 @@ Bring your agents into Slack with [Channels SDK](https://github.com/CopilotKit/c
 
 ## Desktop workspace and companion (macOS)
 
-The Electron app opens a full workspace with Chats, Dots, Spaces, activity, memory and settings. A navigation rail, searchable sidebar, conversation history, document editor and optional context pane keep work in one native window. **⌘K** opens quick navigation, **⌘N** starts a chat, **⌘,** opens settings, and **⌘⇧B** toggles the sidebar. Closing the workspace hides it; the Dock or **Open Workspace** brings it back. **Quit** stops the backend started by this app.
+The Electron app opens a full workspace with Chats, Dots, Spaces, activity, memory and settings. A navigation rail, context sidebar, conversation history, document editor and optional context pane keep work in one native window. **⌘K** opens quick navigation, **⌘N** starts a chat, **⌘,** opens settings, and **⌘⇧B** toggles the sidebar. Closing the workspace hides it; the Dock or **Open Workspace** brings it back. **Quit** stops the backend started by this app.
 
 The same app includes the recolorable plush companion, roaming/window physics, pinching pickup, local effects and menu-bar controls. Click Dot for **Chat · Talk · Hide**. Compact chat uses the same bundled renderer and backend; its workspace button opens the matching conversation in the main window. **⌘⇧Space** toggles windowless talk after local voice setup. Accessibility enables window play; floor-only roaming remains available without it.
 

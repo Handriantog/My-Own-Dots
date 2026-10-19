@@ -8,7 +8,11 @@ import {
 } from 'electron';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import type { WorkspaceBackend } from './workspace-backend.js';
+import { randomUUID } from 'node:crypto';
+import {
+  validateWorkspaceConfiguration,
+  type WorkspaceBackend,
+} from './workspace-backend.js';
 import type {
   WorkspaceCommand,
   WorkspaceDestination,
@@ -34,6 +38,10 @@ export class WorkspaceWindow {
   private initializing = new Set<BrowserWindow>();
   private setup: BrowserWindow | null = null;
   private pendingDestination?: WorkspaceDestination;
+  private pendingCommands: WorkspaceCommand[] = [];
+  private resetNavigation = new Map<BrowserWindow, string>();
+  private transportInterrupted = false;
+  private changingConfiguration = false;
   private connection?: WorkspaceProtocolConnection;
   private failure?: WorkspaceStatus;
   private windows = new Set<BrowserWindow>();
@@ -105,8 +113,8 @@ export class WorkspaceWindow {
         if (this.disposed || confirm.response !== 1) return false;
       }
       this.requireRecovery(event);
-      this.loaded.clear();
-      this.connection = undefined;
+      await this.resetDocuments();
+      if (this.disposed) return false;
       await this.backend.setWorkspaceDirectory(selected.filePaths[0]);
       if (this.disposed) return false;
       await this.retry();
@@ -123,9 +131,44 @@ export class WorkspaceWindow {
         )
       )
         throw new Error('Invalid configuration');
-      if (this.connection?.owned) await this.backend.stop();
-      if (this.disposed) return;
-      await this.backend.configure(value as Record<string, string>);
+      const values = value as Record<string, string>;
+      validateWorkspaceConfiguration(values);
+      if (this.changingConfiguration)
+        throw new Error('Configuration change is already in progress.');
+      this.changingConfiguration = true;
+      try {
+        if (this.loaded.size) {
+          const confirm = await dialog.showMessageBox(
+            BrowserWindow.fromWebContents(event.sender)!,
+            {
+              type: 'warning',
+              message: 'Apply workspace configuration?',
+              detail:
+                'Open conversations and unsaved page drafts in this app will close. Existing workspace data is kept.',
+              buttons: ['Cancel', 'Apply Configuration'],
+              defaultId: 0,
+              cancelId: 0,
+            },
+          );
+          if (this.disposed) return;
+          if (confirm.response !== 1)
+            throw new Error(
+              'Configuration change cancelled. Your drafts and settings are unchanged.',
+            );
+        }
+        this.requireRecovery(event);
+        // Finish any in-flight navigation before invalidating every old document.
+        await this.retrying;
+        await this.connecting;
+        if (this.disposed) return;
+        await this.resetDocuments();
+        if (this.disposed) return;
+        await this.backend.stop();
+        if (this.disposed) return;
+        await this.backend.configure(values);
+      } finally {
+        this.changingConfiguration = false;
+      }
     });
     this.unsubscribe = backend.subscribe((status) => {
       if (this.disposed) return;
@@ -139,6 +182,30 @@ export class WorkspaceWindow {
   }
   get activeConnection() {
     return this.connection;
+  }
+  private async resetDocuments() {
+    this.pendingDestination = undefined;
+    this.connection = undefined;
+    this.loaded.clear();
+    const resetId = randomUUID();
+    for (const window of this.windows) {
+      if (window === this.setup || window.isDestroyed()) continue;
+      this.resetNavigation.set(window, resetId);
+      // The native discard confirmation has already authorized this one unload.
+      const allowDiscard = (event: Electron.Event) => event.preventDefault();
+      window.webContents.on('will-prevent-unload', allowDiscard);
+      try {
+        await window.loadURL(recovery);
+      } finally {
+        window.webContents.removeListener('will-prevent-unload', allowDiscard);
+      }
+      if (this.disposed) return;
+    }
+  }
+  private sendStatus(status: WorkspaceStatus) {
+    for (const window of this.windows)
+      if (!window.isDestroyed())
+        window.webContents.send('dot:workspace:status', status);
   }
   private trusted(event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>) {
     return (
@@ -168,14 +235,20 @@ export class WorkspaceWindow {
       this.windows.delete(window);
       this.initializing.delete(window);
       this.loaded.delete(window);
+      this.resetNavigation.delete(window);
     });
     window.webContents.on('render-process-gone', () =>
       this.loaded.delete(window),
     );
     window.webContents.on('did-finish-load', () => {
       if (this.disposed || window.isDestroyed()) return;
-      if (isWorkspacePage(window.webContents.getURL())) this.loaded.add(window);
-      else this.loaded.delete(window);
+      if (isWorkspacePage(window.webContents.getURL())) {
+        this.loaded.add(window);
+        this.resetNavigation.delete(window);
+        if (window === this.window)
+          for (const command of this.pendingCommands.splice(0))
+            window.webContents.send('dot:workspace:command', command);
+      } else this.loaded.delete(window);
     });
     return () => {
       this.initializing.delete(window);
@@ -210,6 +283,7 @@ export class WorkspaceWindow {
   }
   transportFailed() {
     if (this.disposed || this.failure) return;
+    this.transportInterrupted = true;
     this.failure = {
       phase: 'error',
       message:
@@ -220,7 +294,7 @@ export class WorkspaceWindow {
         window.webContents.send('dot:workspace:status', this.failure);
   }
   retry(): Promise<void> {
-    if (this.disposed) return Promise.resolve();
+    if (this.disposed || this.changingConfiguration) return Promise.resolve();
     return (this.retrying ??= this.reconnect().finally(() => {
       this.retrying = undefined;
     }));
@@ -228,7 +302,12 @@ export class WorkspaceWindow {
   private async reconnect() {
     try {
       if (this.disposed) return;
-      if (this.failure) await this.backend.stop();
+      if (
+        this.transportInterrupted ||
+        (this.connection?.owned && this.connection.warning)
+      )
+        await this.backend.stop();
+      this.transportInterrupted = false;
       if (this.disposed) return;
       await this.ready();
       if (this.disposed) return;
@@ -239,9 +318,21 @@ export class WorkspaceWindow {
           !window.isDestroyed() &&
           !this.loaded.has(window)
         ) {
-          await window.loadURL(
-            `dots://workspace/?surface=${window === this.window ? 'workspace' : 'companion'}`,
-          );
+          try {
+            await window.loadURL(
+              `dots://workspace/?surface=${window === this.window ? 'workspace' : 'companion'}${this.resetNavigation.has(window) ? `&resetNavigation=${this.resetNavigation.get(window)}` : ''}`,
+            );
+          } catch {
+            if (!this.disposed) {
+              this.failure = {
+                phase: 'error',
+                message:
+                  'The workspace interface could not load. Retry to reopen it; if this persists, reinstall the application.',
+              };
+              this.sendStatus(this.failure);
+            }
+            return;
+          }
           if (this.disposed || window.isDestroyed()) return;
           if (window === this.window && this.pendingDestination) {
             window.webContents.send(
@@ -251,6 +342,8 @@ export class WorkspaceWindow {
             this.pendingDestination = undefined;
           }
         }
+      this.failure = undefined;
+      this.sendStatus(this.backend.status);
     } catch {
       /* Supervisor emits a safe actionable error to recovery and loaded views. */
     }
@@ -283,7 +376,9 @@ export class WorkspaceWindow {
   async command(command: WorkspaceCommand) {
     await this.open();
     if (this.disposed || !this.window || this.window.isDestroyed()) return;
-    this.window.webContents.send('dot:workspace:command', command);
+    if (this.loaded.has(this.window))
+      this.window.webContents.send('dot:workspace:command', command);
+    else this.pendingCommands.push(command);
   }
   suspend() {
     if (this.disposed) return;
@@ -463,6 +558,8 @@ export class WorkspaceWindow {
     this.disposed = true;
     this.connection = undefined;
     this.pendingDestination = undefined;
+    this.pendingCommands = [];
+    this.resetNavigation.clear();
     if (this.saving) clearTimeout(this.saving);
     const saved = this.saveGeometry().catch(() => {});
     this.unsubscribe();

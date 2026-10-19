@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile, chmod, stat } from 'node:fs/promises';
 import { connect } from 'node:net';
 import path from 'node:path';
 import { parseEnv } from 'node:util';
+import { nativeExecutableEnvironment } from '../../../scripts/native-executable-environment.mjs';
 import { workspaceIdentity } from '../../server/workspace-identity.js';
 
 export interface WorkspaceBackendOptions {
@@ -25,6 +26,7 @@ export interface WorkspaceBackendConnection {
 export interface WorkspaceBackendStatus {
   phase: 'idle' | 'starting' | 'ready' | 'error' | 'stopped';
   message: string;
+  warning?: string;
 }
 export interface WorkspaceBackendConfiguration {
   workspace: string;
@@ -49,12 +51,65 @@ const editable = new Set([
   'OPENAI_BASE_URL',
   'MYOWN_LLM_PYTHON',
   'CODEX_BIN',
+  'DOCKER_BIN',
+  'UV_BIN',
   'AGENT_BIN',
   'LOCAL_VOICE_ENABLED',
   'LOCAL_VOICE_PYTHON',
   'LOCAL_VOICE_ASSETS',
   'INTELLIGENCE_API_KEY',
 ]);
+function configurationLine(key: string, value: string) {
+  const quote = ["'", '`', '"'].find(
+    (candidate) =>
+      !value.includes(candidate) &&
+      parseEnv(`VALUE=${candidate}${value}${candidate}`).VALUE === value,
+  );
+  if (!quote)
+    throw new Error(
+      'Configuration values cannot contain all three quote styles.',
+    );
+  return `${key}=${quote}${value}${quote}`;
+}
+/** Validate before closing documents, stopping services, or changing the configuration file. */
+export function validateWorkspaceConfiguration(values: Record<string, string>) {
+  for (const [key, value] of Object.entries(values)) {
+    if (
+      !editable.has(key) ||
+      typeof value !== 'string' ||
+      /[\n\r\0]/.test(value)
+    )
+      throw new Error('Unsupported workspace configuration value.');
+    configurationLine(key, value);
+  }
+  if (values.HOST && !['127.0.0.1', 'localhost', '::1'].includes(values.HOST))
+    throw new Error('Desktop HOST must be a loopback address.');
+  for (const key of ['PORT', 'LOCAL_POSTGRES_PORT']) {
+    if (
+      values[key] &&
+      (!Number.isInteger(Number(values[key])) ||
+        Number(values[key]) < 1 ||
+        Number(values[key]) > 65535)
+    )
+      throw new Error(`${key} must be an integer from 1 to 65535.`);
+  }
+  if (
+    values.CONVERSATION_BACKEND &&
+    !['local', 'intelligence'].includes(values.CONVERSATION_BACKEND)
+  )
+    throw new Error('CONVERSATION_BACKEND must be local or intelligence.');
+  if (values.LOCAL_DATABASE_URL) {
+    try {
+      const url = new URL(values.LOCAL_DATABASE_URL);
+      if (!['postgres:', 'postgresql:'].includes(url.protocol) || !url.hostname)
+        throw new Error();
+    } catch {
+      throw new Error(
+        'LOCAL_DATABASE_URL is malformed. Use a PostgreSQL connection URL.',
+      );
+    }
+  }
+}
 const delay = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 function localUrl(raw: string) {
@@ -116,8 +171,12 @@ export class WorkspaceBackend {
       this.listeners.delete(listener);
     };
   }
-  private update(phase: WorkspaceBackendStatus['phase'], message: string) {
-    this.current = { phase, message };
+  private update(
+    phase: WorkspaceBackendStatus['phase'],
+    message: string,
+    warning?: string,
+  ) {
+    this.current = { phase, message, ...(warning ? { warning } : {}) };
     for (const listener of this.listeners) listener(this.status);
   }
   private async load() {
@@ -168,7 +227,7 @@ export class WorkspaceBackend {
         'Workspace .env is malformed. Correct the configuration and retry.',
       );
     }
-    const env = { ...inherited, ...values };
+    const env = nativeExecutableEnvironment({ ...inherited, ...values });
     const database = path.resolve(
       workspace,
       env.DATABASE_PATH || 'data/opendots.sqlite',
@@ -195,28 +254,13 @@ export class WorkspaceBackend {
     );
   }
   async configure(values: Record<string, string>) {
-    if (this.active?.owned || this.pending)
-      throw new Error('Stop the workspace before changing configuration.');
-    for (const [key, value] of Object.entries(values))
-      if (
-        !editable.has(key) ||
-        typeof value !== 'string' ||
-        /[\n\r\0]/.test(value)
-      )
-        throw new Error('Unsupported workspace configuration value.');
+    validateWorkspaceConfiguration(values);
+    // stop() detaches external connections without signalling any external process.
+    if (this.active || this.pending) await this.stop();
     const { contents } = await this.load();
     let next = contents;
     for (const [key, value] of Object.entries(values)) {
-      const quote = ["'", '`', '"'].find(
-        (candidate) =>
-          !value.includes(candidate) &&
-          parseEnv(`VALUE=${candidate}${value}${candidate}`).VALUE === value,
-      );
-      if (!quote)
-        throw new Error(
-          'Configuration values cannot contain all three quote styles.',
-        );
-      const line = `${key}=${quote}${value}${quote}`;
+      const line = configurationLine(key, value);
       const pattern = new RegExp(`^${key}=.*$`, 'm');
       next = pattern.test(next)
         ? next.replace(pattern, () => line)
@@ -404,6 +448,7 @@ export class WorkspaceBackend {
           'ready',
           warning ||
             'Workspace is ready. AI and voice integrations can be configured in Settings.',
+          warning,
         );
         return this.active;
       }
@@ -442,7 +487,7 @@ export class WorkspaceBackend {
     this.update('starting', 'Starting local PostgreSQL with Docker Compose…');
     await new Promise<void>((resolve, reject) => {
       const child = spawn(
-        'docker',
+        env.DOCKER_BIN || 'docker',
         [
           'compose',
           '--project-name',

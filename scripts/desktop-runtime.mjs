@@ -164,7 +164,11 @@ export async function buildDesktopRuntime(root, output) {
   mkdirSync(path.join(output, 'support'), { recursive: true });
   for (const name of ['compose.local.yml', '.env.example'])
     cpSync(path.join(root, name), path.join(output, 'support', name));
-  for (const name of ['setup-local.mjs', 'setup-desktop-integrations.mjs'])
+  for (const name of [
+    'setup-local.mjs',
+    'setup-desktop-integrations.mjs',
+    'native-executable-environment.mjs',
+  ])
     cpSync(
       path.join(root, 'scripts', name),
       path.join(output, 'support', name),

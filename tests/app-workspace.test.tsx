@@ -36,6 +36,7 @@ vi.mock('../src/client/WorkspaceDialog', () => ({
 import { App } from '../src/client/App';
 import { Chat } from '../src/client/Chat';
 import { SpaceWorkspace } from '../src/client/SpaceWorkspace';
+import { WorkspaceDialog } from '../src/client/WorkspaceDialog';
 import { WorkspaceRail } from '../src/client/WorkspaceShell';
 import type {
   WorkspaceDestination,
@@ -236,5 +237,147 @@ it('lets the native menu own shortcuts without duplicate renderer actions', asyn
   await act(async () => {
     window.dispatchEvent(event);
   });
+  expect(createdCalls()).toHaveLength(1);
+});
+
+it('normalizes a restored deleted Space before rendering page navigation or Dot creation', async () => {
+  storage.set(
+    'workspace-navigation',
+    JSON.stringify({ view: 'space', spaceId: 'deleted', pageId: 'wrong-page' }),
+  );
+  await mount();
+  const space = root.root.findByType(SpaceWorkspace);
+  expect(space.props.space.id).toBe('space');
+  expect(space.props.pageId).toBeUndefined();
+  await act(async () => space.props.onPage('new-page'));
+  expect(JSON.parse(storage.get('workspace-navigation')!).spaceId).toBe(
+    'space',
+  );
+  await act(async () =>
+    root.root.findByType(SpaceWorkspace).props.onCreateDot(),
+  );
+  expect(root.root.findByType(WorkspaceDialog).props.dialog.spaceId).toBe(
+    'space',
+  );
+});
+it('clears a page selection when the selected Space disappears during refresh', async () => {
+  await mount();
+  await act(async () => navigate({ spaceId: 'space', pageId: 'old-page' }));
+  const normal = harness.api.getMockImplementation()!;
+  harness.api.mockImplementation(async (path: string, method?: string) => {
+    const result = await normal(path, method);
+    return path === '/workspace'
+      ? { ...result, spaces: [{ id: 'replacement', name: 'Replacement' }] }
+      : result;
+  });
+  await act(async () => root.root.findByType(SpaceWorkspace).props.onRefresh());
+  expect(root.root.findByType(SpaceWorkspace).props).toMatchObject({
+    space: { id: 'replacement' },
+    pageId: undefined,
+  });
+  await act(async () =>
+    root.root.findByType(SpaceWorkspace).props.onPage('replacement-page'),
+  );
+  expect(JSON.parse(storage.get('workspace-navigation')!).spaceId).toBe(
+    'replacement',
+  );
+});
+it('resets persisted identities on an explicit configuration reload even when IDs exist in both databases', async () => {
+  storage.set('workspace-dot', 'dot');
+  storage.set('workspace-thread', 'selected');
+  storage.set(
+    'workspace-navigation',
+    JSON.stringify({ view: 'space', spaceId: 'space', pageId: 'old-page' }),
+  );
+  vi.stubGlobal(
+    'location',
+    new URL('dots://workspace/?surface=workspace&resetNavigation=1'),
+  );
+  await mount();
+  expect(root.root.findByType(WorkspaceRail).props.view).toBe('chat');
+  expect(root.root.findAllByType(Chat)).toHaveLength(0);
+  expect(storage.get('workspace-thread')).toBe('');
+});
+it('shows a degraded warning with retry while keeping the composer, then clears it after recovery', async () => {
+  await mount();
+  const composer = root.root.findByProps({
+    'aria-label': 'Start a conversation',
+  });
+  await act(async () =>
+    composer.props.onChange({ target: { value: 'Retained draft' } }),
+  );
+  await act(async () =>
+    statusChanged({
+      phase: 'ready',
+      message: 'Open Docker and retry.',
+      warning: 'Open Docker and retry.',
+    }),
+  );
+  expect(
+    root.root.findByProps({ className: 'backend-notice' }).findByType('span')
+      .children,
+  ).toEqual(['Open Docker and retry.']);
+  const footer = root.root.findByProps({ className: 'workspace-status' });
+  expect(footer.findByType('strong').children).toEqual([
+    'Workspace needs attention',
+  ]);
+  expect(footer.findByProps({ className: 'online-dot off' })).toBeDefined();
+  await act(async () => statusChanged({ phase: 'ready', message: 'Ready' }));
+  expect(
+    root.root.findAllByProps({ className: 'backend-notice' }),
+  ).toHaveLength(0);
+  expect(composer.props.value).toBe('Retained draft');
+});
+it.each([
+  ['error', 'Workspace disconnected'],
+  ['stopped', 'Workspace stopped'],
+  ['starting', 'Workspace connecting'],
+])('shows an accurate footer during %s', async (phase, label) => {
+  await mount();
+  await act(async () =>
+    statusChanged({ phase: phase as WorkspaceStatus['phase'], message: label }),
+  );
+  const footer = root.root.findByProps({ className: 'workspace-status' });
+  expect(footer.findByType('strong').children).toEqual([label]);
+  expect(footer.findByProps({ className: 'online-dot off' })).toBeDefined();
+});
+
+it('clears dormant compact navigation during an explicit workspace configuration change', async () => {
+  storage.set('companion-dot', 'old-dot');
+  storage.set('companion-thread', 'old-thread');
+  storage.set(
+    'companion-navigation',
+    JSON.stringify({ view: 'space', spaceId: 'old-space' }),
+  );
+  storage.set('desktop-thread', 'legacy-thread');
+  vi.stubGlobal(
+    'location',
+    new URL(
+      'dots://workspace/?surface=workspace&resetNavigation=configuration-2',
+    ),
+  );
+  await mount();
+  expect(storage.get('companion-dot')).toBe('');
+  expect(storage.get('companion-thread')).toBe('');
+  expect(storage.get('companion-navigation')).toBe('');
+  expect(storage.get('desktop-thread')).toBe('');
+});
+
+it('retains a recovered New Chat command until workspace data is available', async () => {
+  let release!: (value: unknown) => void;
+  const normal = harness.api.getMockImplementation()!;
+  let waiting = true;
+  harness.api.mockImplementation((path: string, method?: string) =>
+    path === '/workspace' && waiting
+      ? new Promise((resolve) => {
+          release = resolve;
+        })
+      : normal(path, method),
+  );
+  await mount();
+  await act(async () => command('new-chat'));
+  expect(createdCalls()).toHaveLength(0);
+  waiting = false;
+  await act(async () => release(await normal('/workspace')));
   expect(createdCalls()).toHaveLength(1);
 });

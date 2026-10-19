@@ -258,15 +258,24 @@ export function WorkspaceSidebar({
       </div>
       <div className="workspace-status">
         <span
-          className={`online-dot ${!configured || backendStatus?.phase === 'error' ? 'off' : ''}`}
+          className={`online-dot ${!configured || backendStatus?.warning || (backendStatus && backendStatus.phase !== 'ready') ? 'off' : ''}`}
         />
         <div>
           <strong>
-            {state.settings.paused
-              ? 'Dots paused'
-              : configured
-                ? 'Workspace connected'
-                : 'Setup needed'}
+            {backendStatus?.phase === 'error'
+              ? 'Workspace disconnected'
+              : backendStatus?.phase === 'stopped'
+                ? 'Workspace stopped'
+                : backendStatus &&
+                    ['idle', 'starting'].includes(backendStatus.phase)
+                  ? 'Workspace connecting'
+                  : backendStatus?.warning
+                    ? 'Workspace needs attention'
+                    : state.settings.paused
+                      ? 'Dots paused'
+                      : configured
+                        ? 'Workspace connected'
+                        : 'Setup needed'}
           </strong>
           <small>
             {workspace.setup.llmBackend === 'subscription'

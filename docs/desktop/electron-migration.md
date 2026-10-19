@@ -6,7 +6,7 @@ The full workspace now ships in My Own Dots alongside the existing desktop compa
 
 The native app owns a main workspace window, compact companion chat, menu commands, recovery/setup controls and a bundled API backend. Main and compact surfaces load the same renderer at `dots://workspace`, with relative API requests transported to the selected loopback backend by the native host. Production HTTP serves APIs only: the root returns 404. Vite remains a developer harness.
 
-The workspace uses a navigation rail, a searchable context sidebar, recent conversation history and an optional detail pane. Quick navigation reaches Dots, Spaces, pages and application destinations; native menu commands expose the same navigation actions. Closing the main window hides it, and Quit shuts down the owned backend. Explicitly attached services are not stopped.
+The workspace uses a navigation rail, a context sidebar, recent conversation history and an optional detail pane. Quick navigation searches Dots, Spaces, conversation titles and application sections; native menu commands expose the same navigation actions. Closing the main window hides it, and Quit shuts down the owned backend. Explicitly attached services are not stopped.
 
 Existing Dots, Spaces, pages, curated memory, approvals, settings and schedules remain in the selected SQLite store. Local conversation history remains in its configured PostgreSQL database. Selecting an original project folder reuses its `.env` and resolved data paths without copying them. The existing `My Own Dots Desktop` userData directory retains companion preferences; fresh packaged workspaces live beneath its `workspace` directory. Existing legacy Compose projects retain their data volume; new configurations receive unique project names.
 
@@ -16,7 +16,7 @@ The app bundles Electron, compiled production backend modules, the production np
 
 Subscription inference still requires a supported AI CLI authenticated on this Mac and a Python environment prepared with uv. Docker/PostgreSQL are local prerequisites for the default conversation backend. Optional speech requires its separately installed Python runtime/models and explicit setup. Credentials and model downloads are not shipped. A clean package can open recovery/setup before those integrations are ready; a process smoke with intentionally blank keys does not establish real chat readiness.
 
-Command Center remains an optional external launcher. This migration changes Dots ownership when launched directly; it does not modify the sibling Command Center implementation. See [workspace setup](README.md#workspace-ownership-and-existing-data) before taking over a previously running service. Public Developer ID signing, notarization and Intel/native OS acceptance are separate release gates.
+Command Center can still own an externally managed Dots backend, which this app can explicitly attach to. Its existing HTTP Open action and native-app launch integration are unchanged by this migration; opening Electron from Command Center requires separate launcher integration. Direct Electron launch owns its backend. See [workspace setup](README.md#workspace-ownership-and-existing-data) before taking over a previously running service. Public Developer ID signing, notarization and Intel/native OS acceptance are separate release gates.
 
 ## Design references and attribution
 

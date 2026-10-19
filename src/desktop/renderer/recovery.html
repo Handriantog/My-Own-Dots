@@ -18,9 +18,9 @@
         <summary>Workspace configuration</summary>
         <p>
           Change only the fields you need, then save and retry. Saving stops the
-          app-owned backend until you retry. Existing files and databases stay
-          in place. For an externally managed service, restart it in its
-          launcher after saving.
+          app-owned backend until you retry. Open drafts require confirmation
+          before they close. Existing files and databases stay in place. For an
+          externally managed service, restart it in its launcher after saving.
         </p>
         <form id="configuration">
           <label
@@ -44,6 +44,10 @@
             >Codex executable<input
               name="CODEX_BIN"
               placeholder="codex" /></label
+          ><label
+            >Docker executable<input
+              name="DOCKER_BIN"
+              placeholder="docker" /></label
           ><label
             >Existing owner token<input
               name="OWNER_TOKEN"

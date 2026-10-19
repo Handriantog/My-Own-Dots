@@ -1,6 +1,6 @@
 # My Own Dots on the desktop
 
-My Own Dots is a macOS Electron workspace with a plush desktop companion. The main window contains Chats, specialist Dots, Spaces and their page editor, activity, memory, connections and settings. The navigation rail selects an area, the searchable sidebar selects its content, and the optional context pane shows details without leaving the current work. Recent conversations and quick navigation make it possible to move between Dots and pages from the keyboard.
+My Own Dots is a macOS Electron workspace with a plush desktop companion. The main window contains Chats, specialist Dots, Spaces and their page editor, activity, memory, connections and settings. The navigation rail selects an area, the context sidebar selects its content, and the optional context pane shows details without leaving the current work. Quick navigation searches Dots, Spaces, conversation titles and application sections. Pages are browsed and searched inside each Space.
 
 | Shortcut | Action                              |
 | -------- | ----------------------------------- |

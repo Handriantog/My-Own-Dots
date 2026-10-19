@@ -10,6 +10,7 @@ export type WorkspaceCommand =
 export interface WorkspaceStatus {
   phase: 'idle' | 'starting' | 'ready' | 'error' | 'stopped';
   message: string;
+  warning?: string;
 }
 export interface DesktopWorkspaceBridge {
   openWorkspace(destination?: WorkspaceDestination): Promise<void>;

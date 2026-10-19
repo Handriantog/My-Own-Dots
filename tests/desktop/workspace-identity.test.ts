@@ -6,10 +6,14 @@ import {
   writeFileSync,
   mkdirSync,
   existsSync,
+  symlinkSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { claimWorkspaceDatabase } from '../../src/server/workspace-identity.js';
+import {
+  claimWorkspaceDatabase,
+  workspaceIdentity,
+} from '../../src/server/workspace-identity.js';
 const directories: string[] = [];
 afterEach(() => {
   vi.restoreAllMocks();
@@ -73,5 +77,35 @@ it('does not let a released lease remove a later owner in the same process', () 
     expect(existsSync(`${database}.runtime-lock`)).toBe(true);
   } finally {
     second();
+  }
+});
+
+it('rejects a dangling database symlink before creating a lease or changing identity', () => {
+  const target = fixture();
+  const alias = `${target}.alias`;
+  symlinkSync(target, alias);
+  expect(() => workspaceIdentity(alias)).toThrow(/symlink.*DATABASE_PATH/i);
+  expect(() => claimWorkspaceDatabase(alias)).toThrow(
+    /symlink.*DATABASE_PATH/i,
+  );
+  expect(existsSync(`${alias}.runtime-lock`)).toBe(false);
+  expect(existsSync(`${target}.runtime-lock`)).toBe(false);
+});
+it('keeps a missing database under a parent directory alias on the same lease and identity after creation', () => {
+  const database = fixture();
+  const parentAlias = `${path.dirname(database)}-alias`;
+  directories.push(parentAlias);
+  symlinkSync(path.dirname(database), parentAlias);
+  const alias = path.join(parentAlias, path.basename(database));
+  const identity = workspaceIdentity(alias);
+  const release = claimWorkspaceDatabase(alias);
+  try {
+    writeFileSync(database, 'fixture');
+    expect(workspaceIdentity(database)).toBe(identity);
+    expect(workspaceIdentity(alias)).toBe(identity);
+    expect(() => claimWorkspaceDatabase(database)).toThrow(/already open/i);
+    expect(() => claimWorkspaceDatabase(alias)).toThrow(/already open/i);
+  } finally {
+    release();
   }
 });

@@ -3,7 +3,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import type { BrowserWindowConstructorOptions } from 'electron';
+import {
+  BrowserWindow,
+  dialog,
+  type BrowserWindowConstructorOptions,
+} from 'electron';
 import type {
   WorkspaceBackend,
   WorkspaceBackendStatus,
@@ -45,7 +49,10 @@ vi.mock('electron', async () => {
   });
   return {
     ipcMain: host.ipc,
-    dialog: { showOpenDialog: vi.fn() },
+    dialog: {
+      showOpenDialog: vi.fn(),
+      showMessageBox: vi.fn(async () => ({ response: 1 })),
+    },
     shell: { openExternal: host.external },
     screen: {
       getAllDisplays: () => [
@@ -53,6 +60,9 @@ vi.mock('electron', async () => {
       ],
     },
     BrowserWindow: class extends EventEmitter {
+      static fromWebContents(contents: unknown) {
+        return host.windows.find((w) => w.webContents === contents);
+      }
       visible = false;
       destroyed = false;
       webContents = Object.assign(new EventEmitter(), {
@@ -132,6 +142,9 @@ beforeEach(async () => {
   host.windows = [];
   host.geometry = null;
   host.load = null;
+  vi.mocked(dialog.showMessageBox)
+    .mockReset()
+    .mockResolvedValue({ response: 1, checkboxChecked: false });
   host.external.mockClear();
   backend = {
     status: { phase: 'idle', message: 'Starting' },
@@ -426,10 +439,162 @@ it('invalidates pending native configuration and rejects stale IPC after teardow
   const stop = deferred<void>();
   backend.stop.mockReturnValueOnce(stop.promise);
   const pending = configure(event, { PORT: '5999' });
-  expect(backend.stop).toHaveBeenCalledOnce();
+  await vi.waitFor(() => expect(backend.stop).toHaveBeenCalledOnce());
   await workspace.destroy();
   stop.resolve();
   await expect(pending).resolves.toBeUndefined();
   expect(backend.configure).not.toHaveBeenCalled();
   expect(() => open(event, {})).toThrow('Invalid workspace sender');
+});
+
+function setupEvent() {
+  const setup = host.windows.at(-1)!;
+  return {
+    sender: setup.webContents,
+    senderFrame: setup.webContents.mainFrame,
+  };
+}
+it('validates configuration before stopping or asking to discard loaded documents', async () => {
+  await workspace.open();
+  await workspace.openBackendSettings();
+  await expect(
+    host.handlers.get('dot:workspace:configure')!(setupEvent(), {
+      NODE_OPTIONS: '--inspect',
+    }),
+  ).rejects.toThrow(/configuration/i);
+  expect(dialog.showMessageBox).not.toHaveBeenCalled();
+  expect(backend.stop).not.toHaveBeenCalled();
+  expect(backend.configure).not.toHaveBeenCalled();
+});
+it('cancels configuration without changing the connection, documents or drafts', async () => {
+  await workspace.open();
+  await workspace.openBackendSettings();
+  const main = host.windows[0];
+  const count = main.loadURL.mock.calls.length;
+  const connection = workspace.activeConnection;
+  vi.mocked(dialog.showMessageBox).mockResolvedValueOnce({
+    response: 0,
+    checkboxChecked: false,
+  });
+  await expect(
+    host.handlers.get('dot:workspace:configure')!(setupEvent(), {
+      DATABASE_PATH: 'other.sqlite',
+    }),
+  ).rejects.toThrow(/cancelled/i);
+  expect(backend.stop).not.toHaveBeenCalled();
+  expect(backend.configure).not.toHaveBeenCalled();
+  expect(workspace.activeConnection).toBe(connection);
+  expect(main.loadURL).toHaveBeenCalledTimes(count);
+});
+it('resets main and compact documents on explicit configuration and refreshes transport before reload', async () => {
+  await workspace.open();
+  const compact = new BrowserWindow({});
+  workspace.register(compact);
+  await compact.loadURL('dots://workspace/?surface=companion');
+  await workspace.openBackendSettings();
+  const main = host.windows[0];
+  const count = main.loadURL.mock.calls.length;
+  await host.handlers.get('dot:workspace:configure')!(setupEvent(), {
+    DATABASE_PATH: 'other.sqlite',
+  });
+  expect(dialog.showMessageBox).toHaveBeenCalledOnce();
+  expect(backend.stop).toHaveBeenCalledOnce();
+  expect(main.webContents.getURL()).toBe('dots://app/recovery.html');
+  expect(compact.webContents.getURL()).toBe('dots://app/recovery.html');
+  vi.mocked(fetch).mockResolvedValueOnce(
+    new Response(null, {
+      headers: {
+        'content-security-policy': "connect-src 'self' wss://new.example",
+      },
+    }),
+  );
+  await workspace.retry();
+  expect(main.loadURL).toHaveBeenCalledTimes(count + 2);
+  expect(main.webContents.getURL()).toMatch(/resetNavigation=[\w-]+/);
+  expect(compact.webContents.getURL()).toMatch(/resetNavigation=[\w-]+/);
+  expect(workspace.activeConnection?.connectOrigin).toBe('wss://new.example');
+});
+it('replays commands issued during startup recovery only after the workspace loads', async () => {
+  backend.start.mockRejectedValueOnce(new Error('failure'));
+  await workspace.command('settings');
+  const main = host.windows[0];
+  expect(main.webContents.send).not.toHaveBeenCalledWith(
+    'dot:workspace:command',
+    'settings',
+  );
+  await workspace.retry();
+  expect(main.webContents.send).toHaveBeenCalledWith(
+    'dot:workspace:command',
+    'settings',
+  );
+});
+it('reports renderer load failure and can retry without restarting a healthy backend', async () => {
+  backend.start.mockRejectedValueOnce(new Error('failure'));
+  await workspace.open();
+  const main = host.windows[0];
+  main.loadURL.mockRejectedValueOnce(new Error('private URL details'));
+  await workspace.retry();
+  const status = host.handlers.get('dot:workspace:status')!(setupEvent());
+  expect(status).toMatchObject({
+    phase: 'error',
+    message: expect.stringMatching(/interface.*Retry/i),
+  });
+  expect(JSON.stringify(status)).not.toContain('private URL');
+  await workspace.retry();
+  expect(main.webContents.getURL()).toContain('dots://workspace/');
+  expect(backend.stop).not.toHaveBeenCalled();
+});
+it('retries owned degraded services without reloading a loaded draft', async () => {
+  backend.start.mockResolvedValueOnce({
+    url: 'http://127.0.0.1:5999',
+    owned: true,
+    warning: 'Open Docker and retry.',
+  });
+  await workspace.open();
+  const main = host.windows[0];
+  const count = main.loadURL.mock.calls.length;
+  await workspace.retry();
+  expect(backend.stop).toHaveBeenCalledOnce();
+  expect(main.loadURL).toHaveBeenCalledTimes(count);
+});
+
+it('leaves externally managed services attached and untouched on an ordinary retry', async () => {
+  backend.start.mockResolvedValue({
+    url: 'http://127.0.0.1:5999',
+    owned: false,
+  });
+  await workspace.open();
+  const main = host.windows[0];
+  const count = main.loadURL.mock.calls.length;
+  await workspace.retry();
+  expect(backend.stop).not.toHaveBeenCalled();
+  expect(main.loadURL).toHaveBeenCalledTimes(count);
+  expect(workspace.activeConnection?.owned).toBe(false);
+});
+
+it('honors the confirmed discard when the old editor prevents unload, only for the explicit transition', async () => {
+  await workspace.open();
+  await workspace.openBackendSettings();
+  const main = host.windows[0];
+  const normalLoad = main.loadURL.getMockImplementation() as (
+    url: string,
+  ) => Promise<void>;
+  const unload = { preventDefault: vi.fn() };
+  main.webContents.emit('will-prevent-unload', unload);
+  expect(unload.preventDefault).not.toHaveBeenCalled();
+  main.loadURL.mockImplementationOnce(async (url: string) => {
+    main.webContents.emit('will-prevent-unload', unload);
+    if (!unload.preventDefault.mock.calls.length)
+      throw new Error('Dirty page blocked unloading');
+    await normalLoad(url);
+  });
+  await expect(
+    host.handlers.get('dot:workspace:configure')!(setupEvent(), {
+      DATABASE_PATH: 'other.sqlite',
+    }),
+  ).resolves.toBeUndefined();
+  expect(unload.preventDefault).toHaveBeenCalledOnce();
+  unload.preventDefault.mockClear();
+  main.webContents.emit('will-prevent-unload', unload);
+  expect(unload.preventDefault).not.toHaveBeenCalled();
 });

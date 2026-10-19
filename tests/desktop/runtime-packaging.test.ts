@@ -1,6 +1,8 @@
 import { afterEach, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile, cp } from 'node:fs/promises';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { localVoiceConfig } from '../../src/server/local-voice/service.js';
@@ -90,3 +92,60 @@ it('stages production dependency closure with Python sources and without develop
       readFile(path.join(root, 'out/node_modules/engine', name)),
     ).rejects.toThrow();
 });
+
+it.skipIf(process.platform !== 'darwin')(
+  'runs the shipped integration setup with a native PATH and preserves an explicit uv override',
+  async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'dots-setup-'));
+    cleanups.push(() => rm(root, { recursive: true, force: true }));
+    const support = path.join(root, 'support');
+    const workspace = path.join(root, 'workspace');
+    const bin = path.join(root, '.local/bin');
+    const python = path.join(root, 'node_modules/myown-llm-integrator/python');
+    for (const directory of [support, workspace, bin, python])
+      await mkdir(directory, { recursive: true });
+    for (const name of [
+      'setup-desktop-integrations.mjs',
+      'native-executable-environment.mjs',
+    ])
+      await cp(
+        path.join(process.cwd(), 'scripts', name),
+        path.join(support, name),
+      );
+    await writeFile(path.join(python, 'pyproject.toml'), '[project]');
+    for (const name of ['uv', 'explicit-uv'])
+      await writeFile(
+        path.join(bin, name),
+        `#!${process.execPath}\nrequire('node:fs').writeFileSync(process.env.SETUP_LOG,'${name}');`,
+        { mode: 0o755 },
+      );
+    const log = path.join(root, 'setup-log');
+    const execute = () =>
+      promisify(execFile)(
+        process.execPath,
+        [path.join(support, 'setup-desktop-integrations.mjs'), workspace],
+        {
+          env: {
+            HOME: root,
+            PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+            SETUP_LOG: log,
+          },
+        },
+      );
+    await writeFile(
+      path.join(workspace, '.env'),
+      'MYOWN_LLM_PYTHON=/kept/python\n',
+    );
+    await execute();
+    expect(await readFile(log, 'utf8')).toBe('uv');
+    await writeFile(
+      path.join(workspace, '.env'),
+      `MYOWN_LLM_PYTHON=/kept/python\nUV_BIN=${path.join(bin, 'explicit-uv')}\n`,
+    );
+    await execute();
+    expect(await readFile(log, 'utf8')).toBe('explicit-uv');
+    expect(await readFile(path.join(workspace, '.env'), 'utf8')).toContain(
+      'MYOWN_LLM_PYTHON=/kept/python',
+    );
+  },
+);

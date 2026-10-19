@@ -10,6 +10,30 @@ export function surfaceFromSearch(search: string): Surface {
     ? 'companion'
     : 'workspace';
 }
+/** Only an explicit host configuration transition resets saved identities. */
+export function resetNavigationForConfiguration() {
+  const params = new URLSearchParams(location.search);
+  const resetId = params.get('resetNavigation');
+  if (!resetId) return false;
+  try {
+    if (localStorage.getItem('workspace-configuration-reset') !== resetId) {
+      // Include dormant surfaces and legacy selections before any renderer can restore them.
+      for (const surface of ['workspace', 'companion', 'desktop'])
+        for (const key of ['dot', 'thread', 'navigation'])
+          localStorage.setItem(`${surface}-${key}`, '');
+      localStorage.setItem('workspace-configuration-reset', resetId);
+    }
+  } catch {
+    /* A fresh document also starts empty when storage is unavailable. */
+  }
+  params.delete('resetNavigation');
+  history.replaceState(
+    null,
+    '',
+    `${location.pathname}${params.size ? `?${params}` : ''}`,
+  );
+  return true;
+}
 export function restoreSelection(
   surface: Surface,
   get: (key: string) => string | null | undefined,

@@ -3,6 +3,7 @@ import { MemoryActivity } from './MemoryActivity';
 import {
   allowNavigation,
   restoreSelection,
+  resetNavigationForConfiguration,
   savedNavigation,
   type Surface,
   type WorkspaceView,
@@ -82,9 +83,14 @@ export function App({
   const surface =
     explicitSurface ?? (legacyDesktop ? 'companion' : 'workspace');
   const desktop = surface === 'companion';
+  const [configurationReset] = useState(() =>
+    resetNavigationForConfiguration(),
+  );
   const [selection] = useState(() => {
     try {
-      return restoreSelection(surface, (key) => localStorage.getItem(key));
+      return restoreSelection(surface, (key) =>
+        configurationReset ? '' : localStorage.getItem(key),
+      );
     } catch {
       return { dotId: '', threadId: undefined };
     }
@@ -195,14 +201,34 @@ export function App({
       /* Selection can remain in memory. */
     }
   }, [surface, selectedDot, selectedThread]);
-  const [savedNavigationState] = useState(() => savedNavigation(surface));
+  const [savedNavigationState] = useState(() =>
+    configurationReset
+      ? {
+          view: 'chat' as const,
+          spaceId: '',
+          pageId: undefined,
+          collapsed: false,
+        }
+      : savedNavigation(surface),
+  );
   const [view, rawSetView] = useState<WorkspaceView>(savedNavigationState.view);
   const dirtyPage = useRef(false);
   const acceptedHash = useRef(location.hash);
-  const [spaceId, setSpaceId] = useState(savedNavigationState.spaceId);
-  const [pageId, setPageId] = useState<string | undefined>(
+  const [storedSpaceId, setSpaceId] = useState(savedNavigationState.spaceId);
+  const [storedPageId, setPageId] = useState<string | undefined>(
     savedNavigationState.pageId,
   );
+  const spaceId = workspace
+    ? workspace.spaces.find((space) => space.id === storedSpaceId)?.id ||
+      workspace.spaces[0]?.id ||
+      ''
+    : storedSpaceId;
+  const pageId = spaceId === storedSpaceId ? storedPageId : undefined;
+  if (workspace && spaceId !== storedSpaceId) {
+    setSpaceId(spaceId);
+    setPageId(undefined);
+    dirtyPage.current = false;
+  }
   const setDirtyPage = useCallback((value: boolean) => {
     dirtyPage.current = value;
   }, []);
@@ -260,6 +286,7 @@ export function App({
   const [quickOpen, setQuickOpen] = useState(false);
   const [backendStatus, setBackendStatus] = useState<WorkspaceStatus>();
   const pendingNavigation = useRef<WorkspaceDestination | undefined>(undefined);
+  const pendingCommands = useRef<WorkspaceCommand[]>([]);
   const handlers = useRef<{
     navigate: (destination: WorkspaceDestination) => void;
     command: (command: WorkspaceCommand) => void;
@@ -326,8 +353,11 @@ export function App({
     };
   }, []);
   useEffect(() => {
-    if (workspace && pendingNavigation.current)
+    if (!workspace) return;
+    if (pendingNavigation.current)
       handlers.current.navigate(pendingNavigation.current);
+    for (const command of pendingCommands.current.splice(0))
+      handlers.current.command(command);
   }, [workspace]);
 
   const [notices, setNotices] = useState<Notices>({
@@ -546,6 +576,10 @@ export function App({
       navigateDestination(destination);
     },
     command: (command) => {
+      if (!workspace) {
+        pendingCommands.current.push(command);
+        return;
+      }
       if (command === 'quick-navigation') setQuickOpen(true);
       else if (command === 'toggle-sidebar') setNavCollapsed((value) => !value);
       else if (command === 'settings') {
@@ -827,29 +861,30 @@ export function App({
             </button>
           </div>
         </header>
-        {backendStatus && backendStatus.phase !== 'ready' && (
-          <div className="backend-notice" role="status">
-            <span>{backendStatus.message}</span>
-            <button
-              onClick={() =>
-                void window.dotWorkspace
-                  ?.retry()
-                  .catch((e) => setError(e.message))
-              }
-            >
-              Retry connection
-            </button>
-            <button
-              onClick={() =>
-                void window.dotWorkspace
-                  ?.openBackendSettings()
-                  .catch((e) => setError(e.message))
-              }
-            >
-              Workspace setup
-            </button>
-          </div>
-        )}
+        {backendStatus &&
+          (backendStatus.phase !== 'ready' || backendStatus.warning) && (
+            <div className="backend-notice" role="status">
+              <span>{backendStatus.message}</span>
+              <button
+                onClick={() =>
+                  void window.dotWorkspace
+                    ?.retry()
+                    .catch((e) => setError(e.message))
+                }
+              >
+                Retry connection
+              </button>
+              <button
+                onClick={() =>
+                  void window.dotWorkspace
+                    ?.openBackendSettings()
+                    .catch((e) => setError(e.message))
+                }
+              >
+                Workspace setup
+              </button>
+            </div>
+          )}
         {error && (
           <div className="error-banner" role="alert">
             <span>{error}</span>
