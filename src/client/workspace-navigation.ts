@@ -16,12 +16,12 @@ export function restoreSelection(
 ) {
   return {
     dotId:
-      get(`${surface}-dot`) ||
-      (surface === 'companion' ? get('desktop-dot') : '') ||
+      get(`${surface}-dot`) ??
+      (surface === 'companion' ? get('desktop-dot') : '') ??
       '',
     threadId:
-      get(`${surface}-thread`) ||
-      (surface === 'companion' ? get('desktop-thread') : '') ||
+      (get(`${surface}-thread`) ??
+        (surface === 'companion' ? get('desktop-thread') : '')) ||
       undefined,
   };
 }

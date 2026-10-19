@@ -47,6 +47,28 @@ describe('desktop navigation', () => {
       threadId: 'legacy',
     });
   });
+  it('migrates missing companion keys without resurrecting cleared selections', () => {
+    const storage = new Map([
+      ['desktop-dot', 'legacy-dot'],
+      ['desktop-thread', 'legacy-thread'],
+    ]);
+    const get = (key: string) => storage.get(key) ?? null;
+    expect(restoreSelection('companion', get)).toEqual({
+      dotId: 'legacy-dot',
+      threadId: 'legacy-thread',
+    });
+    storage.set('companion-dot', 'legacy-dot');
+    storage.set('companion-thread', '');
+    expect(restoreSelection('companion', get)).toEqual({
+      dotId: 'legacy-dot',
+      threadId: undefined,
+    });
+    storage.set('companion-dot', '');
+    expect(restoreSelection('companion', get)).toEqual({
+      dotId: '',
+      threadId: undefined,
+    });
+  });
   it('selects the explicit native surface and retains compact compatibility', () => {
     expect(surfaceFromSearch('?surface=workspace')).toBe('workspace');
     expect(surfaceFromSearch('?surface=companion')).toBe('companion');
