@@ -61,14 +61,11 @@ function scope(table: PostgresRecordTable): string {
   return `thread_id IN (${selectedThreads})`;
 }
 
-export async function capturePostgresRecords(
+export async function validatePostgresGraph(
   client: PoolClient,
-  directory: string,
   ownerId: string,
   dotIds: string[],
-  signal: AbortSignal,
-): Promise<ArchiveEntry[]> {
-  const entries: ArchiveEntry[] = [];
+): Promise<void> {
   const installed = await client.query(
     'SELECT version FROM memory_schema_version',
   );
@@ -101,6 +98,16 @@ export async function capturePostgresRecords(
   );
   if (evidence.rowCount || processed.rowCount)
     throw new Error('Ambiguous cross-workspace memory evidence reference');
+}
+export async function capturePostgresRecords(
+  client: PoolClient,
+  directory: string,
+  ownerId: string,
+  dotIds: string[],
+  signal: AbortSignal,
+): Promise<ArchiveEntry[]> {
+  const entries: ArchiveEntry[] = [];
+  await validatePostgresGraph(client, ownerId, dotIds);
   for (const table of Object.keys(POSTGRES_RECORDS) as PostgresRecordTable[]) {
     signal.throwIfAborted();
     const definition = POSTGRES_RECORDS[table];

@@ -6,6 +6,11 @@ import path from 'node:path';
 import { parseEnv } from 'node:util';
 import { nativeExecutableEnvironment } from '../../../scripts/native-executable-environment.mjs';
 import { workspaceIdentity } from '../../server/workspace-identity.js';
+import { RestoreService } from '../../server/storage/restore.js';
+import {
+  atomicStorageWrite,
+  withRestoreLock,
+} from '../../server/storage/restore-journal.js';
 import type { WorkspaceStatus } from '../shared/workspace-contract.js';
 
 export interface WorkspaceBackendOptions {
@@ -185,6 +190,10 @@ export class WorkspaceBackend {
     for (const listener of this.listeners) listener(this.status);
   }
   private async load() {
+    await new RestoreService({
+      profile: this.options.data,
+      stopWorkspace: () => this.stop(),
+    }).recover();
     const inherited = this.options.environment ?? process.env;
     let selected: string | undefined;
     try {
@@ -246,10 +255,11 @@ export class WorkspaceBackend {
       throw new Error('Choose an existing workspace folder.');
     await this.stop();
     await mkdir(this.options.data, { recursive: true });
-    await writeFile(
-      path.join(this.options.data, 'workspace-location.json'),
-      JSON.stringify({ directory }),
-      { mode: 0o600 },
+    await withRestoreLock(this.options.data, () =>
+      atomicStorageWrite(
+        path.join(this.options.data, 'workspace-location.json'),
+        JSON.stringify({ directory }),
+      ),
     );
     this.config = undefined;
     await this.load();

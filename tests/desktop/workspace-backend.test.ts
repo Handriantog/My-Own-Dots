@@ -5,6 +5,8 @@ import path from 'node:path';
 import { createServer } from 'node:net';
 import { createServer as httpServer } from 'node:http';
 import { WorkspaceBackend } from '../../src/desktop/host/workspace-backend.js';
+import { randomUUID } from 'node:crypto';
+import { saveJournal } from '../../src/server/storage/restore-journal.js';
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -51,6 +53,39 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
   return { backend, root, bundle, workspace, port };
 }
 describe('workspace backend ownership', () => {
+  it('reconciles an interrupted restore before opening the selected workspace', async () => {
+    const { backend, root, workspace, port } = await fixture();
+    const data = path.join(root, 'data');
+    const interrupted = path.join(root, 'incomplete-restore');
+    await mkdir(data);
+    await mkdir(interrupted);
+    await writeFile(
+      path.join(interrupted, '.env'),
+      `PORT=${port}\nCONVERSATION_BACKEND=intelligence\n`,
+    );
+    const operationId = randomUUID();
+    await writeFile(path.join(interrupted, '.restore-owner'), operationId);
+    await writeFile(
+      path.join(data, 'workspace-location.json'),
+      JSON.stringify({ directory: interrupted }),
+    );
+    await saveJournal(data, {
+      version: 1,
+      operationId,
+      phase: 'switching',
+      createdAt: Date.now(),
+      directory: interrupted,
+      previousSelection: JSON.stringify({ directory: workspace }),
+      files: [],
+    });
+    await backend.start();
+    expect(backend.configuration?.workspace).toBe(workspace);
+    expect(
+      JSON.parse(
+        await readFile(path.join(data, 'workspace-location.json'), 'utf8'),
+      ).directory,
+    ).toBe(workspace);
+  });
   it('starts the bundled backend in its configured workspace and stops only its child', async () => {
     const { backend, workspace, port } = await fixture();
     const stages: (string | undefined)[] = [];

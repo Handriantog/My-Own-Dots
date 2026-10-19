@@ -1,62 +1,55 @@
 # Storage implementation verification
 
-## Checkpoint: 2026-10-20
+## Progress: 2026-10-20
 
-This is a partial implementation checkpoint, not a working backup/restore release. The approved [design](storage-portability-design.md) and [stage-one plan](storage-plan-01-backup-recovery.md) remain the acceptance criteria.
+The encrypted archive codec, runtime writer coordination, legacy capture API, and staged restore service are implemented. Desktop backup/restore controls and automatic scheduling are still being connected. This is not a release-ready backup feature or a Docker-free storage migration. The approved [design](storage-portability-design.md) and [stage-one plan](storage-plan-01-backup-recovery.md) remain the acceptance criteria.
 
-Implemented and unit tested in an isolated managed worktree:
+Core conversations and memory evidence still use PostgreSQL. No production database, Docker volume, or selected user workspace has been migrated or restored.
 
-- Version-one archive manifest parsing, identity/coverage validation, and hard size/count limits.
-- Portable archive path validation, including traversal, reserved Windows names, case/Unicode aliases, and file/directory collisions.
-- Maintenance admission primitive: active writes drain before capture; automatic snapshots yield to foreground work but retain exclusion until reader cleanup; nested writes drain; closed admission stays closed.
-- Protected backup-password storage policy using an injected Electron safeStorage boundary. Linux `basic_text`, `unknown`, and unreviewed backends cannot remember passwords. Native keyring behavior is not yet verified.
-- Persistent daily scheduling policy and UTC retention. Keep the newest successful archive for each of seven daily and four weekly buckets; overlapping buckets share an archive. Unmanaged, unverified, and invalid-metadata records are retained. Pruning starts only after verified success metadata is saved.
+## Implemented behavior
 
-These helpers are not yet connected to runtime writers or desktop controls. Existing workspace databases, Docker volumes, workspace selections, and chat/voice behavior are unchanged. No migration or user-data recovery has been performed.
+- Authenticated age-encrypted streaming archives with bounded manifests, paths, sizes, and decompression; exact hashes; complete authentication before success; exclusive private staging and failure cleanup. An independent upstream age fixture checks interoperability.
+- Admission covers local streamed turns and final receipts, scheduled work, local and remote voice lifetimes, detached memory jobs, setup telemetry, routes, and page SDK operations that outlive response timeouts. Automatic capture cancellation drains readers before admitting new foreground work, including blocked PostgreSQL reads.
+- Owner-token snapshot operations capture SQLite with its online backup API and scoped PostgreSQL records under a repeatable-read transaction. Unsupported/remote storage and ambiguous cross-workspace references fail. Computer files and browser profiles are explicitly excluded.
+- Restore validates SQLite schema/integrity and PostgreSQL record schemas/references into an exclusively created directory and newly created database. Archived SQL and environment configuration are never executed. File and database seals are checked again before activation; previews expire after 15 minutes.
+- Restore pauses schedules and learning, cancels queued/running maintenance jobs, interrupts active operations, and requires fresh external access. Original permission and operation records remain in inert recovery audit data, including a core SQLite audit table carried by subsequent backups.
+- Atomic workspace selection and a durable restore journal retain the old workspace. Desktop startup reconciles interrupted switches before opening stores. Replacement requires a host-verified pre-restore backup.
+- OS-protected password and daily/weekly retention policies are implemented as isolated components. Native keyring integration, controls, worker execution, and live scheduling remain pending.
 
 ## Verification evidence
 
-Environment: macOS, Node 24.20.0, isolated worktree based on `20d3285`.
+Environment: macOS, Node 24.20.0, isolated worktree based on `20d3285`. PostgreSQL integration tests use only disposable `dots-storage-backup-test-9a43` on port 55439; the production PostgreSQL service on port 5434 is not used.
 
-| Check                                                        | Result                                           |
-| ------------------------------------------------------------ | ------------------------------------------------ |
-| New manifest/path/gate tests                                 | 42 passed                                        |
-| New password-policy/scheduler tests                          | 20 passed                                        |
-| `npm run typecheck`                                          | Passed                                           |
-| `npm run lint`                                               | Passed                                           |
-| `npm run check-format`                                       | Passed                                           |
-| `npm run build`                                              | Passed; existing large-bundle warning            |
-| Full Vitest suite with installed Python interpreter selected | 1,196 passed; 20 skipped; 0 failed               |
-| Dedicated PostgreSQL integration/recovery                    | Not run; skipped suites are not passing evidence |
-| Native Windows/Linux, keyring, voice/performance acceptance  | Not run                                          |
+| Check                                                             | Result                                                                                                                                                                  |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full Vitest suite after capture and restore integration           | 1,277 passed; one optional skipped; no failures                                                                                                                         |
+| Real PostgreSQL capture                                           | WAL, ownership, reference validation, blocked-read cancellation, config change, disk-write failure and source usability tested                                          |
+| Restore crash recovery                                            | Child process killed at staging, verified, switching and active journal boundaries; original or verified new selection retained                                         |
+| Restore failure handling                                          | Missing references, unknown SQLite trigger, changed target files/database, expired preview, missing database-creation permission, and final journal disk failure tested |
+| Typecheck, lint, formatting                                       | Passed                                                                                                                                                                  |
+| Production desktop build                                          | Passed on macOS; existing large-renderer-chunk warning                                                                                                                  |
+| Native Windows/Linux, real OS keyrings and chat/voice performance | Not yet verified                                                                                                                                                        |
 
-The first full suite attempt had one failure: `dream-analysis.test.ts`, “uses the real npm/Python protocol for a bounded no-op without account or network”, timed out while the default `uv` launcher resolved the copied environment. Selecting the already-installed interpreter through the supported runtime option passes that test and the full suite:
+The suite uses the installed Python interpreter for the real npm/Python protocol fixture, avoiding a network-dependent `uv` environment resolution:
 
 ```sh
+LOCAL_TEST_DATABASE_URL=postgres://postgres:disposable-test@127.0.0.1:55439/dots_storage_test \
 MYOWN_LLM_PYTHON="$PWD/node_modules/myown-llm-integrator/python/.venv/bin/python" npm test
 ```
 
-No test timeout was relaxed, and the protocol fixture still executes the real Python bridge.
+No test timeout was relaxed. The database URL above is disposable test infrastructure only.
 
-An independent read-only checkpoint review found two Important concurrency defects: synchronous cancellation cleanup could lose a writer wakeup, and concurrent scheduler initialization could overwrite recorded success with stale metadata. Both were reproduced in failing regression tests and fixed. The final 64 focused tests and full suite above include those fixes. No Critical issues or deferred Minor findings were reported. The full stage still requires review after runtime integration.
+## Dependencies and review
 
-## Blocking dependency and remaining work
+The owner installed pinned `age-encryption@0.3.1` and `tar-stream@3.2.2`. Their audit update introduced mixed CopilotKit versions; the owner subsequently aligned core, react-core and runtime to 1.75.0. Other compatible audit updates were retained. The execution shell cannot reach npm's audit endpoint, so there is no clean-security-audit claim.
 
-The execution environment cannot resolve `registry.npmjs.org` or `github.com` (`ENOTFOUND` / no DNS configuration). Neither `age-encryption@0.3.1` nor `tar-stream@3.2.2` is available in its npm cache. No replacement cryptography or unverified archive implementation was introduced, and dependencies/lockfile have not been changed.
+Independent reviews of the foundations and runtime integration found writer wakeup, scheduler initialization, page timeout lifetime, archive cancellation and telemetry shutdown issues. Regression tests reproduced and resolved them. A full stage review remains required after native integration.
 
-After package access is restored:
+## Remaining release gates
 
-1. Verify/install the pinned dependencies, restore the saved failing archive tests from this plan's execution scratch directory, and implement/test encrypted streaming archives and interoperability.
-2. Integrate the maintenance gate across every writer, including final tool/voice receipts, memory jobs, telemetry, and ordinary routes. Unit tests of the primitive alone do not prove whole-workspace exclusion.
-3. Capture and restore disposable SQLite/PostgreSQL workspaces, including crash recovery and no-action-replay checks.
-4. Wire trusted native controls, worker execution, secure keys, destination checks, and automatic scheduling; verify actual recovery with source stores disconnected.
-5. Continue the approved unified SQLite migration, Dot transfer, portable location, performance, and native-platform stages. None is complete at this checkpoint.
+1. Native backup/restore controls, worker isolation, trusted IPC, destination checks, protected keys and automatic daily backups with retention.
+2. Recovery acceptance with original databases disconnected; native UI and OS credential-store checks.
+3. Unified SQLite storage/migration, Dot export/import, portable workspace placement, and matched typed/voice performance measurements.
+4. macOS, Windows and Linux package/runtime acceptance. A macOS build does not establish support on another OS.
 
-## Execution decisions
-
-- Work on dependency-free portions while package access is blocked. This changes task order but does not expose incomplete backup controls or alter active storage. The cost is a checkpoint with tested helpers but no usable backup feature yet.
-- The snapshot capture interface will need an optional origin (`manual` by default), so scheduled snapshots can use automatic preemption. This is a planned internal signature adjustment; its callers must be checked during capture implementation.
-
-- Keep all unimplemented codec, writer-coverage, snapshot ownership, restore, and native-control requirements as release gates. Enabling controls before these checks would risk inconsistent backups; this checkpoint enables none.
-- Require a workspace-specific scheduler metadata path and enforce destination/secure-key eligibility in the future native controller. A shared path could incorrectly suppress another workspace's backup.
-- Retain native keyring, filesystem, and chat/voice performance checks as unverified acceptance work. Policy tests are insufficient evidence to release another OS or claim latency results.
+Archive publication currently uses an exclusive same-filesystem hard link to avoid overwriting an existing destination. Filesystems without hard-link support fail safely; this portability limitation must be resolved before release. Core-only coverage excludes optional computer volumes and provider/OS credentials.
