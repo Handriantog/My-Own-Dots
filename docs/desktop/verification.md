@@ -2,6 +2,14 @@
 
 Machine: Apple M3 Max, 14 CPU cores, 36 GiB RAM, macOS 26.6.2 (25G83), arm64. Runtime: Electron 44.8.0, PixiJS 8.22.0. Native helper compiled with the installed Swift toolchain, deployment target macOS 14.
 
+## Minimal startup refinement — October 19, 2026
+
+At the owner's request, `af709dd` removes the startup headlines, slogans, descriptions, shortcut footer, visible branding and stage checklist. Normal loading now shows the animated mascot with one 11px status line and a thin progress animation. Setup controls remain hidden until a longer wait or recovery state; warnings and errors retain their actionable details. The separate configuration window keeps its fields and uses a smaller heading. The initial HTML already has the minimal presentation, preventing a flash of the old copy before the script runs.
+
+The two focused suites passed **37 tests** with one worker. Typecheck, targeted lint, formatting, whitespace and the full desktop build passed. CUA inspected the compiled native preview at 1280×840 and confirmed only the mascot, one status line and progress indicator during normal loading, followed by recovery controls on a longer wait and an actionable error state. No new blur/filter effects or startup delay were introduced.
+
+The macOS arm64 package passed the signing helper's strict deep verification and ZIP integrity. After a graceful quit, the app and ZIP at the standard `release/` paths were updated. CUA observed the actual packaged minimal startup screen and its automatic transition to the existing workspace with **Workspace connected**. The app remains running; the temporary preview profile, previous generated bundle and package staging directory were removed.
+
 ## Dot startup screen — October 19, 2026
 
 Implementation `0c3b83d` adds the animated blue plush mascot, orbiting lights, glow, greeting interaction, actual backend stages, longer-wait recovery controls and an expanded setup presentation. It adds no minimum loading duration or simulated percentage. The ready workspace opens as soon as the host finishes connecting. Reduced-motion CSS disables animation and parallax; hidden documents pause animation.
