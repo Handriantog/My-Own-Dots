@@ -422,6 +422,7 @@ export class WorkspaceBackend {
           DOTS_DESKTOP_API_ONLY: '1',
           DOTS_RUNTIME_ROOT: path.resolve(this.options.bundle),
           DOTS_WORKSPACE_ID: workspaceId,
+          DOTS_WORKSPACE_ENV: this.config!.envFile,
         },
         stdio: 'ignore',
       },

@@ -1,3 +1,7 @@
+import {
+  snapshotRoutes,
+  type SnapshotOperations,
+} from './storage/snapshot-routes.js';
 import type { MaintenanceGate } from './storage/maintenance.js';
 import { memoryRoutes } from './memory-routes.js';
 import { computerRoutes } from './computer-routes.js';
@@ -25,6 +29,7 @@ export interface AppOptions {
   platform?: Platform;
   localVoice?: LocalVoiceService;
   maintenance?: MaintenanceGate;
+  snapshots?: SnapshotOperations;
 }
 export function createApp({
   store,
@@ -35,6 +40,7 @@ export function createApp({
   platform,
   localVoice,
   maintenance = platform?.maintenance,
+  snapshots,
 }: AppOptions) {
   const app = new Hono();
   app.use(
@@ -121,6 +127,7 @@ export function createApp({
     if (!maintenance || independent) return next();
     await maintenance.runWrite(c.req.raw.signal, next, { background: read });
   });
+  if (snapshots && ownerToken) app.route('/api', snapshotRoutes(snapshots));
   if (platform) app.route('/api', computerRoutes(platform.computers));
   app.route('/api', localVoiceRoutes(localVoice));
   if (platform?.workspace?.folders)

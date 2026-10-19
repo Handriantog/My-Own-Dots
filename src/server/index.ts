@@ -1,4 +1,8 @@
 import './local-defaults.js';
+import { existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { LegacySnapshotSource } from './storage/legacy-snapshot.js';
+import { SnapshotOperations } from './storage/snapshot-routes.js';
 import {
   claimWorkspaceDatabase,
   workspaceIdentity,
@@ -79,6 +83,25 @@ const config: PlatformConfig = {
   ownerToken,
 };
 const platform = new Platform(store, workspace, config);
+const configurationPath = resolve(process.env.DOTS_WORKSPACE_ENV || '.env');
+const snapshots =
+  ownerToken && config.conversationBackend === 'local'
+    ? new SnapshotOperations(
+        new LegacySnapshotSource({
+          sqlitePath: database,
+          postgresUrl: config.localDatabaseUrl,
+          ownerId: workspace.ownerId,
+          workspaceId,
+          gate: platform.maintenance,
+          owned: true,
+          conversationBackend: config.conversationBackend,
+          configurationPath: existsSync(configurationPath)
+            ? configurationPath
+            : undefined,
+        }),
+        join(dirname(resolve(database)), '.storage-snapshots'),
+      )
+    : undefined;
 const localVoice = new LocalVoiceService(
   platform,
   localVoiceConfig(process.env),
@@ -126,6 +149,7 @@ const app = createApp({
   origin: resolveAppOrigins(process.env.APP_ORIGIN, process.env.NODE_ENV),
   platform,
   localVoice,
+  snapshots,
 });
 app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');
@@ -141,6 +165,7 @@ app.get('/api/desktop/identity', (c) =>
     service: 'my-own-dots',
     protocol: 1,
     workspaceId,
+    capabilities: snapshots ? ['workspace-snapshot-v1'] : [],
     setup: platform.setup(),
   }),
 );
@@ -163,6 +188,7 @@ const shutdown = createShutdown({
     runner.stop();
   },
   stopPlatform: async () => {
+    await snapshots?.close();
     await localVoice.close();
     await platform.stop();
   },
