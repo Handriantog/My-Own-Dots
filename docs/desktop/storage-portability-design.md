@@ -2,13 +2,13 @@
 
 Date: 2026-10-19
 
-Design for review. Core Dot data will live in an app-managed workspace, survive Docker cleanup, and support verified workspace recovery and individual Dot transfer. Typed and voice chat must retain their current persistence guarantees and pass measured latency checks before the storage migration becomes the default.
+Approved design, 2026-10-19. Core Dot data will live in an app-managed workspace, survive Docker cleanup, and support verified workspace recovery and individual Dot transfer. Typed and voice chat must retain their current persistence guarantees and pass measured latency checks before the storage migration becomes the default.
 
 ## Requirements and scope
 
 The owner approved consolidating core storage in SQLite, automatic workspace backups, and Dot export/import. The owner additionally requires macOS, Windows, and Linux support, asks for workspace placement alongside the installation, and wants to preserve chat and voice performance.
 
-The proposed location design supports ordinary OS installations and a portable folder containing the application and workspace. Portable distributions create their workspace beside the application; ordinary installer packages use the platform data directory. Existing workspace selections always take precedence over a new-install default. The portable folder satisfies installation-relative placement without writing inside executable bundles or protected system directories. The product location choice must be settled in the review before implementation.
+The approved location design supports ordinary OS installations and a portable folder containing the application and workspace. Portable distributions create their workspace beside the application; ordinary installer packages use the platform data directory. Existing workspace selections always take precedence over a new-install default. The portable folder satisfies installation-relative placement without writing inside executable bundles or protected system directories.
 
 Deliver the work in separately verifiable stages: protect the current stores, migrate core storage, add individual Dot transfer, and validate native distributions on each OS. Cross-platform storage compatibility is required throughout; a working macOS build does not establish Windows or Linux runtime support.
 
