@@ -28,6 +28,9 @@ export class MaintenanceGate {
   status(): { held: boolean; activeWrites: number } {
     return { held: this.snapshot?.held ?? false, activeWrites: this.writes };
   }
+  get closing(): boolean {
+    return this.closed.signal.aborted;
+  }
 
   async enterWrite(
     signal: AbortSignal,

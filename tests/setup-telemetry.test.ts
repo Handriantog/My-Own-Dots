@@ -305,3 +305,23 @@ it('defers telemetry delivery and capture until snapshot readers release', async
   await telemetry.stop();
   store.close();
 });
+
+it('retains telemetry for restart without reporting failures after admission closes', async () => {
+  const { MaintenanceGate } =
+    await import('../src/server/storage/maintenance.js');
+  const gate = new MaintenanceGate();
+  const store = new Store(':memory:');
+  const report = vi.fn();
+  const send = vi.fn(async () => {});
+  const telemetry = new SetupTelemetry(store, {}, send, report, gate);
+  await telemetry.capture({ kind: 'step_viewed', step: 'ready' });
+  gate.close();
+  await telemetry.stop();
+  expect(report).not.toHaveBeenCalled();
+  expect(send).not.toHaveBeenCalled();
+  const restarted = new SetupTelemetry(store, {}, send, report);
+  await restarted.flush();
+  expect(send).toHaveBeenCalledTimes(2);
+  expect(JSON.parse(store.setupTelemetryState()!).queue).toEqual([]);
+  store.close();
+});

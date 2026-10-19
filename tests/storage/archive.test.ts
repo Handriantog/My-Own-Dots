@@ -302,3 +302,36 @@ it('bounds hostile age headers before password derivation', async () => {
     await absent(f.stagingDirectory);
   }
 });
+
+it('cancels during final flush without publishing the archive', async () => {
+  const { open, unlink } = await import('node:fs/promises');
+  const { vi } = await import('vitest');
+  const f = await fixture({ one: 'hello' });
+  const controller = new AbortController();
+  const probePath = join(f.root, 'probe');
+  const probe = await open(probePath, 'wx');
+  const prototype = Object.getPrototypeOf(probe) as typeof probe;
+  const original = prototype.sync;
+  const sync = vi.spyOn(prototype, 'sync').mockImplementation(async function (
+    this: typeof probe,
+  ) {
+    await original.call(this);
+    controller.abort(new Error('Cancelled during flush'));
+  });
+  await probe.close();
+  await unlink(probePath);
+  try {
+    await expect(
+      writeArchive({
+        ...f,
+        manifest: { ...f.manifest, kind: 'dot-export' },
+        passphrase: undefined,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow(/cancelled/i);
+    await absent(f.destination);
+    expect(await readdir(f.root)).toEqual(['source']);
+  } finally {
+    sync.mockRestore();
+  }
+});

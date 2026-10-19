@@ -59,10 +59,14 @@ export class Platform {
       () => store.settings().paused,
     );
     this.connections = new ConnectionService(workspace.connections);
-    this.pages = new PageService(workspace, () => {
-      this.requireReady();
-      return this.localConversations ?? this.intelligence!;
-    });
+    this.pages = new PageService(
+      workspace,
+      () => {
+        this.requireReady();
+        return this.localConversations ?? this.intelligence!;
+      },
+      this.maintenance,
+    );
     if (config.conversationBackend === 'local') {
       if (!config.localDatabaseUrl) return;
       this.localConversations = new PostgresConversations(

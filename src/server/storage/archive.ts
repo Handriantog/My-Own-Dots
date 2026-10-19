@@ -175,6 +175,7 @@ export async function writeArchive(
     }
     // An exclusive hard-link publishes the complete file atomically without the
     // overwrite behavior of rename. Both paths are on the same filesystem.
+    signal.throwIfAborted();
     await link(output, options.destination);
   } finally {
     controller.abort(new Error('Archive operation finished'));

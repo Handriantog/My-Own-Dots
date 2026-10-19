@@ -187,7 +187,9 @@ export class SetupTelemetry {
         },
         { background: true },
       )
-      .catch(() => this.report('storage_failed'))
+      .catch(() => {
+        if (!this.maintenance?.closing) this.report('storage_failed');
+      })
       .finally(() => {
         this.captures.delete(pending);
       });
@@ -230,6 +232,12 @@ export class SetupTelemetry {
   async stop() {
     clearInterval(this.timer);
     this.timer = undefined;
+    if (this.maintenance?.closing) {
+      // Shutdown admits no new writes. Retain lastStep and queued events; the
+      // next startup records abandonment before replaying the durable queue.
+      await Promise.all([...this.captures, this.pending]);
+      return;
+    }
     if (this.state?.lastStep)
       await this.capture({
         kind: 'setup_abandoned',
@@ -239,7 +247,9 @@ export class SetupTelemetry {
   }
   flush(): Promise<void> {
     return (this.pending ??= this.flushCaptured()
-      .catch(() => this.report('delivery_failed'))
+      .catch(() => {
+        if (!this.maintenance?.closing) this.report('delivery_failed');
+      })
       .finally(() => {
         this.pending = undefined;
       }));

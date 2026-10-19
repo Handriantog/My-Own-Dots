@@ -178,3 +178,39 @@ it('grants multiple Spaces without changing thread identity and enforces revocat
   );
   ws.close();
 });
+
+it('holds database admission after a page creation response times out', async () => {
+  const { MaintenanceGate } =
+    await import('../src/server/storage/maintenance.js');
+  const gate = new MaintenanceGate();
+  const ws = new WorkspaceStore(':memory:', 'owner');
+  const dot = ws.dots()[0];
+  const page = ws.pages.create(dot.spaceId, { title: 'Slow storage' });
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const sdk = {
+    getOrCreateThread: () => pending,
+    getThreadMessages: async () => ({ messages: [] }),
+  };
+  const service = new PageService(ws, () => sdk, gate);
+  vi.useFakeTimers();
+  try {
+    const request = gate.runWrite(new AbortController().signal, () =>
+      service.conversation(dot.spaceId, page.id, dot.id),
+    );
+    const result = expect(request).rejects.toThrow(/timed out/);
+    await vi.advanceTimersByTimeAsync(30001);
+    await result;
+    await expect(
+      gate.acquire({ origin: 'manual', signal: new AbortController().signal }),
+    ).rejects.toThrow(/busy/i);
+    finish();
+    await vi.waitFor(() => expect(gate.status().activeWrites).toBe(0));
+  } finally {
+    finish();
+    vi.useRealTimers();
+    ws.close();
+  }
+});

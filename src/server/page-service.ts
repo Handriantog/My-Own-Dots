@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { PageError } from './pages.js';
 import type { WorkspaceStore } from './workspace.js';
+import type { MaintenanceGate } from './storage/maintenance.js';
 export interface PageIntelligence {
   getOrCreateThread(input: {
     threadId: string;
@@ -42,7 +43,15 @@ export class PageService {
   constructor(
     private workspace: WorkspaceStore,
     private intelligence: () => PageIntelligence,
+    private maintenance?: MaintenanceGate,
   ) {}
+  private operation<T>(work: () => Promise<T>): Promise<T> {
+    // A response timeout does not cancel the database operation. Its admission
+    // must outlive that response until the actual SDK promise has settled.
+    return this.maintenance
+      ? this.maintenance.runWrite(new AbortController().signal, work)
+      : work();
+  }
   async conversation(spaceId: string, pageId: string, dotId: string) {
     const page = this.workspace.pages.get(spaceId, pageId);
     const dot = this.workspace.dot(dotId);
@@ -68,12 +77,14 @@ export class PageService {
       const threadId = this.workspace.pages.thread(pageId, dotId)!.threadId;
       try {
         await bounded(
-          sdk.getOrCreateThread({
-            threadId,
-            userId: this.workspace.ownerId,
-            agentId: dotId,
-            name: page.title,
-          }),
+          this.operation(() =>
+            sdk.getOrCreateThread({
+              threadId,
+              userId: this.workspace.ownerId,
+              agentId: dotId,
+              name: page.title,
+            }),
+          ),
         );
         if (!this.workspace.canAccessSpace(dotId, spaceId))
           throw new PageError('Space access has been revoked.');
@@ -102,10 +113,12 @@ export class PageService {
     const thread = this.workspace.requireThread(threadId);
     const dot = this.workspace.dot(thread.dotId)!;
     const history = await bounded(
-      this.intelligence().getThreadMessages({
-        threadId,
-        userId: this.workspace.ownerId,
-      }),
+      this.operation(() =>
+        this.intelligence().getThreadMessages({
+          threadId,
+          userId: this.workspace.ownerId,
+        }),
+      ),
     );
     const chunks: string[] = [];
     for (const message of history.messages) {
