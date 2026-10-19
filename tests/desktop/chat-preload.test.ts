@@ -159,3 +159,41 @@ it('retains windowless intent before subscribing and clears it on end and native
   host.ipc!.emit('dot:voice:stop', {}, 'shortcut');
   expect(bridge.isWindowless()).toBe(false);
 });
+
+it('queues native workspace handoffs and commands until React subscribes, without exposing transport credentials', async () => {
+  vi.stubGlobal('location', new URL('dots://workspace/?surface=workspace'));
+  await import('../../src/desktop/chat-preload.js');
+  const bridge = host.exposed.get(
+    'dotWorkspace',
+  ) as import('../../src/desktop/shared/workspace-contract.js').DesktopWorkspaceBridge;
+  expect(bridge).toBeDefined();
+  const destination = { dotId: 'dot-1', threadId: 'thread-1' };
+  host.ipc!.emit('dot:workspace:navigate', {}, destination);
+  host.ipc!.emit('dot:workspace:command', {}, 'quick-navigation');
+  const navigate = vi.fn();
+  const command = vi.fn();
+  const offNavigate = bridge.onNavigate(navigate);
+  const offCommand = bridge.onCommand(command);
+  expect(navigate).toHaveBeenCalledExactlyOnceWith(destination);
+  expect(command).toHaveBeenCalledExactlyOnceWith('quick-navigation');
+  offNavigate();
+  offCommand();
+  bridge.onNavigate(navigate);
+  bridge.onCommand(command);
+  expect(navigate).toHaveBeenCalledOnce();
+  expect(command).toHaveBeenCalledOnce();
+  expect(Object.keys(bridge).sort()).toEqual([
+    'chooseWorkspace',
+    'configure',
+    'onCommand',
+    'onNavigate',
+    'onStatus',
+    'openBackendSettings',
+    'openPreferences',
+    'openWorkspace',
+    'retry',
+    'status',
+  ]);
+  await bridge.openWorkspace(destination);
+  expect(host.invoke).toHaveBeenCalledWith('dot:workspace:open', destination);
+});

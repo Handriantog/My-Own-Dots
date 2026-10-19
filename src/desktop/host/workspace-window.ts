@@ -1,0 +1,428 @@
+import {
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  screen,
+  shell,
+  type IpcMainInvokeEvent,
+} from 'electron';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import type { WorkspaceBackend } from './workspace-backend.js';
+import type {
+  WorkspaceCommand,
+  WorkspaceDestination,
+  WorkspaceStatus,
+} from '../shared/workspace-contract.js';
+import {
+  isWorkspacePage,
+  workspaceRealtimeOrigin,
+  type WorkspaceProtocolConnection,
+} from './workspace-protocol.js';
+import { destination, destinationFromUrl } from './workspace-navigation.js';
+import { CompanionVoiceSession } from './voice-session.js';
+import { CompanionFolderPicker } from './folder-picker.js';
+const recovery = 'dots://app/recovery.html';
+/** Owns one persistent workspace window; handoff is an event so the editor can guard drafts. */
+export class WorkspaceWindow {
+  private window: BrowserWindow | null = null;
+  private opening?: Promise<void>;
+  private retrying?: Promise<void>;
+  private connecting?: Promise<void>;
+  private initializing = new Set<BrowserWindow>();
+  private setup: BrowserWindow | null = null;
+  private pendingDestination?: WorkspaceDestination;
+  private connection?: WorkspaceProtocolConnection;
+  private failure?: WorkspaceStatus;
+  private windows = new Set<BrowserWindow>();
+  private loaded = new Set<BrowserWindow>();
+  private voice: CompanionVoiceSession;
+  private folders: CompanionFolderPicker;
+  private unsubscribe: () => void;
+  private saving?: ReturnType<typeof setTimeout>;
+  private readonly context = (event: Electron.IpcMainEvent) => {
+    event.returnValue = this.trusted(event);
+  };
+  constructor(
+    private readonly bundle: string,
+    private readonly data: string,
+    private readonly backend: WorkspaceBackend,
+    private readonly preferences: () => void,
+  ) {
+    this.voice = new CompanionVoiceSession(
+      () => this.window,
+      () => 'dots://workspace/',
+      { active() {}, ready() {} },
+      'dot:workspace-voice',
+    );
+    this.folders = new CompanionFolderPicker(
+      () => this.window,
+      () => 'dots://workspace/',
+      'dot:workspace-folders',
+    );
+    ipcMain.on('dot:workspace:context', this.context);
+    const handle = (
+      name: string,
+      callback: (event: IpcMainInvokeEvent, value: unknown) => unknown,
+    ) =>
+      ipcMain.handle(`dot:workspace:${name}`, (event, value: unknown) => {
+        if (!this.trusted(event)) throw new Error('Invalid workspace sender');
+        return callback(event, value);
+      });
+    handle('open', (_event, value) => this.open(destination(value)));
+    handle('status', () => this.failure ?? this.backend.status);
+    handle('retry', () => this.retry());
+    handle('preferences', () => this.preferences());
+    handle('backend-settings', () => this.openBackendSettings());
+    handle('choose', async (event) => {
+      this.requireRecovery(event);
+      if (process.env.DOTS_WORKSPACE_DIR || process.env.DOTS_WORKSPACE_URL)
+        throw new Error(
+          'Your launcher supplies the workspace location. Change DOTS_WORKSPACE_DIR or DOTS_WORKSPACE_URL in the launcher, then reopen the app.',
+        );
+      const window = BrowserWindow.fromWebContents(event.sender)!;
+      if (!window.isVisible() || !window.isFocused())
+        throw new Error('Focus the workspace to choose a folder.');
+      const selected = await dialog.showOpenDialog(window, {
+        title: 'Choose an existing Dots workspace',
+        properties: ['openDirectory'],
+      });
+      if (selected.canceled || !selected.filePaths[0]) return false;
+      this.requireRecovery(event);
+      if (this.loaded.size) {
+        const confirm = await dialog.showMessageBox(window, {
+          type: 'warning',
+          message: 'Switch to another workspace?',
+          detail:
+            'Open conversations and unsaved page drafts in this app will close. Existing workspace data is kept.',
+          buttons: ['Cancel', 'Switch Workspace'],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        if (confirm.response !== 1) return false;
+      }
+      this.requireRecovery(event);
+      this.loaded.clear();
+      this.connection = undefined;
+      await this.backend.setWorkspaceDirectory(selected.filePaths[0]);
+      await this.retry();
+      return true;
+    });
+    handle('configure', async (event, value) => {
+      this.requireRecovery(event);
+      if (
+        !value ||
+        typeof value !== 'object' ||
+        Array.isArray(value) ||
+        Object.entries(value).some(
+          ([k, v]) => k.length > 80 || typeof v !== 'string' || v.length > 4096,
+        )
+      )
+        throw new Error('Invalid configuration');
+      if (this.connection?.owned) await this.backend.stop();
+      await this.backend.configure(value as Record<string, string>);
+    });
+    this.unsubscribe = backend.subscribe((status) => {
+      this.failure = undefined;
+      if (status.phase === 'error' || status.phase === 'stopped')
+        this.connection = undefined;
+      for (const window of this.windows)
+        if (!window.isDestroyed())
+          window.webContents.send('dot:workspace:status', status);
+    });
+  }
+  get activeConnection() {
+    return this.connection;
+  }
+  private trusted(event: Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>) {
+    return [...this.windows].some(
+      (w) =>
+        !w.isDestroyed() &&
+        event.sender === w.webContents &&
+        event.senderFrame === w.webContents.mainFrame &&
+        (isWorkspacePage(event.senderFrame.url) ||
+          event.senderFrame.url === recovery),
+    );
+  }
+  private requireRecovery(event: IpcMainInvokeEvent) {
+    if (event.senderFrame?.url !== recovery)
+      throw new Error('Configuration is available in workspace recovery.');
+  }
+  register(window: BrowserWindow, initializing = false): () => void {
+    if (initializing) this.initializing.add(window);
+    this.windows.add(window);
+    window.on('closed', () => {
+      this.windows.delete(window);
+      this.initializing.delete(window);
+      this.loaded.delete(window);
+    });
+    window.webContents.on('render-process-gone', () =>
+      this.loaded.delete(window),
+    );
+    window.webContents.on('did-finish-load', () => {
+      if (isWorkspacePage(window.webContents.getURL())) this.loaded.add(window);
+      else this.loaded.delete(window);
+    });
+    return () => {
+      this.initializing.delete(window);
+    };
+  }
+  ready(): Promise<void> {
+    return (this.connecting ??= this.establish().finally(() => {
+      this.connecting = undefined;
+    }));
+  }
+  private async establish() {
+    const connection = await this.backend.start();
+    if (
+      this.connection === connection ||
+      (this.connection?.url === connection.url &&
+        this.connection?.ownerToken === connection.ownerToken)
+    )
+      return;
+    const next: WorkspaceProtocolConnection = { ...connection };
+    this.connection = next;
+    next.connectOrigin = await workspaceRealtimeOrigin(connection);
+    if (this.connection !== next)
+      throw new Error('Workspace stopped while connecting.');
+  }
+  transportFailed() {
+    if (this.failure) return;
+    this.failure = {
+      phase: 'error',
+      message:
+        'Connection to the local workspace was interrupted. Retry to reconnect; your draft stays open.',
+    };
+    for (const window of this.windows)
+      if (!window.isDestroyed())
+        window.webContents.send('dot:workspace:status', this.failure);
+  }
+  retry(): Promise<void> {
+    return (this.retrying ??= this.reconnect().finally(() => {
+      this.retrying = undefined;
+    }));
+  }
+  private async reconnect() {
+    try {
+      if (this.failure) await this.backend.stop();
+      await this.ready();
+      for (const window of this.windows)
+        if (
+          window !== this.setup &&
+          !this.initializing.has(window) &&
+          !window.isDestroyed() &&
+          !this.loaded.has(window)
+        ) {
+          await window.loadURL(
+            `dots://workspace/?surface=${window === this.window ? 'workspace' : 'companion'}`,
+          );
+          if (window === this.window && this.pendingDestination) {
+            window.webContents.send(
+              'dot:workspace:navigate',
+              this.pendingDestination,
+            );
+            this.pendingDestination = undefined;
+          }
+        }
+    } catch {
+      /* Supervisor emits a safe actionable error to recovery and loaded views. */
+    }
+  }
+  async open(target?: WorkspaceDestination) {
+    if (this.opening) await this.opening;
+    if (!this.window || this.window.isDestroyed()) {
+      this.opening ??= this.create().finally(() => {
+        this.opening = undefined;
+      });
+      await this.opening;
+    }
+    const window = this.window!;
+    if (window.isMinimized()) window.restore();
+    window.show();
+    window.focus();
+    if (target && Object.keys(target).length) {
+      if (isWorkspacePage(window.webContents.getURL()))
+        window.webContents.send('dot:workspace:navigate', target);
+      else this.pendingDestination = target;
+    }
+  }
+  async command(command: WorkspaceCommand) {
+    await this.open();
+    this.window!.webContents.send('dot:workspace:command', command);
+  }
+  suspend() {
+    this.voice.stop('suspended');
+  }
+  async recover() {
+    await this.openBackendSettings();
+  }
+  async openBackendSettings() {
+    if (this.setup && !this.setup.isDestroyed()) {
+      this.setup.show();
+      this.setup.focus();
+      return;
+    }
+    const window = new BrowserWindow({
+      width: 720,
+      height: 780,
+      minWidth: 560,
+      minHeight: 600,
+      title: 'Workspace setup',
+      show: false,
+      webPreferences: {
+        preload: path.join(this.bundle, 'chat-preload.cjs'),
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        webSecurity: true,
+      },
+    });
+    this.setup = window;
+    this.register(window);
+    window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    const guard = (event: Electron.Event, url: string) => {
+      if (url !== recovery) event.preventDefault();
+    };
+    window.webContents.on('will-navigate', guard);
+    window.webContents.on('will-redirect', guard);
+    window.on('closed', () => {
+      if (this.setup === window) this.setup = null;
+    });
+    await window.loadURL(recovery);
+    window.show();
+    window.focus();
+  }
+  private async create() {
+    let bounds = { width: 1280, height: 840 };
+    try {
+      const saved = JSON.parse(
+        await readFile(path.join(this.data, 'workspace-window.json'), 'utf8'),
+      ) as Electron.Rectangle;
+      if (
+        ['x', 'y', 'width', 'height'].every((k) =>
+          Number.isFinite(saved[k as keyof Electron.Rectangle]),
+        ) &&
+        saved.width >= 900 &&
+        saved.height >= 600 &&
+        screen
+          .getAllDisplays()
+          .some(
+            (d) =>
+              saved.x + saved.width > d.workArea.x &&
+              saved.x < d.workArea.x + d.workArea.width &&
+              saved.y + saved.height > d.workArea.y &&
+              saved.y < d.workArea.y + d.workArea.height,
+          )
+      )
+        bounds = saved;
+    } catch {
+      /* Default geometry on first launch or removed monitor. */
+    }
+    const window = new BrowserWindow({
+      ...bounds,
+      minWidth: 900,
+      minHeight: 600,
+      show: false,
+      title: 'My Own Dots',
+      titleBarStyle: 'hiddenInset',
+      backgroundColor: '#f7f8fa',
+      webPreferences: {
+        preload: path.join(this.bundle, 'chat-preload.cjs'),
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        webSecurity: true,
+      },
+    });
+    this.window = window;
+    this.register(window);
+    this.voice.attach(window);
+    this.folders.attach(window);
+    const external = (url: string) => {
+      const target = destinationFromUrl(url);
+      if (target) {
+        void this.open(target);
+        return;
+      }
+      if (/^https?:\/\//.test(url)) void shell.openExternal(url);
+    };
+    window.webContents.setWindowOpenHandler(({ url }) => {
+      external(url);
+      return { action: 'deny' };
+    });
+    const guard = (event: Electron.Event, url: string) => {
+      const target = destinationFromUrl(url);
+      if (target) {
+        event.preventDefault();
+        void this.open(target);
+        return;
+      }
+      if (isWorkspacePage(url) || url === recovery) return;
+      event.preventDefault();
+      external(url);
+    };
+    window.webContents.on('will-navigate', guard);
+    window.webContents.on('will-redirect', guard);
+    window.webContents.on(
+      'did-start-navigation',
+      (_event, _url, inPlace, mainFrame) => {
+        if (mainFrame && !inPlace) this.voice.stop('navigation');
+      },
+    );
+    window.webContents.on('did-navigate', () => this.voice.reset());
+    window.webContents.on('render-process-gone', () => {
+      this.voice.reset();
+      this.loaded.delete(window);
+      void window.loadURL(recovery);
+    });
+    window.webContents.on('unresponsive', () =>
+      this.voice.stop('unresponsive'),
+    );
+    window.on('hide', () => this.voice.stop('hidden'));
+    window.on('minimize', () => this.voice.stop('minimized'));
+    window.on('close', (event) => {
+      event.preventDefault();
+      window.hide();
+    });
+    const save = () => {
+      if (this.saving) clearTimeout(this.saving);
+      this.saving = setTimeout(() => {
+        void this.saveGeometry().catch(() => {});
+      }, 300);
+    };
+    window.on('resize', save);
+    window.on('move', save);
+    await window.loadURL(recovery);
+    window.show();
+    await this.retry();
+  }
+  private async saveGeometry() {
+    if (!this.window || this.window.isDestroyed()) return;
+    await mkdir(this.data, { recursive: true });
+    await writeFile(
+      path.join(this.data, 'workspace-window.json'),
+      JSON.stringify(this.window.getNormalBounds()),
+      { mode: 0o600 },
+    );
+  }
+  async destroy() {
+    if (this.saving) clearTimeout(this.saving);
+    await this.saveGeometry().catch(() => {});
+    this.unsubscribe();
+    this.voice.destroy();
+    this.folders.destroy();
+    ipcMain.removeListener('dot:workspace:context', this.context);
+    for (const name of [
+      'open',
+      'status',
+      'retry',
+      'preferences',
+      'backend-settings',
+      'choose',
+      'configure',
+    ])
+      ipcMain.removeHandler(`dot:workspace:${name}`);
+    this.setup?.destroy();
+    this.window?.destroy();
+  }
+}

@@ -10,6 +10,9 @@ import type { Rect } from '../shared/contracts.js';
 import { workspaceAddress } from './interaction.js';
 import { CompanionVoiceSession } from './voice-session.js';
 import { CompanionFolderPicker } from './folder-picker.js';
+import { isWorkspacePage } from './workspace-protocol.js';
+import { destinationFromUrl } from './workspace-navigation.js';
+import type { WorkspaceDestination } from '../shared/workspace-contract.js';
 import type { CompanionVoiceState } from '../shared/voice-contract.js';
 
 const connectionPage = 'dots://app/chat.html';
@@ -39,7 +42,14 @@ export class CompanionChatWindow {
       active() {},
       ready() {},
     },
+    private readonly workspace?: {
+      ready(): Promise<void>;
+      register(window: BrowserWindow, initializing?: boolean): () => void;
+      recover(): Promise<void>;
+      open(destination?: WorkspaceDestination): Promise<void>;
+    },
   ) {
+    if (workspace) this.address = 'dots://workspace/';
     this.voice = new CompanionVoiceSession(
       () => this.window,
       () => this.address,
@@ -168,19 +178,21 @@ export class CompanionChatWindow {
   }
 
   private async create(bounds: Rect): Promise<void> {
-    try {
-      const saved = JSON.parse(
-        await readFile(path.join(this.data, 'chat-connection.json'), 'utf8'),
-      ) as { address?: string };
-      this.address = workspaceAddress(saved.address);
-    } catch {
-      /* First launch uses the standard local workspace. */
-    }
-    try {
-      if (process.env.DOTS_WORKSPACE_URL)
-        this.address = workspaceAddress(process.env.DOTS_WORKSPACE_URL);
-    } catch {
-      /* Invalid overrides can be corrected in the connection screen. */
+    if (!this.workspace) {
+      try {
+        const saved = JSON.parse(
+          await readFile(path.join(this.data, 'chat-connection.json'), 'utf8'),
+        ) as { address?: string };
+        this.address = workspaceAddress(saved.address);
+      } catch {
+        /* First launch uses the standard local workspace. */
+      }
+      try {
+        if (process.env.DOTS_WORKSPACE_URL)
+          this.address = workspaceAddress(process.env.DOTS_WORKSPACE_URL);
+      } catch {
+        /* Invalid overrides can be corrected in the connection screen. */
+      }
     }
     const window = new BrowserWindow({
       ...bounds,
@@ -203,6 +215,7 @@ export class CompanionChatWindow {
       },
     });
     this.window = window;
+    const initialized = this.workspace?.register(window, true);
     this.voice.attach(window);
     this.folders.attach(window);
     window.setAlwaysOnTop(true, 'floating');
@@ -211,6 +224,11 @@ export class CompanionChatWindow {
       skipTransformProcessType: true,
     });
     const external = (url: string) => {
+      const target = destinationFromUrl(url);
+      if (this.workspace && target) {
+        void this.workspace.open(target);
+        return;
+      }
       if (/^https?:\/\//.test(url)) void shell.openExternal(url);
     };
     window.webContents.setWindowOpenHandler(({ url }) => {
@@ -218,23 +236,36 @@ export class CompanionChatWindow {
       return { action: 'deny' };
     });
     window.webContents.on('will-navigate', (event, url) => {
+      if (this.workspace && destinationFromUrl(url)) {
+        event.preventDefault();
+        external(url);
+        return;
+      }
       if (
         url === connectionPage ||
-        new URL(url).origin === new URL(this.address).origin
+        (this.workspace
+          ? isWorkspacePage(url) || url === 'dots://app/recovery.html'
+          : new URL(url).origin === new URL(this.address).origin)
       )
         return;
       event.preventDefault();
       external(url);
     });
     window.webContents.on('will-redirect', (event, url) => {
-      if (new URL(url).origin !== new URL(this.address).origin)
+      if (
+        this.workspace
+          ? !isWorkspacePage(url)
+          : new URL(url).origin !== new URL(this.address).origin
+      )
         event.preventDefault();
     });
     window.webContents.on('render-process-gone', () => {
       this.voice.reset();
       this.error =
         'The chat window stopped responding. Reconnect to continue your conversation.';
-      void window.loadURL(connectionPage).catch(() => {});
+      void window
+        .loadURL(this.workspace ? 'dots://app/recovery.html' : connectionPage)
+        .catch(() => {});
     });
     window.webContents.on('unresponsive', () =>
       this.voice.stop('unresponsive'),
@@ -257,8 +288,14 @@ export class CompanionChatWindow {
       this.voice.stop('closed');
       window.hide();
     });
-    await window.loadURL(connectionPage);
-    await this.connect();
+    try {
+      await window.loadURL(
+        this.workspace ? 'dots://app/recovery.html' : connectionPage,
+      );
+      await this.connect();
+    } finally {
+      initialized?.();
+    }
   }
 
   private async connect(): Promise<void> {
@@ -267,6 +304,15 @@ export class CompanionChatWindow {
     this.loading = true;
     const address = this.address;
     try {
+      if (this.workspace) {
+        await this.workspace.ready();
+        if (!window.isDestroyed())
+          await window.loadURL(
+            `dots://workspace/?surface=companion&dotColor=${encodeURIComponent(this.getColor())}`,
+          );
+        this.error = '';
+        return;
+      }
       // A bounded readiness check avoids leaving a blank native window offline.
       const response = await fetch(new URL('api/workspace', address), {
         signal: AbortSignal.timeout(4000),
@@ -298,13 +344,19 @@ export class CompanionChatWindow {
       this.error =
         'Your workspace is offline or its chat page is unavailable. Start My Own Dots in Command Center, or run npm run build followed by npm start in your checkout, then retry. For npm run dev, use http://127.0.0.1:5173.';
       if (!window.isDestroyed())
-        await window.loadURL(connectionPage).catch(() => {});
+        await window
+          .loadURL(this.workspace ? 'dots://app/recovery.html' : connectionPage)
+          .catch(() => {});
     } finally {
       this.loading = false;
     }
   }
 
   async configure(bounds: Rect): Promise<void> {
+    if (this.workspace) {
+      await this.workspace.recover();
+      return;
+    }
     await this.open(bounds);
     this.error =
       'Connect to the workspace that holds your Dots and conversations.';
@@ -322,8 +374,10 @@ export class CompanionChatWindow {
     if (!current) return;
     const url = new URL(current);
     if (
-      url.origin !== new URL(this.address).origin ||
-      url.searchParams.get('desktop') !== '1'
+      this.workspace
+        ? !isWorkspacePage(current)
+        : url.origin !== new URL(this.address).origin ||
+          url.searchParams.get('desktop') !== '1'
     )
       return;
     const color = this.getColor();

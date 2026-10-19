@@ -15,6 +15,7 @@ interface WindowDouble extends EventEmitter {
     send: ReturnType<typeof vi.fn>;
     reload: ReturnType<typeof vi.fn>;
     executeJavaScript: ReturnType<typeof vi.fn>;
+    setWindowOpenHandler: ReturnType<typeof vi.fn>;
   };
 }
 vi.mock('electron', async () => {
@@ -41,7 +42,7 @@ vi.mock('electron', async () => {
         reload: vi.fn(),
         executeJavaScript: vi.fn(async () => {}),
         getURL: () => this.webContents.mainFrame.url,
-        setWindowOpenHandler() {},
+        setWindowOpenHandler: vi.fn(),
       });
       constructor(readonly options: { show?: boolean }) {
         super();
@@ -257,4 +258,42 @@ it('reports a cold offline windowless start without displaying a connection wind
   await expect(chat.toggleWindowless(bounds)).rejects.toThrow(/offline/);
   expect(chat.voiceEngaged).toBe(false);
   expect(host.windows[0].visible).toBe(false);
+});
+it('hosts compact chat from the same bundled renderer and hands internal page links to the workspace', async () => {
+  chat.destroy();
+  host.windows = [];
+  const fetcher = vi.fn();
+  vi.stubGlobal('fetch', fetcher);
+  const workspace = {
+    ready: vi.fn(async () => {}),
+    register: vi.fn(() => () => {}),
+    recover: vi.fn(async () => {}),
+    open: vi.fn(async () => {}),
+  };
+  chat = new CompanionChatWindow(
+    '/bundle',
+    '/unused',
+    undefined,
+    undefined,
+    workspace,
+  );
+  await chat.open(bounds);
+  const window = host.windows[0];
+  expect(window.webContents.mainFrame.url).toMatch(
+    /^dots:\/\/workspace\/\?surface=companion/,
+  );
+  expect(fetcher).not.toHaveBeenCalled();
+  expect(workspace.ready).toHaveBeenCalledOnce();
+  const popup = window.webContents.setWindowOpenHandler.mock.calls[0][0];
+  expect(
+    popup({ url: 'dots://workspace/#/spaces/space-1/pages/page-1' }),
+  ).toEqual({ action: 'deny' });
+  expect(workspace.open).toHaveBeenCalledWith({
+    spaceId: 'space-1',
+    pageId: 'page-1',
+  });
+  invoke('ready', true);
+  await chat.toggleWindowless(bounds);
+  expect(window.visible).toBe(false);
+  expect(window.webContents.send).toHaveBeenCalledWith('dot:voice:talk', true);
 });

@@ -1,6 +1,20 @@
+import './workspace-preload.js';
 import { contextBridge, ipcRenderer } from 'electron';
 import type { DesktopVoiceBridge } from './shared/voice-contract.js';
 import type { DesktopFolderBridge } from './shared/folder-contract.js';
+
+const nativeWorkspace =
+  location.protocol === 'dots:' &&
+  location.hostname === 'workspace' &&
+  location.pathname === '/' &&
+  ['workspace', 'companion'].includes(
+    new URL(location.href).searchParams.get('surface') || '',
+  );
+const mainWorkspace =
+  nativeWorkspace &&
+  new URL(location.href).searchParams.get('surface') === 'workspace';
+const voiceChannel = mainWorkspace ? 'dot:workspace-voice' : 'dot:voice';
+const folderChannel = mainWorkspace ? 'dot:workspace-folders' : 'dot:folders';
 
 // Connection configuration remains exclusive to the bundled connection page.
 if (location.href === 'dots://app/chat.html') {
@@ -15,47 +29,47 @@ if (location.href === 'dots://app/chat.html') {
 // intentionally narrow boundary. No generic IPC, credentials, or audio cross it.
 if (
   process.isMainFrame &&
-  /^https?:$/.test(location.protocol) &&
-  ipcRenderer.sendSync('dot:voice:context') === true
+  (/^https?:$/.test(location.protocol) || nativeWorkspace) &&
+  ipcRenderer.sendSync(`${voiceChannel}:context`) === true
 ) {
   let pendingTalk = false;
   let windowless = false;
   const talkListeners = new Set<() => void>();
-  ipcRenderer.on('dot:voice:talk', (_event, background: unknown) => {
+  ipcRenderer.on(`${voiceChannel}:talk`, (_event, background: unknown) => {
     windowless = background === true;
     if (!talkListeners.size) pendingTalk = true;
     else for (const listener of talkListeners) listener();
   });
-  ipcRenderer.on('dot:voice:stop', () => {
+  ipcRenderer.on(`${voiceChannel}:stop`, () => {
     pendingTalk = false;
     windowless = false;
   });
   const bridge: DesktopVoiceBridge = {
     setReady: (ready) =>
-      ipcRenderer.invoke('dot:voice:ready', ready).catch(() => {}),
-    activate: () => ipcRenderer.invoke('dot:voice:activate'),
+      ipcRenderer.invoke(`${voiceChannel}:ready`, ready).catch(() => {}),
+    activate: () => ipcRenderer.invoke(`${voiceChannel}:activate`),
     cancelTalk: () => {
-      void ipcRenderer.invoke('dot:voice:cancel-talk').catch(() => {});
+      void ipcRenderer.invoke(`${voiceChannel}:cancel-talk`).catch(() => {});
     },
-    cancelStart: () => ipcRenderer.invoke('dot:voice:cancel-start'),
-    begin: (callId) => ipcRenderer.invoke('dot:voice:begin', callId),
+    cancelStart: () => ipcRenderer.invoke(`${voiceChannel}:cancel-start`),
+    begin: (callId) => ipcRenderer.invoke(`${voiceChannel}:begin`, callId),
     end: (callId) => {
       windowless = false;
-      return ipcRenderer.invoke('dot:voice:end', callId);
+      return ipcRenderer.invoke(`${voiceChannel}:end`, callId);
     },
     isWindowless: () => windowless,
     phase: (callId, phase) =>
-      ipcRenderer.invoke('dot:voice:phase', { callId, phase }),
+      ipcRenderer.invoke(`${voiceChannel}:phase`, { callId, phase }),
     reportError: (message) => {
       void ipcRenderer
-        .invoke('dot:voice:error', String(message).slice(0, 500))
+        .invoke(`${voiceChannel}:error`, String(message).slice(0, 500))
         .catch(() => {});
     },
     onStop(callback) {
       const listener = (_event: unknown, reason: string) => callback(reason);
-      ipcRenderer.on('dot:voice:stop', listener);
+      ipcRenderer.on(`${voiceChannel}:stop`, listener);
       return () => {
-        ipcRenderer.removeListener('dot:voice:stop', listener);
+        ipcRenderer.removeListener(`${voiceChannel}:stop`, listener);
       };
     },
     onTalk(callback) {
@@ -74,8 +88,8 @@ if (
 
 if (
   process.isMainFrame &&
-  /^https?:$/.test(location.protocol) &&
-  ipcRenderer.sendSync('dot:folders:context') === true
+  (/^https?:$/.test(location.protocol) || nativeWorkspace) &&
+  ipcRenderer.sendSync(`${folderChannel}:context`) === true
 ) {
   const bridge: DesktopFolderBridge = {
     choose: () => {
@@ -84,7 +98,7 @@ if (
         return Promise.reject(
           new Error('Choose a folder using the folder button.'),
         );
-      return ipcRenderer.invoke('dot:folders:choose');
+      return ipcRenderer.invoke(`${folderChannel}:choose`);
     },
   };
   contextBridge.exposeInMainWorld('dotFolders', bridge);

@@ -45,6 +45,7 @@ function windowDouble() {
     },
     isVisible: () => window.visible,
     isFocused: () => window.focused,
+    isMinimized: () => false,
     isDestroyed: () => window.destroyed,
   };
   return window;
@@ -327,4 +328,85 @@ it('does not let a duplicate end acknowledgement erase the next shortcut request
   voice.talk(true);
   invoke('end', 'call-12345678');
   await expect(invoke('activate')).resolves.toBeUndefined();
+});
+
+it('shares session permission routing while preventing two native windows from capturing', () => {
+  voice.destroy();
+  window.webContents.mainFrame.url = 'dots://workspace/?surface=companion';
+  voice = new CompanionVoiceSession(
+    () => window as unknown as BrowserWindow,
+    () => 'dots://workspace/',
+    { active() {}, ready() {} },
+  );
+  const main = windowDouble();
+  main.webContents.mainFrame.url = 'dots://workspace/?surface=workspace';
+  main.webContents.session = window.webContents.session;
+  const mainVoice = new CompanionVoiceSession(
+    () => main as unknown as BrowserWindow,
+    () => 'dots://workspace/',
+    { active() {}, ready() {} },
+    'dot:workspace-voice',
+  );
+  try {
+    voice.attach(window as unknown as BrowserWindow);
+    mainVoice.attach(main as unknown as BrowserWindow);
+    const mainSender = {
+      sender: main.webContents,
+      senderFrame: main.webContents.mainFrame,
+    };
+    ready();
+    host.handlers.get('dot:workspace-voice:ready')!(mainSender, true);
+    invoke('begin', 'call-companion1');
+    expect(() =>
+      host.handlers.get('dot:workspace-voice:begin')!(
+        mainSender,
+        'call-workspace1',
+      ),
+    ).toThrow('Another window');
+    const check = window.webContents.session.check;
+    expect(
+      check(window.webContents, 'media', 'dots://workspace', {
+        mediaType: 'audio',
+        isMainFrame: true,
+        requestingUrl: window.webContents.mainFrame.url,
+      }),
+    ).toBe(true);
+    expect(
+      check(window.webContents, 'media', 'null', {
+        mediaType: 'audio',
+        isMainFrame: true,
+        requestingUrl: window.webContents.mainFrame.url,
+      }),
+    ).toBe(false);
+    expect(
+      check(window.webContents, 'media', 'dots://evil', {
+        mediaType: 'audio',
+        isMainFrame: true,
+        requestingUrl: 'dots://evil/?surface=companion',
+      }),
+    ).toBe(false);
+    invoke('end', 'call-companion1');
+    host.handlers.get('dot:workspace-voice:begin')!(
+      mainSender,
+      'call-workspace1',
+    );
+    expect(voice.talk(true)).toBe(false);
+    expect(
+      check(main.webContents, 'media', 'dots://workspace', {
+        mediaType: 'audio',
+        isMainFrame: true,
+        requestingUrl: main.webContents.mainFrame.url,
+      }),
+    ).toBe(true);
+    main.visible = false;
+    expect(
+      check(main.webContents, 'media', 'dots://workspace', {
+        mediaType: 'audio',
+        isMainFrame: true,
+        requestingUrl: main.webContents.mainFrame.url,
+      }),
+    ).toBe(false);
+  } finally {
+    mainVoice.destroy();
+  }
 });

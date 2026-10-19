@@ -92,6 +92,17 @@ const renderer = spawnSync(
   { cwd: root, stdio: 'inherit' },
 );
 if (renderer.status !== 0) process.exit(renderer.status ?? 1);
+const workspaceRenderer = spawnSync(
+  process.execPath,
+  [
+    path.join(root, 'node_modules/vite/bin/vite.js'),
+    'build',
+    '--config',
+    path.join(root, 'vite.workspace.config.ts'),
+  ],
+  { cwd: root, stdio: 'inherit' },
+);
+if (workspaceRenderer.status !== 0) process.exit(workspaceRenderer.status ?? 1);
 cpSync(
   path.join(root, 'public/desktop-dot'),
   path.join(out, 'renderer/desktop-dot'),

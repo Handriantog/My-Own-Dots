@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>My Own Dots</title>
+  </head>
+  <body>
+    <main>
+      <div class="mark">●</div>
+      <h1>Your Dots workspace</h1>
+      <p id="status" role="status">Connecting to your local workspace…</p>
+      <div class="actions">
+        <button id="retry">Retry connection</button
+        ><button id="choose">Choose existing workspace…</button>
+      </div>
+      <details>
+        <summary>Workspace configuration</summary>
+        <p>
+          Change only the fields you need, then save and retry. Saving stops the
+          app-owned backend until you retry. Existing files and databases stay
+          in place. For an externally managed service, restart it in its
+          launcher after saving.
+        </p>
+        <form id="configuration">
+          <label
+            >Local server port<input
+              name="PORT"
+              inputmode="numeric"
+              placeholder="4310" /></label
+          ><label
+            >Database path<input
+              name="DATABASE_PATH"
+              placeholder="data/opendots.sqlite" /></label
+          ><label
+            >Conversation database URL<input
+              name="LOCAL_DATABASE_URL"
+              type="password"
+              autocomplete="off"
+              placeholder="postgresql://…" /></label
+          ><label
+            >AI provider<input name="LLM_PROVIDER" placeholder="codex" /></label
+          ><label
+            >Codex executable<input
+              name="CODEX_BIN"
+              placeholder="codex" /></label
+          ><label
+            >Existing owner token<input
+              name="OWNER_TOKEN"
+              type="password"
+              autocomplete="off" /></label
+          ><button type="submit">Save configuration</button>
+        </form>
+      </details>
+      <p class="note">
+        Your workspace runs on this Mac. Conversations may require Docker; AI
+        uses your configured provider account.
+      </p>
+    </main>
+    <script type="module" src="./recovery.ts"></script>
+  </body>
+</html>

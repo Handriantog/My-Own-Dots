@@ -32,6 +32,22 @@ vi.mock('../../src/desktop/host/diagnostics.js', () => ({
     }
   },
 }));
+vi.mock('../../src/desktop/host/workspace-backend.js', () => ({
+  WorkspaceBackend: class {
+    async stop() {}
+  },
+}));
+vi.mock('../../src/desktop/host/workspace-window.js', () => ({
+  WorkspaceWindow: class {
+    async open() {}
+    async command() {}
+    suspend() {}
+    async destroy() {}
+    async ready() {}
+    async recover() {}
+    register() {}
+  },
+}));
 const exceptionMonitors = new Set(
   process.listeners('uncaughtExceptionMonitor'),
 );
@@ -104,20 +120,24 @@ vi.mock('electron', async () => {
   }
   return {
     app: Object.assign(new EventEmitter(), {
+      isPackaged: true,
       setName: vi.fn(),
       setPath: vi.fn(),
       getPath: () => '/unused',
       isHidden: () => false,
       requestSingleInstanceLock: () => true,
       whenReady: async () => {},
-      dock: { hide: vi.fn() },
+      dock: { show: vi.fn(), hide: vi.fn() },
       quit: vi.fn(),
     }),
     BrowserWindow: Window,
     globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
     Notification: { isSupported: () => false },
     ipcMain: Object.assign(ipc, { handle: vi.fn() }),
-    Menu: { buildFromTemplate: (items: unknown) => items },
+    Menu: {
+      buildFromTemplate: (items: unknown) => items,
+      setApplicationMenu: vi.fn(),
+    },
     nativeImage: { createFromPath: () => ({ resize: () => ({}) }) },
     net: {},
     powerMonitor: host.power,

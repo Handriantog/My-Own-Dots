@@ -1,0 +1,96 @@
+:root {
+  font:
+    15px/1.6 -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
+  color: #233047;
+  background: #f7f8fa;
+  color-scheme: light dark;
+}
+body {
+  margin: 0;
+  padding: 70px 28px;
+}
+main {
+  max-width: 600px;
+  margin: auto;
+}
+.mark {
+  font-size: 42px;
+  color: #45a7ff;
+}
+h1 {
+  font-size: 30px;
+  margin: 8px 0;
+}
+p {
+  color: #64748b;
+}
+button,
+input {
+  font: inherit;
+  border: 1px solid #b9c5d5;
+  border-radius: 8px;
+  padding: 9px 13px;
+}
+button {
+  cursor: pointer;
+  background: #fff;
+  color: #233047;
+}
+button:first-child {
+  background: #1767c7;
+  color: white;
+  border-color: #1767c7;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 24px 0;
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+details {
+  border-top: 1px solid #d6deea;
+  padding-top: 20px;
+}
+summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+form {
+  display: grid;
+  gap: 12px;
+}
+label {
+  display: grid;
+  gap: 4px;
+}
+input {
+  background: transparent;
+  color: inherit;
+}
+.note {
+  font-size: 12px;
+  margin-top: 28px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    background: #171c25;
+    color: #e7edf7;
+  }
+  p {
+    color: #a2b1c5;
+  }
+  button {
+    background: #273143;
+    color: #e7edf7;
+  }
+  details {
+    border-color: #334155;
+  }
+}
