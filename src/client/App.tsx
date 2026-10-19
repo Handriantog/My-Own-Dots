@@ -1,7 +1,20 @@
 import { MemoryPanel } from './MemoryPanel';
 import { MemoryActivity } from './MemoryActivity';
-import { openPageLink } from './page-navigation';
-import { SpaceNav } from './SpaceNav';
+import {
+  allowNavigation,
+  restoreSelection,
+  savedNavigation,
+  type Surface,
+  type WorkspaceView,
+} from './workspace-navigation';
+import { WorkspaceRail, WorkspaceTitlebar } from './WorkspaceShell';
+import { QuickNavigation } from './QuickNavigation';
+import type {
+  WorkspaceCommand,
+  WorkspaceDestination,
+  WorkspaceStatus,
+} from '../desktop/shared/workspace-contract';
+import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { SpaceWorkspace } from './SpaceWorkspace';
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { CopilotKitProvider } from '@copilotkit/react-core/v2';
@@ -10,14 +23,10 @@ import {
   ArrowUpRight,
   BookOpen,
   Clock3,
-  Code2,
-  Folder,
-  Menu,
   MessageCircle,
   Monitor,
   MoreHorizontal,
   Pause,
-  PanelLeft,
   Play,
   Plus,
   Search,
@@ -48,7 +57,6 @@ import { Chat } from './Chat';
 import { FolderAccessSettings } from './FolderAccessSettings';
 import { VoiceSettings } from './local-voice/VoiceSettings';
 import { CallView } from './CallView';
-import { ThreadList } from './ThreadList';
 import { ResultPane } from './ResultPane';
 import { TaskRow } from './TaskPresentation';
 import { TaskActions } from './TaskActions';
@@ -64,15 +72,23 @@ function describeFailure(error: unknown, fallback: string) {
   };
 }
 
-function savedDesktopSelection(key: string): string {
-  try {
-    return localStorage.getItem(`desktop-${key}`) ?? '';
-  } catch {
-    return '';
-  }
-}
-
-export function App({ desktop = false }: { desktop?: boolean }) {
+export function App({
+  surface: explicitSurface,
+  desktop: legacyDesktop = false,
+}: {
+  surface?: Surface;
+  desktop?: boolean;
+}) {
+  const surface =
+    explicitSurface ?? (legacyDesktop ? 'companion' : 'workspace');
+  const desktop = surface === 'companion';
+  const [selection] = useState(() => {
+    try {
+      return restoreSelection(surface, (key) => localStorage.getItem(key));
+    } catch {
+      return { dotId: '', threadId: undefined };
+    }
+  });
   const companionColor = useCompanionColor(desktop);
   const [state, setState] = useState<State>();
   const [workspace, setWorkspace] = useState<WorkspaceState>();
@@ -167,67 +183,152 @@ export function App({ desktop = false }: { desktop?: boolean }) {
     },
     [],
   );
-  const [selectedDot, setSelectedDot] = useState(() =>
-    desktop ? savedDesktopSelection('dot') : '',
-  );
+  const [selectedDot, setSelectedDot] = useState(selection.dotId);
   const [selectedThread, setSelectedThread] = useState<string | undefined>(
-    () => (desktop ? savedDesktopSelection('thread') || undefined : undefined),
+    selection.threadId,
   );
   useEffect(() => {
-    if (!desktop) return;
     try {
-      localStorage.setItem('desktop-dot', selectedDot);
-      localStorage.setItem('desktop-thread', selectedThread ?? '');
+      localStorage.setItem(`${surface}-dot`, selectedDot);
+      localStorage.setItem(`${surface}-thread`, selectedThread ?? '');
     } catch {
-      /* Chat still works when browser storage is unavailable. */
+      /* Selection can remain in memory. */
     }
-  }, [desktop, selectedDot, selectedThread]);
-  const [view, rawSetView] = useState<'chat' | 'tasks' | 'memories' | 'space'>(
-    'chat',
-  );
+  }, [surface, selectedDot, selectedThread]);
+  const [savedNavigationState] = useState(() => savedNavigation(surface));
+  const [view, rawSetView] = useState<WorkspaceView>(savedNavigationState.view);
   const dirtyPage = useRef(false);
-  const [spaceId, setSpaceId] = useState('');
-  const [pageId, setPageId] = useState<string>();
+  const acceptedHash = useRef(location.hash);
+  const [spaceId, setSpaceId] = useState(savedNavigationState.spaceId);
+  const [pageId, setPageId] = useState<string | undefined>(
+    savedNavigationState.pageId,
+  );
   const setDirtyPage = useCallback((value: boolean) => {
     dirtyPage.current = value;
   }, []);
-  const setView = (next: typeof view) => {
-    if (dirtyPage.current && !window.confirm('Leave your unsaved page draft?'))
-      return;
-    dirtyPage.current = false;
-    if (next !== 'space')
-      history.replaceState(null, '', location.pathname + location.search);
-    rawSetView(next);
-  };
+  const guard = (commit: () => void) =>
+    allowNavigation(
+      dirtyPage.current,
+      () => window.confirm('Leave your unsaved page draft?'),
+      () => {
+        dirtyPage.current = false;
+        commit();
+      },
+    );
+  const setView = (next: WorkspaceView) =>
+    guard(() => {
+      if (next !== 'space') acceptedHash.current = '';
+      if (next !== 'space' && typeof history !== 'undefined')
+        history.replaceState(null, '', location.pathname + location.search);
+      if (
+        next === 'space' &&
+        !workspace?.spaces.some((space) => space.id === spaceId)
+      )
+        setSpaceId(workspace?.spaces[0]?.id || '');
+      rawSetView(next);
+    });
+  const navigateDestination = (destination: WorkspaceDestination) =>
+    guard(() => {
+      if (destination.spaceId) {
+        setSpaceId(destination.spaceId);
+        setPageId(destination.pageId);
+        rawSetView('space');
+        acceptedHash.current = `#/spaces/${destination.spaceId}${destination.pageId ? `/pages/${destination.pageId}` : ''}`;
+        history.replaceState(
+          null,
+          '',
+          `#/spaces/${destination.spaceId}${destination.pageId ? `/pages/${destination.pageId}` : ''}`,
+        );
+      } else {
+        const targetDot =
+          destination.dotId ||
+          workspace?.conversations.find((t) => t.id === destination.threadId)
+            ?.dotId ||
+          dot?.id ||
+          '';
+        setSelectedDot(targetDot);
+        setSelectedThread(destination.threadId);
+        setPendingPrompt(undefined);
+        rawSetView('chat');
+        acceptedHash.current = '';
+        if (typeof history !== 'undefined')
+          history.replaceState(null, '', location.pathname + location.search);
+      }
+    });
+  const openPage = (space: string, page?: string) =>
+    navigateDestination({ spaceId: space, pageId: page });
+  const [quickOpen, setQuickOpen] = useState(false);
+  const [backendStatus, setBackendStatus] = useState<WorkspaceStatus>();
+  const pendingNavigation = useRef<WorkspaceDestination | undefined>(undefined);
+  const handlers = useRef<{
+    navigate: (destination: WorkspaceDestination) => void;
+    command: (command: WorkspaceCommand) => void;
+  }>({ navigate: () => {}, command: () => {} });
   useEffect(() => {
-    let acceptedHash = location.hash;
-    const navigate = () => {
+    const bridge = window.dotWorkspace;
+    const offNavigate = bridge?.onNavigate((destination) => {
+      pendingNavigation.current = destination;
+      handlers.current.navigate(destination);
+    });
+    const offCommand = bridge?.onCommand((command) =>
+      handlers.current.command(command),
+    );
+    const offStatus = bridge?.onStatus(setBackendStatus);
+    void bridge
+      ?.status()
+      .then(setBackendStatus)
+      .catch(() => {});
+    const key = (event: KeyboardEvent) => {
+      if (bridge || !(event.metaKey || event.ctrlKey)) return;
+      const command =
+        event.key.toLowerCase() === 'k'
+          ? 'quick-navigation'
+          : event.key.toLowerCase() === 'n'
+            ? 'new-chat'
+            : event.key === ','
+              ? 'settings'
+              : event.key.toLowerCase() === 'b' && event.shiftKey
+                ? 'toggle-sidebar'
+                : undefined;
+      if (command) {
+        event.preventDefault();
+        handlers.current.command(command);
+      }
+    };
+    const hash = () => {
       const match = location.hash.match(
-        /^#\/spaces\/([^/]+)(?:\/pages\/([^/]+))?$/,
+        /^#\/(spaces|chat)\/([^/]+)(?:\/(?:pages\/)?([^/]+))?$/,
       );
       if (!match) return;
-      if (dirtyPage.current && location.hash === acceptedHash) return;
-      if (
-        dirtyPage.current &&
-        !window.confirm('Leave your unsaved page draft?')
-      ) {
-        history.replaceState(null, '', acceptedHash || location.pathname);
-        return;
-      }
-      acceptedHash = location.hash;
-      dirtyPage.current = false;
-      setSpaceId(match[1]);
-      setPageId(match[2]);
-      rawSetView('space');
-      setMobile(false);
+      const destination =
+        match[1] === 'spaces'
+          ? { spaceId: match[2], pageId: match[3] }
+          : { dotId: match[2], threadId: match[3] };
+      pendingNavigation.current = destination;
+      handlers.current.navigate(destination);
+      if (dirtyPage.current)
+        history.replaceState(
+          null,
+          '',
+          acceptedHash.current || location.pathname + location.search,
+        );
+      else acceptedHash.current = location.hash;
     };
-    navigate();
-    window.addEventListener('hashchange', navigate);
-    return () => window.removeEventListener('hashchange', navigate);
+    hash();
+    window.addEventListener('hashchange', hash);
+    window.addEventListener('keydown', key);
+    return () => {
+      offNavigate?.();
+      offCommand?.();
+      offStatus?.();
+      window.removeEventListener('hashchange', hash);
+      window.removeEventListener('keydown', key);
+    };
   }, []);
-  const openPage = (space: string, page?: string) => {
-    openPageLink(`#/spaces/${space}${page ? `/pages/${page}` : ''}`);
-  };
+  useEffect(() => {
+    if (workspace && pendingNavigation.current)
+      handlers.current.navigate(pendingNavigation.current);
+  }, [workspace]);
 
   const [notices, setNotices] = useState<Notices>({
     refresh: '',
@@ -242,8 +343,19 @@ export function App({ desktop = false }: { desktop?: boolean }) {
   const [auth, setAuth] = useState('');
   const [needsAuth, setNeedsAuth] = useState(false);
   const [dialog, setDialog] = useState<Dialog>();
-  const [mobile, setMobile] = useState(false);
-  const [navCollapsed, setNavCollapsed] = useState(false);
+  const [navCollapsed, setNavCollapsed] = useState(
+    savedNavigationState.collapsed,
+  );
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        `${surface}-navigation`,
+        JSON.stringify({ view, spaceId, pageId, collapsed: navCollapsed }),
+      );
+    } catch {
+      /* Navigation can remain in memory. */
+    }
+  }, [surface, view, spaceId, pageId, navCollapsed]);
   const [pane, setPane] = useState(false);
   const [capture, setCapture] = useState<Result>();
   const [prompt, setPrompt] = useState('');
@@ -270,7 +382,11 @@ export function App({ desktop = false }: { desktop?: boolean }) {
       setState(s);
       setWorkspace(w);
       setNeedsAuth(false);
-      setSelectedDot((previous) => previous || w.dots[0]?.id || '');
+      setSelectedDot((previous) =>
+        w.dots.some((dot) => dot.id === previous)
+          ? previous
+          : w.dots[0]?.id || '',
+      );
       setNotices((current) => applyRefreshResult(current, { ok: true }));
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) setNeedsAuth(true);
@@ -345,17 +461,14 @@ export function App({ desktop = false }: { desktop?: boolean }) {
     if (!setupStep) return;
     return trackSetupStep(setupStep);
   }, [setupStep]);
-  const chooseDot = (next: Dot) => {
-    setSelectedDot(next.id);
-    setSelectedThread(
-      workspace?.conversations.find((item) => item.dotId === next.id)?.id,
-    );
-    setView('chat');
-    setMobile(false);
-    setPendingPrompt(undefined);
-  };
+  const chooseDot = (next: Dot) =>
+    navigateDestination({
+      dotId: next.id,
+      threadId: workspace?.conversations.find((item) => item.dotId === next.id)
+        ?.id,
+    });
   const newConversation = async (text?: string) => {
-    if (!dot || !configured || busy) return;
+    if (!dot || !configured || busy || !setView('chat')) return;
     setBusy(true);
     setError('');
     try {
@@ -364,11 +477,10 @@ export function App({ desktop = false }: { desktop?: boolean }) {
         title: text?.slice(0, 80) || 'A new thought',
       });
       await refresh();
-      setSelectedThread(next.id);
-      setPendingPrompt(text);
-      setPrompt('');
-      setView('chat');
-      setMobile(false);
+      if (navigateDestination({ dotId: dot.id, threadId: next.id })) {
+        setPendingPrompt(text);
+        setPrompt('');
+      }
     } catch (e) {
       if (voiceIntent)
         window.dotVoice?.reportError?.(
@@ -404,7 +516,10 @@ export function App({ desktop = false }: { desktop?: boolean }) {
       return;
     }
     if (!configured || !dot) return;
-    if (view !== 'chat') setView('chat');
+    if (view !== 'chat' && !setView('chat')) {
+      consumeVoiceIntent();
+      return;
+    }
     if (!thread && !busy && voiceCreation.current !== voiceIntent) {
       voiceCreation.current = voiceIntent;
       const existing = workspace?.conversations.find(
@@ -424,6 +539,21 @@ export function App({ desktop = false }: { desktop?: boolean }) {
     localVoice.ready,
     state?.settings.paused,
   ]);
+  handlers.current = {
+    navigate: (destination) => {
+      if (!workspace) return;
+      pendingNavigation.current = undefined;
+      navigateDestination(destination);
+    },
+    command: (command) => {
+      if (command === 'quick-navigation') setQuickOpen(true);
+      else if (command === 'toggle-sidebar') setNavCollapsed((value) => !value);
+      else if (command === 'settings') {
+        if (desktop) setDialog({ type: 'settings' });
+        else setView('settings');
+      } else void newConversation();
+    },
+  };
   if (needsAuth)
     return (
       <main className="unlock">
@@ -434,10 +564,8 @@ export function App({ desktop = false }: { desktop?: boolean }) {
         ) : (
           <Mascot />
         )}
-        <h1>Your own little corner.</h1>
-        <p>
-          Enter the owner access token configured on this template’s server.
-        </p>
+        <h1>Unlock My Own Dots</h1>
+        <p>Enter the owner access token for this workspace.</p>
         <form
           onSubmit={async (e) => {
             e.preventDefault();
@@ -463,14 +591,14 @@ export function App({ desktop = false }: { desktop?: boolean }) {
             onChange={(e) => setAuth(e.target.value)}
             required
           />
-          <button className="primary">Unlock OpenDots</button>
+          <button className="primary">Unlock workspace</button>
         </form>
         {error && (
           <p className="chat-error" role="alert">
             {error}
           </p>
         )}
-        <p className="muted">The token stays in this tab’s session storage.</p>
+        <p className="muted">The access token is retained for this session.</p>
       </main>
     );
   if (!state || !workspace || !dot)
@@ -483,7 +611,24 @@ export function App({ desktop = false }: { desktop?: boolean }) {
         ) : (
           <Mascot state="working" />
         )}
-        <h1>{voiceIntent ? 'Connecting voice call…' : 'Finding your dots…'}</h1>
+        <h1>
+          {voiceIntent ? 'Connecting voice call…' : 'Opening your workspace…'}
+        </h1>
+        <p>
+          {backendStatus?.message ||
+            'Loading your Dots, conversations and Spaces.'}
+        </p>
+        {window.dotWorkspace && (
+          <button
+            onClick={() =>
+              void window
+                .dotWorkspace!.openBackendSettings()
+                .catch((e) => setError(e.message))
+            }
+          >
+            Workspace setup
+          </button>
+        )}
         {error && (
           <>
             <p className="chat-error">{error}</p>
@@ -494,7 +639,7 @@ export function App({ desktop = false }: { desktop?: boolean }) {
     );
   const content = (
     <div
-      className={`app template-app ${navCollapsed ? 'nav-collapsed' : ''} ${desktop ? 'desktop-chat' : ''}`}
+      className={`app template-app ${navCollapsed ? 'nav-collapsed' : ''} ${desktop ? 'desktop-chat' : 'desktop-workspace'}`}
     >
       {voiceIntent > 0 && !thread && configured && (
         <CallView
@@ -516,219 +661,43 @@ export function App({ desktop = false }: { desktop?: boolean }) {
           }}
         />
       )}
-      <nav className="icon-rail" aria-label="Workspace navigation">
-        <button
-          className="rail-brand"
-          aria-label="OpenDots home"
-          onClick={() => {
-            setView('chat');
-            setSelectedThread(undefined);
-          }}
-        >
-          o<span>·</span>
-        </button>
-        <button
-          aria-label={navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-          onClick={() => setNavCollapsed(!navCollapsed)}
-        >
-          <PanelLeft size={18} />
-        </button>
-        <button
-          aria-label="New chat"
-          disabled={!configured}
-          onClick={() => void newConversation()}
-        >
-          <Plus size={19} />
-        </button>
-        <button
-          aria-label="Open Spaces"
-          onClick={() => {
-            if (workspace.spaces[0]) openPage(workspace.spaces[0].id);
-          }}
-        >
-          <Folder size={18} />
-        </button>
-        <button aria-label="Open activity" onClick={() => setView('tasks')}>
-          <Clock3 size={18} />
-        </button>
-        <button
-          className="rail-settings"
-          aria-label="Open settings"
-          onClick={() => setDialog({ type: 'settings' })}
-        >
-          <Settings2 size={18} />
-        </button>
-      </nav>
-      <button
-        className="mobile-menu icon-button"
-        aria-label="Open navigation"
-        aria-expanded={mobile}
-        aria-controls="workspace-sidebar"
-        onClick={() => setMobile(true)}
-      >
-        <Menu size={21} />
-      </button>
-      {mobile && (
-        <button
-          className="nav-scrim"
-          aria-label="Close navigation"
-          onClick={() => setMobile(false)}
-        />
-      )}
-      <aside
-        id="workspace-sidebar"
-        className={`sidebar ${mobile ? 'open' : ''}`}
-      >
-        <button
-          className="wordmark"
-          onClick={() => {
-            setView('chat');
-            setSelectedThread(undefined);
-          }}
-        >
-          <span className="dotted-logo">
-            <i />
-            <i />
-            <i />
-            <i />
-          </span>
-          OpenDots<span className="wordmark-dot">•</span>
-        </button>
-        <button
-          className="new-chat nav-item"
-          disabled={!configured}
-          onClick={() => void newConversation()}
-        >
-          <Plus size={17} />
-          <span>New chat</span>
-        </button>
-        <div className="spaces-heading nav-label">
-          DOTS
-          <button
-            className="icon-button"
-            aria-label="Create Dot"
-            onClick={() =>
-              setDialog({ type: 'dot', spaceId: workspace.spaces[0].id })
-            }
-          >
-            <Plus size={14} />
-          </button>
-        </div>
-        <nav className="dots-nav" aria-label="Dots">
-          {workspace.dots.map((item) => (
-            <div className="dot-nav-row" key={item.id}>
-              <button
-                className={`dot-nav ${dot.id === item.id && view === 'chat' ? 'active' : ''}`}
-                aria-current={
-                  dot.id === item.id && view === 'chat' ? 'page' : undefined
-                }
-                onClick={() => chooseDot(item)}
-              >
-                <Mascot identity={item.id} name={item.name} small decorative />
-                <span>{item.name}</span>
-              </button>
-              <button
-                className="icon-button dot-settings"
-                aria-label={`Edit ${item.name} settings`}
-                onClick={() =>
-                  setDialog({ type: 'dot', dot: item, spaceId: item.spaceId })
-                }
-              >
-                <MoreHorizontal size={15} />
-              </button>
-            </div>
-          ))}
-        </nav>
-        <div className="spaces-heading nav-label">
-          SPACES
-          <button
-            className="icon-button"
-            aria-label="Create Space"
-            onClick={() => setDialog({ type: 'space' })}
-          >
-            <Plus size={14} />
-          </button>
-        </div>
-        <nav className="spaces-nav" aria-label="Spaces">
-          {workspace.spaces.map((space) => (
-            <SpaceNav
-              key={space.id}
-              space={space}
-              active={view === 'space' && spaceId === space.id}
-              pageId={pageId}
-              onOpen={(id) => openPage(space.id, id)}
-            />
-          ))}
-        </nav>
-        {configured ? (
-          <ThreadList
-            dotId={dot.id}
-            dots={workspace.dots}
-            local={workspace.conversations}
-            selected={view === 'chat' ? selectedThread : undefined}
-            onSelect={(id) => {
-              const conversation = workspace.conversations.find(
-                (item) => item.id === id,
-              );
-              if (conversation) setSelectedDot(conversation.dotId);
-              setSelectedThread(id);
-              setView('chat');
-              setMobile(false);
-            }}
-            onNew={() => void newConversation()}
+      {!desktop && (
+        <>
+          <WorkspaceTitlebar
+            onSearch={() => setQuickOpen(true)}
+            onToggle={() => setNavCollapsed(!navCollapsed)}
+            collapsed={navCollapsed}
           />
-        ) : (
-          <div className="sidebar-empty">
-            Set up text chat to begin a persistent conversation.
-          </div>
-        )}
-        <div className="sidebar-bottom">
-          <button
-            className={`nav-item ${view === 'tasks' ? 'active' : ''}`}
-            onClick={() => {
-              setView('tasks');
-              setMobile(false);
+          <WorkspaceRail
+            view={view}
+            onNavigate={(next) => {
+              if (next === 'space' && workspace.spaces[0])
+                openPage(spaceId || workspace.spaces[0].id);
+              else setView(next);
             }}
-          >
-            <Clock3 size={17} />
-            <span>Scheduled & activity</span>
-            {state.tasks.length > 0 && <small>{state.tasks.length}</small>}
-          </button>
-          <button
-            className={`nav-item ${view === 'memories' ? 'active' : ''}`}
-            onClick={() => {
-              setView('memories');
-              setMobile(false);
-            }}
-          >
-            <BookOpen size={17} />
-            <span>Memories</span>
-            {state.memories.length > 0 && (
-              <small>{state.memories.length}</small>
-            )}
-          </button>
-          <button
-            className="nav-item"
-            onClick={() => setDialog({ type: 'settings' })}
-          >
-            <Settings2 size={17} />
-            <span>Settings & setup</span>
-          </button>
-          <a
-            className="nav-item"
-            href="https://github.com/CopilotKit/OpenDots"
-            target="_blank"
-            rel="noreferrer"
-          >
-            <Code2 size={17} />
-            <span>Make it your own</span>
-            <ArrowUpRight size={13} />
-          </a>
-          <div className="version">
-            OPEN SOURCE TEMPLATE <span>v0.1</span>
-          </div>
-        </div>
-      </aside>
+          />
+          <WorkspaceSidebar
+            view={view}
+            workspace={workspace}
+            state={state}
+            dot={dot}
+            configured={configured}
+            busy={busy}
+            selectedThread={selectedThread}
+            spaceId={spaceId}
+            pageId={pageId}
+            backendStatus={backendStatus}
+            newConversation={() => void newConversation()}
+            setDialog={setDialog}
+            chooseDot={chooseDot}
+            navigateDestination={navigateDestination}
+            openPage={openPage}
+            setView={setView}
+            setSelectedDot={setSelectedDot}
+            mutate={mutate}
+          />
+        </>
+      )}
       <div className="workspace">
         {desktop && (
           <header className="companion-toolbar">
@@ -760,9 +729,7 @@ export function App({ desktop = false }: { desktop?: boolean }) {
                 title="New conversation"
                 disabled={!configured || busy}
                 onClick={() => {
-                  setSelectedThread(undefined);
-                  setPendingPrompt(undefined);
-                  setView('chat');
+                  navigateDestination({ dotId: dot.id });
                 }}
               >
                 <Plus size={17} />
@@ -775,25 +742,28 @@ export function App({ desktop = false }: { desktop?: boolean }) {
               >
                 <Settings2 size={17} />
               </button>
-              <a
+              <button
                 className="icon-button"
                 aria-label="Open full workspace"
                 title="Open full workspace"
-                href="/"
-                target="_blank"
-                rel="noreferrer"
+                onClick={() =>
+                  void window.dotWorkspace
+                    ?.openWorkspace({ dotId: dot.id, threadId: thread?.id })
+                    .catch((e) => setError(e.message))
+                }
               >
                 <ArrowUpRight size={17} />
-              </a>
+              </button>
             </div>
             <select
               className="companion-history"
               aria-label="Conversation history"
               value={thread?.id ?? ''}
               onChange={(event) => {
-                setSelectedThread(event.target.value || undefined);
-                setPendingPrompt(undefined);
-                setView('chat');
+                navigateDestination({
+                  dotId: dot.id,
+                  threadId: event.target.value || undefined,
+                });
               }}
             >
               <option value="">A new conversation</option>
@@ -808,33 +778,30 @@ export function App({ desktop = false }: { desktop?: boolean }) {
           </header>
         )}
         <header className="topbar">
-          <button
-            className="desktop-nav-toggle document-icon"
-            aria-label={navCollapsed ? 'Show navigation' : 'Hide navigation'}
-            onClick={() => setNavCollapsed(!navCollapsed)}
-          >
-            <PanelLeft size={18} />
-          </button>
           <div className="breadcrumbs">
             <span>
               {view === 'space'
                 ? workspace.spaces.find((space) => space.id === spaceId)?.name
-                : 'Dots'}
+                : view === 'chat'
+                  ? 'Chats'
+                  : 'Workspace'}
             </span>
             <span>/</span>
             <strong>
               {view === 'chat'
-                ? dot.name
+                ? thread?.title || 'New conversation'
                 : view === 'tasks'
                   ? 'Activity'
                   : view === 'space'
                     ? 'Pages'
-                    : 'Memories'}
+                    : view === 'settings'
+                      ? 'Settings'
+                      : 'Memory'}
             </strong>
           </div>
           <div className="top-actions">
             <span className="mode-badge">
-              {configured ? 'SELF-HOSTED' : 'SETUP REQUIRED'}
+              {configured ? 'LOCAL WORKSPACE' : 'SETUP REQUIRED'}
             </span>
             <button
               className="pause-button"
@@ -860,6 +827,29 @@ export function App({ desktop = false }: { desktop?: boolean }) {
             </button>
           </div>
         </header>
+        {backendStatus && backendStatus.phase !== 'ready' && (
+          <div className="backend-notice" role="status">
+            <span>{backendStatus.message}</span>
+            <button
+              onClick={() =>
+                void window.dotWorkspace
+                  ?.retry()
+                  .catch((e) => setError(e.message))
+              }
+            >
+              Retry connection
+            </button>
+            <button
+              onClick={() =>
+                void window.dotWorkspace
+                  ?.openBackendSettings()
+                  .catch((e) => setError(e.message))
+              }
+            >
+              Workspace setup
+            </button>
+          </div>
+        )}
         {error && (
           <div className="error-banner" role="alert">
             <span>{error}</span>
@@ -877,7 +867,29 @@ export function App({ desktop = false }: { desktop?: boolean }) {
             All Dots are paused. Active compute stops and scheduled tasks wait.
           </div>
         )}
-        {view === 'space' ? (
+        {view === 'settings' ? (
+          <WorkspaceDialog
+            embedded
+            dialog={{ type: 'settings' }}
+            state={state}
+            workspace={workspace}
+            onClose={() => setView('chat')}
+            mutate={mutate}
+          />
+        ) : view === 'space' && !workspace.spaces.length ? (
+          <main className="large-empty">
+            <BookOpen size={36} />
+            <h1>A Space for your next idea</h1>
+            <p>Bring pages, context and specialist Dots together.</p>
+            <button
+              className="primary"
+              onClick={() => setDialog({ type: 'space' })}
+            >
+              <Plus size={16} />
+              Create Space
+            </button>
+          </main>
+        ) : view === 'space' ? (
           <SpaceWorkspace
             key={spaceId}
             space={
@@ -896,9 +908,7 @@ export function App({ desktop = false }: { desktop?: boolean }) {
             onThread={(id) => {
               const target = workspace.conversations.find((t) => t.id === id);
               if (target) {
-                setView('chat');
-                setSelectedDot(target.dotId);
-                setSelectedThread(id);
+                navigateDestination({ dotId: target.dotId, threadId: id });
               }
             }}
           />
@@ -980,23 +990,17 @@ export function App({ desktop = false }: { desktop?: boolean }) {
                           Settings to start chatting. Your Spaces and Dot
                           preferences are ready to use.
                         </p>
-                        <p>
-                          Setup and usage metadata is collected by default.{' '}
-                          <a
-                            href="https://github.com/CopilotKit/OpenDots/blob/main/docs/SETUP-TELEMETRY.md"
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Tracking and opt-out details
-                          </a>
-                        </p>
-                        <a
-                          href="https://github.com/CopilotKit/OpenDots/blob/main/docs/SETUP.md"
-                          target="_blank"
-                          rel="noreferrer"
+                        <button
+                          onClick={() =>
+                            window.dotWorkspace
+                              ? void window.dotWorkspace
+                                  .openBackendSettings()
+                                  .catch((e) => setError(e.message))
+                              : setView('settings')
+                          }
                         >
-                          Open the setup guide <ArrowUpRight size={12} />
-                        </a>
+                          Workspace setup <ArrowUpRight size={12} />
+                        </button>
                       </div>
                     </div>
                   )}
@@ -1086,11 +1090,7 @@ export function App({ desktop = false }: { desktop?: boolean }) {
             <div className="page-heading">
               <div>
                 <span className="eyebrow">YOUR WORKSPACE</span>
-                <h1>
-                  {view === 'memories'
-                    ? 'Memories'
-                    : 'A little follow-through.'}
-                </h1>
+                <h1>{view === 'memories' ? 'Memories' : 'Activity'}</h1>
                 <p>
                   {view === 'memories'
                     ? 'Preferences you choose to share with your Dots.'
@@ -1286,6 +1286,18 @@ export function App({ desktop = false }: { desktop?: boolean }) {
           </div>
         )}
       </div>
+      {quickOpen && (
+        <QuickNavigation
+          workspace={workspace}
+          onClose={() => setQuickOpen(false)}
+          onChoose={(item) => {
+            const accepted = item.destination
+              ? navigateDestination(item.destination)
+              : setView(item.view);
+            if (accepted) setQuickOpen(false);
+          }}
+        />
+      )}
       {dialog && (
         <WorkspaceDialog
           dialog={dialog}

@@ -4,12 +4,12 @@ import { App } from './App';
 import './style.css';
 import './editor.css';
 import './desktop-chat.css';
+import './workspace.css';
+import { surfaceFromSearch } from './workspace-navigation';
 import { watchSystemTheme } from './theme';
 watchSystemTheme();
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App
-      desktop={new URLSearchParams(location.search).get('desktop') === '1'}
-    />
+    <App surface={surfaceFromSearch(location.search)} />
   </React.StrictMode>,
 );
