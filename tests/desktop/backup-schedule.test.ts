@@ -1,12 +1,15 @@
+import * as fs from 'node:fs/promises';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   BackupSchedule,
   selectRetainedBackups,
   type BackupRecord,
 } from '../../src/desktop/host/backup-schedule.ts';
+
+vi.mock('node:fs/promises', { spy: true });
 
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -178,4 +181,44 @@ describe('automatic backup schedule', () => {
     );
     expect(f.calls()).toBe(1);
   });
+});
+
+it('preserves success when status and tick initialize concurrently', async () => {
+  const f = await fixture();
+  await fs.mkdir(join(f.stateFile, '..'), { recursive: true });
+  await fs.writeFile(f.stateFile, JSON.stringify({ version: 1 }));
+  const initial = await fs.readFile(f.stateFile, 'utf8');
+  const originalRead = (
+    await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+  ).readFile;
+  let reads = 0;
+  let release!: () => void;
+  const delayed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  // Model a metadata read opened before rename but delivered after success.
+  const spy = vi.mocked(fs.readFile).mockImplementation(((
+    ...args: Parameters<typeof fs.readFile>
+  ) => {
+    if (++reads === 2) return delayed.then(() => initial);
+    return originalRead(...args);
+  }) as typeof fs.readFile);
+  const schedule = new BackupSchedule(f.options);
+  const tick = schedule.tick({ now, revision: 'r1', idle: true });
+  const status = schedule.status();
+  try {
+    await tick;
+    release();
+    await status;
+    const after = await schedule.status();
+    await schedule.tick({ now: now + 1000, revision: 'r1', idle: true });
+    expect({
+      revision: after.lastSuccess?.revision,
+      backups: f.calls(),
+    }).toEqual({ revision: 'r1', backups: 1 });
+  } finally {
+    release();
+    await Promise.allSettled([tick, status]);
+    spy.mockRestore();
+  }
 });

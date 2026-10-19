@@ -43,6 +43,9 @@ export class MaintenanceGate {
             new Error('Automatic snapshot yielded to foreground activity.'),
           );
         }
+        // abort listeners may finish cleanup and release synchronously. Do not
+        // subscribe after that notification and wait for a release that happened.
+        if (!this.snapshot) continue;
         await this.wait(AbortSignal.any([signal, this.closed.signal]));
       }
       signal.throwIfAborted();

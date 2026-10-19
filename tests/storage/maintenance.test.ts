@@ -200,3 +200,28 @@ describe('workspace maintenance gate', () => {
     ).rejects.toThrow(/closed/i);
   });
 });
+
+it('admits foreground when cancelled snapshot cleanup releases synchronously', async () => {
+  const gate = new MaintenanceGate();
+  const snapshot = await gate.acquire({
+    origin: 'automatic',
+    signal: signal(),
+  });
+  snapshot.signal.addEventListener('abort', snapshot.release, { once: true });
+  let admitted = false;
+  const writer = gate
+    .enterWrite(signal())
+    .then((release) => {
+      admitted = true;
+      release();
+    })
+    .catch(() => {});
+  try {
+    await turn();
+    expect(admitted).toBe(true);
+    expect(gate.status()).toEqual({ held: false, activeWrites: 0 });
+  } finally {
+    gate.close();
+    await writer;
+  }
+});

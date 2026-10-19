@@ -73,7 +73,7 @@ const stateSchema = z
   .strict();
 export type BackupScheduleState = z.infer<typeof stateSchema>;
 interface Options {
-  /** App-owned desktop profile metadata, outside the workspace being backed up. */
+  /** Workspace-specific desktop profile metadata, outside the workspace being backed up. */
   stateFile: string;
   /** Resolves only after the archive is published and independently verified. */
   backup: () => Promise<BackupRecord>;
@@ -85,6 +85,7 @@ interface Options {
 export class BackupSchedule {
   private state?: BackupScheduleState;
   private pending?: Promise<void>;
+  private loading?: Promise<void>;
   constructor(private readonly options: Options) {}
 
   async status(): Promise<BackupScheduleState> {
@@ -161,8 +162,14 @@ export class BackupSchedule {
     }
   }
 
-  private async load(): Promise<void> {
-    if (this.state) return;
+  private load(): Promise<void> {
+    if (this.state) return Promise.resolve();
+    return (this.loading ??= this.readState().finally(() => {
+      this.loading = undefined;
+    }));
+  }
+
+  private async readState(): Promise<void> {
     try {
       this.state = stateSchema.parse(
         JSON.parse(await readFile(this.options.stateFile, 'utf8')),
