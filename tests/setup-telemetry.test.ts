@@ -276,3 +276,32 @@ it('bounds a shutdown flush and retains events that did not fit its deadline', a
     store.close();
   }
 });
+
+it('defers telemetry delivery and capture until snapshot readers release', async () => {
+  const { MaintenanceGate } =
+    await import('../src/server/storage/maintenance.js');
+  const gate = new MaintenanceGate();
+  const store = new Store(':memory:');
+  const send = vi.fn(async () => {});
+  const telemetry = new SetupTelemetry(store, {}, send, () => {}, gate);
+  const lease = await gate.acquire({
+    origin: 'manual',
+    signal: new AbortController().signal,
+  });
+  const before = store.setupTelemetryState();
+  const capture = telemetry.capture({ kind: 'step_viewed', step: 'ready' });
+  const flushing = telemetry.flush();
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(store.setupTelemetryState()).toBe(before);
+    expect(send).not.toHaveBeenCalled();
+  } finally {
+    lease.release();
+  }
+  await capture;
+  await flushing;
+  expect(send).toHaveBeenCalledOnce();
+  expect(JSON.parse(store.setupTelemetryState()!).queue).toEqual([]);
+  await telemetry.stop();
+  store.close();
+});

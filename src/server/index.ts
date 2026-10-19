@@ -110,6 +110,7 @@ const runner = new Runner(
     return { text, sources: [], sample: false };
   },
   config.agentRunTimeoutMs,
+  platform.maintenance,
 );
 const wsOrigin =
   config.conversationBackend === 'local'
@@ -157,7 +158,10 @@ const server = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
     );
 });
 const shutdown = createShutdown({
-  stopRunner: () => runner.stop(),
+  stopRunner: () => {
+    platform.maintenance.close();
+    runner.stop();
+  },
   stopPlatform: async () => {
     await localVoice.close();
     await platform.stop();

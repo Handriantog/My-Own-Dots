@@ -1,3 +1,4 @@
+import type { MaintenanceGate } from './storage/maintenance.js';
 import { memoryRoutes } from './memory-routes.js';
 import { computerRoutes } from './computer-routes.js';
 import { connectionRoutes } from './connection-routes.js';
@@ -23,6 +24,7 @@ export interface AppOptions {
   origin?: string | string[];
   platform?: Platform;
   localVoice?: LocalVoiceService;
+  maintenance?: MaintenanceGate;
 }
 export function createApp({
   store,
@@ -32,6 +34,7 @@ export function createApp({
   origin,
   platform,
   localVoice,
+  maintenance = platform?.maintenance,
 }: AppOptions) {
   const app = new Hono();
   app.use(
@@ -96,6 +99,28 @@ export function createApp({
       return c.json({ error: 'Use application/json.' }, 415);
     await next();
   });
+  app.use('/api/*', async (c, next) => {
+    const path = c.req.path;
+    const read = c.req.method === 'GET' || c.req.method === 'HEAD';
+    // These control/read endpoints do not initialize or mutate workspace data.
+    // Snapshot operations own their separate reader lease; they must never
+    // acquire a writer lease while trying to drain the writers themselves.
+    const independent =
+      (read &&
+        [
+          '/api/state',
+          '/api/desktop/identity',
+          '/api/local-voice/status',
+          '/api/copilotkit/info',
+        ].includes(path)) ||
+      /^\/api\/storage\/snapshots(?:\/[^/]+(?:\/(?:cancel|release))?)?$/.test(
+        path,
+      ) ||
+      /^\/api\/copilotkit\/agent\/[^/]+\/stop$/.test(path) ||
+      /^\/api\/local-voice\/calls\/[^/]+\/control$/.test(path);
+    if (!maintenance || independent) return next();
+    await maintenance.runWrite(c.req.raw.signal, next, { background: read });
+  });
   if (platform) app.route('/api', computerRoutes(platform.computers));
   app.route('/api', localVoiceRoutes(localVoice));
   if (platform?.workspace?.folders)
@@ -112,7 +137,9 @@ export function createApp({
     text: string;
     createdAt: number;
   }) => ({ id: item.id, text: item.text, createdAt: item.createdAt });
-  const voice = platform ? new VoiceService(platform) : undefined;
+  const voice = platform
+    ? (platform.voice ?? new VoiceService(platform))
+    : undefined;
   if (platform && voice) app.route('/api', workspaceRoutes(platform, voice));
   app.get('/api/state', (c) =>
     c.json({

@@ -151,6 +151,7 @@ export interface VoiceCallPort {
     error?: string,
   ): void;
   delivery(rows: VoiceDelivery[]): void;
+  closed?(): void;
 }
 export class LiveVoiceCall {
   private readonly controller = new AbortController();
@@ -986,8 +987,12 @@ export class LiveVoiceCall {
           ),
         ]);
       } finally {
-        this.port.delivery(this.deliveries);
-        this.port.receipt(error ? 'failed' : 'ended', this.transcript, error);
+        try {
+          this.port.delivery(this.deliveries);
+          this.port.receipt(error ? 'failed' : 'ended', this.transcript, error);
+        } finally {
+          this.port.closed?.();
+        }
       }
     });
     this.controller.abort(new DOMException('Call ended', 'AbortError'));

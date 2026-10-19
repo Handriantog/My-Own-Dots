@@ -20,6 +20,7 @@ import { InferenceScheduler } from './inference-scheduler.js';
 import { MemoryJobs, type MemoryJob } from './memory-jobs.js';
 import { DreamAnalysis } from './dream-analysis.js';
 import { DreamPublication } from './dream-publication.js';
+import type { MaintenanceGate } from './storage/maintenance.js';
 export function learningDayKey(now: number, timeZone: string): string {
   const parts = new Intl.DateTimeFormat('en', {
     timeZone,
@@ -42,6 +43,7 @@ function pendingApproval(messages: Message[]): boolean {
   );
 }
 interface Options {
+  maintenance?: MaintenanceGate;
   pg?: Pool;
   clock?: () => number;
   invoke?: (options: AgentOptions) => Promise<AgentResult>;
@@ -63,6 +65,8 @@ export class MemoryMaintenance {
   private worker?: Promise<void>;
   private active?: { job: MemoryJob; controller: AbortController };
   private closing = false;
+  private readonly shutdown = new AbortController();
+  private maintenance?: MaintenanceGate;
   private lastInteractiveAt: number;
   private lastError?: string;
   private scanCursor = 0;
@@ -82,6 +86,7 @@ export class MemoryMaintenance {
     readonly config: LocalAiConfig,
     options: Options = {},
   ) {
+    this.maintenance = options.maintenance;
     this.clock = options.clock ?? Date.now;
     this.invoke = options.invoke ?? runAgent;
     this.lastInteractiveAt = this.clock();
@@ -141,6 +146,7 @@ export class MemoryMaintenance {
   }
   pause(): void {
     this.closing = true;
+    this.shutdown.abort(new Error('Memory maintenance stopped'));
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     this.active?.controller.abort(new Error('Maintenance stopped'));
@@ -402,9 +408,20 @@ export class MemoryMaintenance {
   tick(now = this.clock()): Promise<void> {
     if (this.closing) return Promise.resolve();
     if (this.ticking) return this.ticking;
-    this.ticking = this.advance(now).finally(() => {
-      this.ticking = undefined;
-    });
+    const work = this.maintenance
+      ? this.maintenance.runWrite(
+          this.shutdown.signal,
+          () => this.advance(now),
+          { background: true },
+        )
+      : this.advance(now);
+    this.ticking = work
+      .catch((error) => {
+        if (!this.closing) throw error;
+      })
+      .finally(() => {
+        this.ticking = undefined;
+      });
     return this.ticking;
   }
   private async advance(now: number): Promise<void> {
@@ -538,17 +555,33 @@ export class MemoryMaintenance {
     }
     const job = await this.jobs.claim(now, this.lastInteractiveAt);
     if (job)
-      this.worker = this.execute(job).finally(() => {
-        this.worker = undefined;
-      });
+      this.worker = (
+        this.maintenance
+          ? this.maintenance.runWrite(
+              new AbortController().signal,
+              () => this.execute(job),
+              { background: true },
+            )
+          : this.execute(job)
+      )
+        .catch(() => {
+          this.lastError =
+            'Memory maintenance could not save its outcome; evidence is retained.';
+        })
+        .finally(() => {
+          this.worker = undefined;
+        });
   }
   private async execute(job: MemoryJob): Promise<void> {
     const controller = new AbortController();
     this.active = { job, controller };
+    const renewals = new Set<Promise<unknown>>();
     const renewal = setInterval(() => {
-      void this.jobs
+      const pending = this.jobs
         .renew(job.id, job.leaseToken!)
-        .catch(() => controller.abort(new Error('Maintenance lease lost')));
+        .catch(() => controller.abort(new Error('Maintenance lease lost')))
+        .finally(() => renewals.delete(pending));
+      renewals.add(pending);
     }, 20000);
     renewal.unref();
     const timeout = setTimeout(
@@ -662,6 +695,7 @@ export class MemoryMaintenance {
     } finally {
       clearInterval(renewal);
       clearTimeout(timeout);
+      await Promise.allSettled(renewals);
       this.active = undefined;
     }
   }

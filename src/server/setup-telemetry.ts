@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { EventType } from '@ag-ui/core';
 import { z } from 'zod';
 import type { Store } from './store.js';
+import type { MaintenanceGate } from './storage/maintenance.js';
 
 const step = z.enum(['setup_required', 'ready', 'settings']);
 const viewed = z.object({ kind: z.literal('step_viewed'), step }).strict();
@@ -98,6 +99,8 @@ const productionSend: Send = async (identity, body) => {
 export class SetupTelemetry {
   private state?: State;
   private pending?: Promise<void>;
+  private captures = new Set<Promise<void>>();
+  private readonly signal = new AbortController().signal;
   private timer?: ReturnType<typeof setInterval>;
   constructor(
     private store: Store,
@@ -109,6 +112,7 @@ export class SetupTelemetry {
         context: { component: 'setup_telemetry' },
         timestamp: new Date().toISOString(),
       }),
+    private maintenance?: MaintenanceGate,
   ) {
     if (!this.enabled()) return;
     try {
@@ -132,7 +136,7 @@ export class SetupTelemetry {
         : this.state.installationId;
       if (this.state.lastStep && !this.state.activated) {
         const last = this.state.lastStep;
-        this.capture({ kind: 'setup_abandoned', step: last });
+        this.captureNow({ kind: 'setup_abandoned', step: last });
       }
       this.persist();
     } catch {
@@ -174,6 +178,23 @@ export class SetupTelemetry {
     }
   }
   capture(input: SetupEvent) {
+    if (!this.maintenance) return this.captureNow(input);
+    const pending = this.maintenance
+      .runWrite(
+        this.signal,
+        async () => {
+          this.captureNow(input);
+        },
+        { background: true },
+      )
+      .catch(() => this.report('storage_failed'))
+      .finally(() => {
+        this.captures.delete(pending);
+      });
+    this.captures.add(pending);
+    return pending;
+  }
+  private captureNow(input: SetupEvent) {
     if (!this.enabled() || !this.state) return;
     const parsed = eventSchema.safeParse(input);
     if (!parsed.success) {
@@ -200,7 +221,7 @@ export class SetupTelemetry {
     this.persist();
   }
   start() {
-    if (this.timer || !this.enabled()) return;
+    if (this.timer || !this.state) return;
     // Delivery is independent of setup; flush reports failures with closed diagnostics.
     void this.flush();
     this.timer = setInterval(() => void this.flush(), 15000);
@@ -210,15 +231,26 @@ export class SetupTelemetry {
     clearInterval(this.timer);
     this.timer = undefined;
     if (this.state?.lastStep)
-      this.capture({ kind: 'setup_abandoned', step: this.state.lastStep });
+      await this.capture({
+        kind: 'setup_abandoned',
+        step: this.state.lastStep,
+      });
     await this.flush();
   }
   flush(): Promise<void> {
-    return (this.pending ??= this.deliver()
+    return (this.pending ??= this.flushCaptured()
       .catch(() => this.report('delivery_failed'))
       .finally(() => {
         this.pending = undefined;
       }));
+  }
+  private async flushCaptured() {
+    await Promise.all(this.captures);
+    if (this.maintenance) {
+      await this.maintenance.runWrite(this.signal, () => this.deliver(), {
+        background: true,
+      });
+    } else await this.deliver();
   }
   private async deliver() {
     if (!this.enabled() || !this.state || !this.persist()) return;

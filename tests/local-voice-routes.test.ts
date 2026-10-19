@@ -1,3 +1,4 @@
+import { MaintenanceGate } from '../src/server/storage/maintenance.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -40,6 +41,7 @@ async function fixture() {
   const receipt = vi.fn();
   const release = vi.fn();
   const platform = {
+    maintenance: new MaintenanceGate(),
     config: { conversationBackend: 'local', llmBackend: 'subscription' },
     setup: () => ({ missing: [] }),
     requireReady: () => {},
@@ -512,4 +514,41 @@ describe('local voice HTTP security boundaries', () => {
     expect(getEventListeners(call.endSignal, 'abort')).toHaveLength(0);
     expect(vi.getTimerCount()).toBe(0);
   });
+});
+
+it('refuses manual snapshots until local voice workers and final receipts settle', async () => {
+  const f = await fixture();
+  const handle = await f.start();
+  const gate = f.platform.maintenance;
+  await expect(
+    gate.acquire({ origin: 'manual', signal: new AbortController().signal }),
+  ).rejects.toThrow(/busy/i);
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  f.close.mockReturnValue(pending);
+  const ending = f.service.require(handle.id, handle.token).end();
+  let captured = false;
+  const snapshot = gate
+    .acquire({ origin: 'automatic', signal: new AbortController().signal })
+    .then((lease) => {
+      captured = true;
+      return lease;
+    });
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(captured).toBe(false);
+  } finally {
+    finish();
+  }
+  await ending;
+  const lease = await snapshot;
+  expect(f.receipt).toHaveBeenLastCalledWith(
+    expect.any(String),
+    'ended',
+    expect.any(String),
+    undefined,
+  );
+  lease.release();
 });

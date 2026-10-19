@@ -1,3 +1,4 @@
+import type { MaintenanceGate } from './storage/maintenance.js';
 import { memoryMetrics } from './memory-metrics.js';
 import type { EvidenceGuard } from '../shared/memory.js';
 import {
@@ -77,6 +78,7 @@ export class LocalAgentRunner extends AgentRunner {
         threadId?: string,
       ): Promise<() => void>;
     },
+    private maintenance?: MaintenanceGate,
   ) {
     super();
   }
@@ -109,7 +111,17 @@ export class LocalAgentRunner extends AgentRunner {
       done: Promise.resolve(),
     };
     this.active.set(request.threadId, active);
-    active.done = this.execute(request, active);
+    active.done = (
+      this.maintenance
+        ? this.maintenance.runWrite(active.activityController.signal, () =>
+            this.execute(request, active),
+          )
+        : this.execute(request, active)
+    ).catch((error: unknown) => {
+      this.active.delete(request.threadId);
+      subject.next(runError(error));
+      subject.complete();
+    });
     return subject.asObservable();
   }
 

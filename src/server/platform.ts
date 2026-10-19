@@ -1,3 +1,4 @@
+import { MaintenanceGate } from './storage/maintenance.js';
 import { MemoryMaintenance } from './memory-maintenance.js';
 import { PostgresConversations } from './local-conversations.js';
 import { LocalAgentRunner } from './local-runner.js';
@@ -26,7 +27,10 @@ import {
 import { validateRuntimeScope } from './runtime-scope.js';
 import { learningSelector } from './learning.js';
 import { SetupTelemetry } from './setup-telemetry.js';
+import { VoiceService } from './voice.js';
 export class Platform {
+  readonly maintenance = new MaintenanceGate();
+  readonly voice = new VoiceService(this);
   private channelStartupFailed = false;
   readonly setupTelemetry: SetupTelemetry;
   readonly pages: PageService;
@@ -42,7 +46,13 @@ export class Platform {
     readonly workspace: WorkspaceStore,
     readonly config: PlatformConfig,
   ) {
-    this.setupTelemetry = new SetupTelemetry(store);
+    this.setupTelemetry = new SetupTelemetry(
+      store,
+      undefined,
+      undefined,
+      undefined,
+      this.maintenance,
+    );
     this.computers = new ComputerService(
       workspace,
       config,
@@ -60,10 +70,13 @@ export class Platform {
         workspace.ownerId,
       );
       if (config.llmBackend === 'subscription')
-        this.memory = new MemoryMaintenance(store, workspace, config);
+        this.memory = new MemoryMaintenance(store, workspace, config, {
+          maintenance: this.maintenance,
+        });
       this.localRunner = new LocalAgentRunner(
         this.localConversations,
         this.memory,
+        this.maintenance,
       );
     } else {
       if (!config.intelligenceKey) return;
@@ -159,7 +172,13 @@ export class Platform {
       );
   }
   async start() {
-    await this.localConversations?.initialize();
+    await this.maintenance.runWrite(
+      new AbortController().signal,
+      async () => {
+        await this.localConversations?.initialize();
+      },
+      { background: true },
+    );
     this.memory?.start();
     this.setupTelemetry.start();
     if (this.handler?.channels) {
@@ -178,14 +197,16 @@ export class Platform {
     }
   }
   async stop() {
+    this.maintenance.close();
     this.memory?.pause();
     try {
-      await this.localRunner?.close();
+      await Promise.all([this.voice.close(), this.localRunner?.close()]);
     } finally {
       await this.memory?.stop();
-      await this.localConversations?.close();
       await this.setupTelemetry.stop();
       await this.handler?.channels?.stop();
+      await this.maintenance.drain();
+      await this.localConversations?.close();
     }
   }
   /** Cancel only a run whose latest input is the server-issued voice message. */

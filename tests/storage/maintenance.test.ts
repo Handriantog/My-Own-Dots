@@ -225,3 +225,34 @@ it('admits foreground when cancelled snapshot cleanup releases synchronously', a
     await writer;
   }
 });
+
+it('keeps shutdown draining until both readers and already admitted writers finish', async () => {
+  const gate = new MaintenanceGate();
+  const writer = await gate.enterWrite(new AbortController().signal, {
+    background: true,
+  });
+  gate.close();
+  let drained = false;
+  const waiting = gate.drain().then(() => {
+    drained = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(drained).toBe(false);
+  writer();
+  await waiting;
+  const other = new MaintenanceGate();
+  const reader = await other.acquire({
+    origin: 'manual',
+    signal: new AbortController().signal,
+  });
+  other.close();
+  drained = false;
+  const cleaning = other.drain().then(() => {
+    drained = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(reader.signal.aborted).toBe(true);
+  expect(drained).toBe(false);
+  reader.release();
+  await cleaning;
+});

@@ -89,7 +89,6 @@ export class LocalVoiceService {
   ): Promise<Buffer> {
     if (this.starting || this.previewing || (this.call && !this.call.ended))
       throw Error('End the current audio before previewing a voice.');
-    this.settings(dotId); // Verify the Dot belongs to this workspace.
     const settings = voiceSettingsSchema.parse(input);
     const controller = new AbortController();
     const signal = AbortSignal.any([
@@ -103,11 +102,12 @@ export class LocalVoiceService {
       done: Promise.resolve(Buffer.alloc(0)),
     };
     this.previewing = work;
-    work.done = Promise.resolve().then(async () => {
+    const preview = async () => {
       let worker: LocalSpeechWorker | undefined;
       let release: (() => void) | undefined;
       try {
         signal.throwIfAborted();
+        this.settings(dotId); // Verify the Dot belongs to this workspace.
         if (
           !(await this.status()).ready ||
           this.platform.store.settings().paused
@@ -137,6 +137,13 @@ export class LocalVoiceService {
           if (this.previewing === work) this.previewing = undefined;
         }
       }
+    };
+    work.done = (
+      this.platform.maintenance
+        ? this.platform.maintenance.runWrite(signal, preview)
+        : Promise.resolve().then(preview)
+    ).finally(() => {
+      if (this.previewing === work) this.previewing = undefined;
     });
     return work.done;
   }
@@ -214,7 +221,9 @@ export class LocalVoiceService {
       120000,
     );
     timeout.unref?.();
+    let release: (() => void) | undefined;
     try {
+      release = await this.platform.maintenance?.enterWrite(signal);
       signal.throwIfAborted();
       if (this.previewing) {
         this.previewing.controller.abort(new Error('Voice preview stopped.'));
@@ -299,6 +308,7 @@ export class LocalVoiceService {
           },
           delivery: (rows) =>
             this.platform.workspace.saveVoiceDelivery(receipt.id, rows),
+          closed: release,
         },
         () => {
           return {
@@ -309,6 +319,8 @@ export class LocalVoiceService {
           };
         },
       );
+      // The call owns admission through worker cleanup and its final receipts.
+      release = undefined;
       this.call = call;
       const abort = () => {
         void call.end('Call startup was cancelled.');
@@ -323,6 +335,7 @@ export class LocalVoiceService {
         signal.removeEventListener('abort', abort);
       }
     } finally {
+      release?.();
       clearTimeout(timeout);
       this.starting = false;
     }

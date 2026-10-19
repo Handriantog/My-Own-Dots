@@ -267,3 +267,34 @@ it('rejects DNS-rebinding Host even with a matching hostile Origin', async () =>
   });
   expect(response.status).toBe(403);
 });
+
+it('holds HTTP mutations during snapshots while keeping read-only status available', async () => {
+  const { MaintenanceGate } =
+    await import('../src/server/storage/maintenance.js');
+  const gate = new MaintenanceGate();
+  const store = new Store(':memory:');
+  stores.push(store);
+  const runner = new Runner(store, config);
+  const app = createApp({ store, runner, config, maintenance: gate });
+  const lease = await gate.acquire({
+    origin: 'manual',
+    signal: new AbortController().signal,
+  });
+  let returned = false;
+  const writing = Promise.resolve(
+    app.request('/api/tasks', json({ prompt: 'Wait for snapshot' })),
+  ).then((response) => {
+    returned = true;
+    return response;
+  });
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(returned).toBe(false);
+    expect(store.tasks()).toHaveLength(0);
+    expect((await app.request('/api/state')).status).toBe(200);
+  } finally {
+    lease.release();
+  }
+  expect((await writing).status).toBe(201);
+  expect(store.tasks()).toHaveLength(1);
+});

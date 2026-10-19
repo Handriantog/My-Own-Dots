@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { Store } from '../src/server/store.js';
 import { WorkspaceStore } from '../src/server/workspace.js';
+import { MaintenanceGate } from '../src/server/storage/maintenance.js';
 import { VoiceService } from '../src/server/voice.js';
 import type { PlatformConfig } from '../src/server/platform-config.js';
 const resources: (() => void)[] = [];
@@ -8,7 +9,7 @@ afterEach(() => {
   resources.splice(0).forEach((close) => close());
   vi.useRealTimers();
 });
-function fixture() {
+function fixture(maintenance?: MaintenanceGate) {
   const store = new Store(':memory:');
   const workspace = new WorkspaceStore(':memory:', 'owner');
   workspace.bindThread('thread', workspace.dots()[0].id, 'A conversation');
@@ -40,6 +41,7 @@ function fixture() {
     {
       workspace,
       store,
+      maintenance,
       config,
       turn,
       history,
@@ -328,4 +330,67 @@ it('keeps successful compute turns cached and enforces the six-turn cap', async 
     'six compute-turn limit',
   );
   await f.voice.end(call.id, '');
+});
+
+it('keeps remote voice admitted through final receipt and expiration cleanup', async () => {
+  const gate = new MaintenanceGate();
+  const f = fixture(gate);
+  const call = await f.voice.begin(
+    'thread',
+    offer,
+    new AbortController().signal,
+  );
+  await expect(
+    gate.acquire({ origin: 'manual', signal: new AbortController().signal }),
+  ).rejects.toThrow(/busy/i);
+  let finish!: (value: string) => void;
+  f.turn.mockImplementationOnce(
+    () =>
+      new Promise<string>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const ending = f.voice.end(call.id, 'Confirmed');
+  await vi.waitFor(() => expect(f.turn).toHaveBeenCalled());
+  let captured = false;
+  const snapshot = gate
+    .acquire({ origin: 'automatic', signal: new AbortController().signal })
+    .then((lease) => {
+      captured = true;
+      return lease;
+    });
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(captured).toBe(false);
+  } finally {
+    finish('saved');
+  }
+  await ending;
+  const lease = await snapshot;
+  expect(f.workspace.call(call.id).transcript).toBe('Confirmed');
+  lease.release();
+  const next = await f.voice.begin(
+    'thread',
+    offer,
+    new AbortController().signal,
+  );
+  let cleanup!: () => void;
+  f.transport.mockImplementationOnce(
+    () =>
+      new Promise<Response>((resolve) => {
+        cleanup = () => resolve(new Response(null, { status: 200 }));
+      }),
+  );
+  const closing = f.voice.close();
+  await vi.waitFor(() => expect(cleanup).toBeTypeOf('function'));
+  await expect(
+    gate.acquire({ origin: 'manual', signal: new AbortController().signal }),
+  ).rejects.toThrow(/busy/i);
+  cleanup();
+  await closing;
+  expect(f.workspace.call(next.id).status).toBe('failed');
+  expect(gate.status().activeWrites).toBe(0);
+  await expect(
+    f.voice.begin('thread', offer, new AbortController().signal),
+  ).rejects.toThrow();
 });

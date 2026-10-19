@@ -201,3 +201,38 @@ it('aborts work instead of throwing from an ownership timer', async () => {
     store.close();
   }
 });
+
+it('defers scheduled claims through snapshot cleanup and cancels queued work on shutdown', async () => {
+  const { MaintenanceGate } =
+    await import('../src/server/storage/maintenance.js');
+  const gate = new MaintenanceGate();
+  const store = new Store(':memory:');
+  const task = store.createTask('Snapshot-safe scheduled task');
+  let called = false;
+  const runner = new Runner(
+    store,
+    config,
+    async () => {
+      called = true;
+      return { text: 'Done', sources: [], sample: false };
+    },
+    1000,
+    gate,
+  );
+  const lease = await gate.acquire({
+    origin: 'manual',
+    signal: new AbortController().signal,
+  });
+  const ticking = runner.tick();
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(called).toBe(false);
+    expect(store.detail(task.id)?.runs).toHaveLength(0);
+    runner.stop();
+  } finally {
+    lease.release();
+  }
+  await ticking;
+  expect(called).toBe(false);
+  store.close();
+});

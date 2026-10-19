@@ -41,7 +41,7 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
         (platform.setup().missing.length ? 'setup_required' : 'ready')
     )
       return c.json({ error: 'Setup step does not match server state.' }, 400);
-    platform.setupTelemetry.capture(event);
+    await platform.setupTelemetry.capture(event);
     return c.json({ ok: true });
   });
   app.get('/workspace', (c) =>

@@ -126,6 +126,11 @@ export class MaintenanceGate {
     this.notify();
   }
 
+  async drain(): Promise<void> {
+    const signal = new AbortController().signal;
+    while (this.writes > 0 || this.snapshot) await this.wait(signal);
+  }
+
   private notify(): void {
     for (const wake of [...this.changed]) wake();
   }

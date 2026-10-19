@@ -304,3 +304,102 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
     }
   },
 );
+
+it('queues background scans behind snapshots and cancels admission on stop', async () => {
+  const { MaintenanceGate } =
+    await import('../src/server/storage/maintenance.js');
+  const gate = new MaintenanceGate();
+  const pg = new Pool();
+  const query = vi.spyOn(pg, 'query').mockResolvedValue({ rows: [] } as never);
+  const store = new Store(':memory:');
+  const ws = new WorkspaceStore(':memory:', 'admission-owner');
+  const memory = new MemoryMaintenance(
+    store,
+    ws,
+    {},
+    { pg, maintenance: gate },
+  );
+  const lease = await gate.acquire({
+    origin: 'manual',
+    signal: new AbortController().signal,
+  });
+  const ticking = memory.tick();
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(query).not.toHaveBeenCalled();
+    memory.pause();
+  } finally {
+    lease.release();
+  }
+  await ticking;
+  await memory.stop();
+  expect(query).not.toHaveBeenCalled();
+  ws.close();
+  store.close();
+  await pg.end();
+});
+
+it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
+  'drains Dream publication through the final PostgreSQL acknowledgement',
+  async () => {
+    const { MaintenanceGate } =
+      await import('../src/server/storage/maintenance.js');
+    const gate = new MaintenanceGate();
+    const owner = randomUUID();
+    const pg = new Pool({
+      connectionString: process.env.LOCAL_TEST_DATABASE_URL,
+    });
+    const conversations = new PostgresConversations(
+      process.env.LOCAL_TEST_DATABASE_URL!,
+      owner,
+    );
+    const store = new Store(':memory:');
+    const ws = new WorkspaceStore(':memory:', owner);
+    const memory = new MemoryMaintenance(
+      store,
+      ws,
+      {},
+      { pg, maintenance: gate },
+    );
+    const dot = ws.dots()[0];
+    let releaseAck!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      releaseAck = resolve;
+    });
+    const acknowledge = memory.jobs.acknowledge.bind(memory.jobs);
+    const ack = vi
+      .spyOn(memory.jobs, 'acknowledge')
+      .mockImplementation(async (id) => {
+        await blocked;
+        return acknowledge(id);
+      });
+    try {
+      await conversations.initialize();
+      const job = await memory.requestDream(dot.id);
+      await memory.tick();
+      await vi.waitFor(() => expect(ack).toHaveBeenCalledWith(job.id));
+      expect(ws.memory.history.receipt(job.id)).toBeDefined();
+      let captured = false;
+      const pending = gate
+        .acquire({ origin: 'manual', signal: new AbortController().signal })
+        .then((lease) => {
+          captured = true;
+          return lease;
+        });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(captured).toBe(false);
+      releaseAck();
+      const lease = await pending;
+      expect((await memory.jobs.get(job.id))?.state).toBe('succeeded');
+      lease.release();
+    } finally {
+      releaseAck();
+      await memory.stop();
+      await pg.query('DELETE FROM memory_jobs WHERE owner_id=$1', [owner]);
+      ws.close();
+      store.close();
+      await conversations.close();
+      await pg.end();
+    }
+  },
+);
