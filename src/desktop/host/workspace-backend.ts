@@ -22,6 +22,8 @@ export interface WorkspaceBackendOptions {
   executable?: string;
   startupTimeoutMs?: number;
   shutdownTimeoutMs?: number;
+  /** Native host runs potentially large interrupted-restore verification off its main thread. */
+  recoverStorage?: () => Promise<void>;
 }
 export interface WorkspaceBackendConnection {
   url: string;
@@ -190,10 +192,12 @@ export class WorkspaceBackend {
     for (const listener of this.listeners) listener(this.status);
   }
   private async load() {
-    await new RestoreService({
-      profile: this.options.data,
-      stopWorkspace: () => this.stop(),
-    }).recover();
+    if (this.options.recoverStorage) await this.options.recoverStorage();
+    else
+      await new RestoreService({
+        profile: this.options.data,
+        stopWorkspace: () => this.stop(),
+      }).recover();
     const inherited = this.options.environment ?? process.env;
     let selected: string | undefined;
     try {

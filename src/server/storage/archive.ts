@@ -125,11 +125,13 @@ export async function writeArchive(
     watch(pipeline(Readable.from(tar), gzip, { signal }));
     const writing = (async () => {
       await new Promise<void>((resolve, reject) =>
-        tar.entry(
-          { name: MANIFEST, type: 'file', mode: 0o600, mtime: new Date(0) },
-          json,
-          (error) => (error ? reject(error) : resolve()),
-        ),
+        tar
+          .entry(
+            { name: MANIFEST, type: 'file', mode: 0o600, mtime: new Date(0) },
+            json,
+            (error) => (error ? reject(error) : resolve()),
+          )
+          .on('error', reject),
       );
       for (const entry of manifest.entries) {
         signal.throwIfAborted();

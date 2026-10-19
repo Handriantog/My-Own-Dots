@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -53,6 +53,25 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
   return { backend, root, bundle, workspace, port };
 }
 describe('workspace backend ownership', () => {
+  it('awaits host recovery worker before reading any selected workspace', async () => {
+    const f = await fixture();
+    const recoverStorage = vi.fn(async () => {
+      throw new Error('Recovery worker rejected journal');
+    });
+    const backend = new WorkspaceBackend({
+      bundle: f.bundle,
+      data: path.join(f.root, 'worker-profile'),
+      sourceRoot: f.workspace,
+      environment: {},
+      recoverStorage,
+    });
+    cleanups.push(() => backend.stop());
+    await expect(backend.start()).rejects.toThrow(
+      'Recovery worker rejected journal',
+    );
+    expect(recoverStorage).toHaveBeenCalledOnce();
+    expect(backend.configuration).toBeUndefined();
+  });
   it('reconciles an interrupted restore before opening the selected workspace', async () => {
     const { backend, root, workspace, port } = await fixture();
     const data = path.join(root, 'data');

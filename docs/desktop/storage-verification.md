@@ -2,7 +2,7 @@
 
 ## Progress: 2026-10-20
 
-The encrypted archive codec, runtime writer coordination, legacy capture API, and staged restore service are implemented. Desktop backup/restore controls and automatic scheduling are still being connected. This is not a release-ready backup feature or a Docker-free storage migration. The approved [design](storage-portability-design.md) and [stage-one plan](storage-plan-01-backup-recovery.md) remain the acceptance criteria.
+The encrypted archive codec, runtime writer coordination, legacy capture API, and staged restore service are implemented. Native desktop backup/restore controls, trusted IPC, OS-protected password integration, and a separate archive/restore worker are connected. Live automatic scheduling is still pending. This is not a release-ready backup feature or a Docker-free storage migration. The approved [design](storage-portability-design.md) and [stage-one plan](storage-plan-01-backup-recovery.md) remain the acceptance criteria.
 
 Core conversations and memory evidence still use PostgreSQL. No production database, Docker volume, or selected user workspace has been migrated or restored.
 
@@ -14,7 +14,8 @@ Core conversations and memory evidence still use PostgreSQL. No production datab
 - Restore validates SQLite schema/integrity and PostgreSQL record schemas/references into an exclusively created directory and newly created database. Archived SQL and environment configuration are never executed. File and database seals are checked again before activation; previews expire after 15 minutes.
 - Restore pauses schedules and learning, cancels queued/running maintenance jobs, interrupts active operations, and requires fresh external access. Original permission and operation records remain in inert recovery audit data, including a core SQLite audit table carried by subsequent backups.
 - Atomic workspace selection and a durable restore journal retain the old workspace. Desktop startup reconciles interrupted switches before opening stores. Replacement requires a host-verified pre-restore backup.
-- OS-protected password and daily/weekly retention policies are implemented as isolated components. Native keyring integration, controls, worker execution, and live scheduling remain pending.
+- Desktop storage settings and recovery-screen controls choose paths through native dialogs and clear password inputs immediately. The worker independently reads and verifies each encrypted archive before reporting success. Startup restore reconciliation also runs in the worker.
+- OS-protected password integration rejects unavailable or insecure Linux storage. Daily/weekly retention policy is tested; live automatic scheduling remains pending.
 
 ## Verification evidence
 
@@ -22,12 +23,15 @@ Environment: macOS, Node 24.20.0, isolated worktree based on `20d3285`. PostgreS
 
 | Check                                                             | Result                                                                                                                                                                  |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full Vitest suite after capture and restore integration           | 1,277 passed; one optional skipped; no failures                                                                                                                         |
+| Full Vitest suite after native-controller integration             | 1,291 passed; one optional skipped; no failures                                                                                                                         |
 | Real PostgreSQL capture                                           | WAL, ownership, reference validation, blocked-read cancellation, config change, disk-write failure and source usability tested                                          |
 | Restore crash recovery                                            | Child process killed at staging, verified, switching and active journal boundaries; original or verified new selection retained                                         |
 | Restore failure handling                                          | Missing references, unknown SQLite trigger, changed target files/database, expired preview, missing database-creation permission, and final journal disk failure tested |
 | Typecheck, lint, formatting                                       | Passed                                                                                                                                                                  |
 | Production desktop build                                          | Passed on macOS; existing large-renderer-chunk warning                                                                                                                  |
+| Packaged archive worker                                           | Passed from an isolated directory without source/module lookup; encrypted round trip and cancellation cleanup verified                                                  |
+| Native controller recovery                                        | Real authenticated capture, encrypted worker verification and restore into a new workspace passed; source preserved                                                     |
+| Native graphical/process smoke                                    | Blocked before application startup: even bare Electron `--version` exits with SIGABRT in this execution environment                                                     |
 | Native Windows/Linux, real OS keyrings and chat/voice performance | Not yet verified                                                                                                                                                        |
 
 The suite uses the installed Python interpreter for the real npm/Python protocol fixture, avoiding a network-dependent `uv` environment resolution:
@@ -47,7 +51,7 @@ Independent reviews of the foundations and runtime integration found writer wake
 
 ## Remaining release gates
 
-1. Native backup/restore controls, worker isolation, trusted IPC, destination checks, protected keys and automatic daily backups with retention.
+1. Live automatic daily backups and managed retention. Native controls/worker/IPC are implemented and integration-tested; graphical and real OS keyring acceptance remains pending.
 2. Recovery acceptance with original databases disconnected; native UI and OS credential-store checks.
 3. Unified SQLite storage/migration, Dot export/import, portable workspace placement, and matched typed/voice performance measurements.
 4. macOS, Windows and Linux package/runtime acceptance. A macOS build does not establish support on another OS.

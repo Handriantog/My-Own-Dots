@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import type { Dot, Memory, State, WorkspaceState } from '../shared/types';
 import { ConnectionsSection } from './ConnectionsSection';
+import { StorageSettings } from './StorageSettings';
 import {
   setThemePreference,
   themePreference,
@@ -166,6 +167,7 @@ export function WorkspaceDialog({
                 ['general', 'General'],
                 ['permissions', 'Permissions'],
                 ['services', 'Services & connections'],
+                ['storage', 'Storage & recovery'],
               ].map(([id, label]) => (
                 <button
                   key={id}
@@ -477,6 +479,9 @@ export function WorkspaceDialog({
                 interrupted run.
               </p>
             </>
+          )}
+          {dialog.type === 'settings' && settingsSection === 'storage' && (
+            <StorageSettings />
           )}
           {dialog.type === 'settings' && settingsSection === 'general' && (
             <fieldset className="appearance-fields">

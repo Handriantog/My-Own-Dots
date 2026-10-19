@@ -4,6 +4,7 @@ import {
   ipcMain,
   screen,
   shell,
+  safeStorage,
   type IpcMainInvokeEvent,
 } from 'electron';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -26,6 +27,10 @@ import {
 import { destination, destinationFromUrl } from './workspace-navigation.js';
 import { CompanionVoiceSession } from './voice-session.js';
 import { CompanionFolderPicker } from './folder-picker.js';
+import { StorageController } from './storage-controller.js';
+import { ArchiveWorkerClient } from './archive-worker-client.js';
+import { BackupKeys } from './backup-keys.js';
+import { storageMethods } from '../shared/storage-contract.js';
 const recovery = 'dots://app/recovery.html';
 const setupPage = `${recovery}#setup`;
 const isRecoveryPage = (url: string) => url === recovery || url === setupPage;
@@ -50,6 +55,7 @@ export class WorkspaceWindow {
   private loaded = new Set<BrowserWindow>();
   private voice: CompanionVoiceSession;
   private folders: CompanionFolderPicker;
+  private storage: StorageController;
   private unsubscribe: () => void;
   private saving?: ReturnType<typeof setTimeout>;
   private readonly context = (event: Electron.IpcMainEvent) => {
@@ -72,6 +78,92 @@ export class WorkspaceWindow {
       () => 'dots://workspace/',
       'dot:workspace-folders',
     );
+    this.storage = new StorageController({
+      profile: data,
+      keys: new BackupKeys({
+        file: path.join(data, 'backup-password.bin'),
+        storage: safeStorage,
+        platform: process.platform,
+      }),
+      worker: new ArchiveWorkerClient({
+        entry: path.join(bundle, 'archive-worker.cjs'),
+      }),
+      configuration: () => backend.configuration,
+      connection: () => this.connection,
+      stopWorkspace: async () => {
+        await this.resetDocuments();
+        await backend.stop();
+      },
+      afterRestore: async () => {
+        if (!this.disposed) await this.retry();
+      },
+    });
+    this.storage.subscribe((status) => {
+      for (const window of this.windows)
+        if (!window.isDestroyed())
+          window.webContents.send('dot:storage:status', status);
+    });
+    for (const method of storageMethods) {
+      ipcMain.handle(`dot:storage:${method}`, (event, input: unknown) => {
+        if (!this.trusted(event)) throw new Error('Invalid storage sender');
+        const window = BrowserWindow.fromWebContents(event.sender)!;
+        return this.storage.invoke(method, input, {
+          trusted: () => this.trusted(event),
+          focused: () =>
+            !window.isDestroyed() && window.isVisible() && window.isFocused(),
+          chooseDirectory: async (kind) => {
+            const chosen = await dialog.showOpenDialog(window, {
+              title:
+                kind === 'backup'
+                  ? 'Choose a backup folder outside the workspace'
+                  : 'Choose a parent folder for the restored workspace',
+              properties: ['openDirectory', 'createDirectory'],
+            });
+            return chosen.canceled ? undefined : chosen.filePaths[0];
+          },
+          chooseArchive: async () => {
+            const chosen = await dialog.showOpenDialog(window, {
+              title: 'Choose a workspace backup',
+              properties: ['openFile'],
+              filters: [
+                {
+                  name: 'Dot workspace backups',
+                  extensions: ['dotbackup', 'dotsbackup'],
+                },
+              ],
+            });
+            return chosen.canceled ? undefined : chosen.filePaths[0];
+          },
+          confirmRestore: async (mode) => {
+            if (
+              process.env.DOTS_WORKSPACE_DIR ||
+              process.env.DOTS_WORKSPACE_URL
+            )
+              throw new Error(
+                'The launcher fixes your workspace location. Remove its workspace override before switching to a restored workspace.',
+              );
+            const result = await dialog.showMessageBox(window, {
+              type: 'warning',
+              message:
+                mode === 'replace'
+                  ? 'Back up the current workspace and replace its selection?'
+                  : 'Open the restored workspace?',
+              detail:
+                'Open conversations and unsaved page drafts will close. The original workspace is kept. Restored schedules and external access remain disabled.',
+              buttons: [
+                'Cancel',
+                mode === 'replace'
+                  ? 'Back Up and Replace Selection'
+                  : 'Open Restored Workspace',
+              ],
+              defaultId: 0,
+              cancelId: 0,
+            });
+            return result.response === 1;
+          },
+        });
+      });
+    }
     ipcMain.on('dot:workspace:context', this.context);
     const handle = (
       name: string,
@@ -83,7 +175,10 @@ export class WorkspaceWindow {
       });
     handle('open', (_event, value) => this.open(destination(value)));
     handle('status', () => this.failure ?? this.backend.status);
-    handle('retry', () => this.retry());
+    handle('retry', async () => {
+      await this.storage.cancelActive();
+      return this.retry();
+    });
     handle('preferences', () => this.preferences());
     handle('backend-settings', () => this.openBackendSettings());
     handle('choose', async (event) => {
@@ -115,6 +210,7 @@ export class WorkspaceWindow {
         if (this.disposed || confirm.response !== 1) return false;
       }
       this.requireRecovery(event);
+      await this.storage.cancelActive();
       await this.resetDocuments();
       if (this.disposed) return false;
       await this.backend.setWorkspaceDirectory(selected.filePaths[0]);
@@ -163,6 +259,7 @@ export class WorkspaceWindow {
         await this.retrying;
         await this.connecting;
         if (this.disposed) return;
+        await this.storage.cancelActive();
         await this.resetDocuments();
         if (this.disposed) return;
         await this.backend.stop();
@@ -567,6 +664,9 @@ export class WorkspaceWindow {
     this.unsubscribe();
     this.voice.destroy();
     this.folders.destroy();
+    const storage = this.storage.close();
+    for (const method of storageMethods)
+      ipcMain.removeHandler(`dot:storage:${method}`);
     ipcMain.removeListener('dot:workspace:context', this.context);
     for (const name of [
       'open',
@@ -585,6 +685,6 @@ export class WorkspaceWindow {
     this.windows.clear();
     this.loaded.clear();
     this.initializing.clear();
-    return (this.destroying = saved);
+    return (this.destroying = Promise.all([saved, storage]).then(() => {}));
   }
 }

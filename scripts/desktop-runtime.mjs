@@ -181,3 +181,18 @@ export async function buildDesktopRuntime(root, output) {
     `Bundled backend and ${count} production packages (no development environments or data).`,
   );
 }
+/** Self-contained worker: runtime-selected workspace files are never module search roots. */
+export async function buildStorageWorker(root, output) {
+  await build({
+    entryPoints: [path.join(root, 'src/desktop/host/archive-worker.ts')],
+    outfile: output,
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node24',
+    define: { 'import.meta.url': '__dotsBundleUrl' },
+    banner: {
+      js: "const __dotsBundleUrl = require('node:url').pathToFileURL(__filename).href;",
+    },
+  });
+}

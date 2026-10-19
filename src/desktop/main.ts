@@ -19,6 +19,7 @@ import {
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { WorkspaceBackend } from './host/workspace-backend.js';
+import { ArchiveWorkerClient } from './host/archive-worker-client.js';
 import { WorkspaceWindow } from './host/workspace-window.js';
 import { installWorkspaceMenu } from './host/workspace-menu.js';
 import { createWorkspaceProtocol } from './host/workspace-protocol.js';
@@ -116,6 +117,14 @@ async function start(): Promise<void> {
     bundle: path.join(__dirname, 'app'),
     data: app.getPath('userData'),
     sourceRoot,
+    recoverStorage: async () => {
+      await new ArchiveWorkerClient({
+        entry: path.join(__dirname, 'archive-worker.cjs'),
+      }).run(
+        { kind: 'recover', profile: app.getPath('userData') },
+        { signal: new AbortController().signal },
+      );
+    },
   });
   const workspace = new WorkspaceWindow(
     __dirname,

@@ -1,4 +1,7 @@
 import './recovery.css';
+import { createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import { StorageSettings } from '../../client/StorageSettings';
 import { recoveryView, watchWorkspaceStatus } from './recovery-state.js';
 import type {
   DesktopWorkspaceBridge,
@@ -10,6 +13,11 @@ const element = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 const setup = location.hash === '#setup';
 const panel = element<HTMLDetailsElement>('setup-panel');
+const storagePanel = element<HTMLDetailsElement>('storage-panel');
+const storageRoot = createRoot(element('storage-root'));
+storagePanel.addEventListener('toggle', () => {
+  storageRoot.render(storagePanel.open ? createElement(StorageSettings) : null);
+});
 const scene = element('scene');
 const mascot = element<HTMLButtonElement>('mascot');
 const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')];
