@@ -1,37 +1,58 @@
 # My Own Dots on the desktop
 
-The macOS companion gives one plush Dot a local desktop playground. It walks, rests, stretches, sleeps, jumps, looks around, waves, grooms, adjusts its headphones, and responds to clicks, petting, or pinching pickup. With Accessibility enabled, it can use exposed application-window tops and sides, climb, hang, pull itself up, and fall when a supporting window moves or disappears. Its body color changes without replacing its character or animation.
+My Own Dots is a macOS Electron workspace with a plush desktop companion. The main window contains Chats, specialist Dots, Spaces and their page editor, activity, memory, connections and settings. The navigation rail selects an area, the searchable sidebar selects its content, and the optional context pane shows details without leaving the current work. Recent conversations and quick navigation make it possible to move between Dots and pages from the keyboard.
 
-Click Dot to open three compact cloud speech bubbles surrounding it: **Chat · Talk · Hide**. Each has its own icon, soft shadow, and gentle opening animation; reduced-motion settings suppress the animation. Each cloud is 112×58 logical pixels, with a tighter arc above its shoulders. Chat sits to the left, Talk above, and Hide to the right; the arc folds inward at screen edges. Dot stays fixed in place while the menu is open, including mid-fall or mid-climb. The transparent center lets you click or pick up Dot to dismiss the menu. Escape or clicking outside dismisses them, and arrow keys navigate the choices. **Chat** opens a compact, focusable conversation window using the existing local web workspace. Its Dots, AI configuration, persistent history, stop control, and tool approval cards are shared with the full workspace. The chat avatar uses the desktop plush and your chosen body color, and color changes refresh without discarding the conversation or draft. **Talk** opens and automatically connects a local English voice call using the selected conversation; no preliminary Chat visit or second start click is needed. The call shows setup failures without opening the microphone. **Hide** hides Dot and its chat window; use **Show Dot** in the menu-bar icon to bring the companion back. Operational controls remain in the menu-bar icon.
+| Shortcut | Action                              |
+| -------- | ----------------------------------- |
+| **⌘K**   | Quick navigation                    |
+| **⌘N**   | New chat                            |
+| **⌘,**   | Workspace settings                  |
+| **⌘⇧B**  | Toggle sidebar                      |
+| **⌘Q**   | Quit and stop the app-owned backend |
+
+Closing the main window hides it and preserves ongoing work. Click the Dock icon, choose **File → Open Workspace**, or use **Open Workspace** in the menu-bar icon to return. Launching again reuses the existing app. Quit closes the app and stops only the backend it started; PostgreSQL volumes remain intact and externally managed services keep running.
 
 ## Run or install
 
-From a source checkout with Node 24+, Xcode command-line tools, and dependencies installed:
+Source builds require Node 24+, Xcode command-line tools and `npm ci`. For subscription chat, install Docker with Compose, Python/uv and your chosen AI CLI, and sign in to that CLI. From the checkout:
 
 ```sh
+npm run setup:local
+npm run setup:llm
+npm run llm:check
 npm run desktop:dev
 ```
 
-For a self-contained application:
+The app can start configured local PostgreSQL through Docker Compose when needed; Docker must already be installed and available. `npm run conversations:up` is also available for an explicit database start. Subscription inference runs on the host through the app-owned Integrator dependency. Python environments, authenticated CLI profiles, Docker, database data and optional voice models are not bundled into the app.
+
+To build a reviewable application:
 
 ```sh
 npm run desktop:package
 open "release/My Own Dots-darwin-arm64/My Own Dots.app"
 ```
 
-The package command builds the current Mac's architecture. On Apple Silicon it produces `release/My Own Dots-darwin-arm64/My Own Dots.app` and `release/My-Own-Dots-macOS-arm64.zip`. The application includes Electron, the Swift observer, artwork, the 69-clip effects pack, and a synthesized droplet pop. Copy the `.app` into Applications if desired. Roaming, appearance, and sound run independently; AI chat needs your local workspace and its configured inference services.
+The package targets the current Mac's architecture. On Apple Silicon it writes `release/My Own Dots-darwin-arm64/My Own Dots.app` and `release/My-Own-Dots-macOS-arm64.zip`. Copy the `.app` into Applications if desired. It includes Electron, the production Node backend and dependency closure, local Python source/support files, the Swift observer, artwork and effects. It launches without a source checkout. See [migration notes](electron-migration.md) for packaging boundaries and [verification](verification.md) for measured evidence.
 
-## Connect chat
+## Workspace ownership and existing data
 
-Start your Dots workspace in Command Center, or run `npm run build` followed by `npm start` from this checkout. The companion defaults to `http://127.0.0.1:4310`. For the web development server (`npm run dev`), use `http://127.0.0.1:5173`. The server and frontend must include this version's compact chat view.
+A packaged app creates its default workspace under `~/Library/Application Support/My Own Dots Desktop/workspace`. Source launches initially use the checkout recorded by the development build. A selected folder persists across launches. **My Own Dots → Workspace Setup…** opens the in-app setup and recovery controls; choose your existing original project folder there to reuse its `.env`, SQLite database and PostgreSQL configuration in place. Existing owner identities and credentials must stay stable. No automatic export, copy or new database replaces that workspace. Keep backups of both SQLite and PostgreSQL.
 
-When the workspace is offline, the chat box shows a connection screen with an editable address and retry button. **Chat connection…** in the menu bar reopens those controls at any time. Only loopback workspace addresses are accepted; a different local port is supported. The choice saves in `chat-connection.json` beside companion preferences. `DOTS_WORKSPACE_URL` can override the saved address at launch.
+The app starts a bundled API-only backend on the configured loopback host/port. Its interface is bundled at `dots://workspace`, including compact chat; `GET /` on the production backend returns 404. No browser page or separately launched source server is needed. The authenticated identity endpoint prevents an occupied port from being mistaken for the selected workspace, and the database runtime lease prevents a second backend from opening the same SQLite store. Recovery offers retry and workspace setup inside the app.
 
-Choose a Dot in the chat header, type a message, and press Enter or Send. Shift+Enter inserts a newline. The history dropdown reopens saved conversations; the plus button starts a fresh one. Closing the window preserves the current conversation and any running response. Reopening reuses the same window, and the selection survives a restart. Owner-token authentication is handled by the existing workspace screen. The external-link button opens the full workspace in your browser.
+Command Center can still manage a Dots backend. When taking over an older original service on port 4310, stop that service through Command Center first: older services lack the new identity endpoint and automatic ownership detection will refuse to attach. Do not launch two owners for the same database. For an explicit externally managed attachment, launch with `DOTS_WORKSPACE_URL=http://127.0.0.1:4310` and select the matching workspace `.env`/owner token. Only loopback HTTP addresses are accepted. Explicit attachment supports the older API, and Quit leaves that service running. New workspace configurations use unique Compose project names; existing legacy `.env` files keep the `my-own-dots-local` project fallback and its data volume.
 
-The chat renderer is sandboxed. Only the configured local workspace main frame receives a narrow voice lifecycle bridge for readiness, call start/end, Talk intent, and forced stop; it has no file, process, or provider-credential access. The local connection screen exposes only validated connection controls. Provider credentials and inference stay in the workspace server; no separate AI client is bundled into the companion.
+For controlled source launches, `DOTS_WORKSPACE_DIR` chooses the workspace folder and `DOTS_DESKTOP_USER_DATA` isolates preferences/window state. Launcher overrides take precedence over folder selection, so update the launcher to change them. Existing companion preferences remain in `~/Library/Application Support/My Own Dots Desktop`; moving to the full workspace preserves them.
 
-Loading and connection screens use a neutral speech symbol. Once connected, desktop chat shows the current plush and the body color selected in Customize Dot. Ordinary web chat retains its specialist avatars. The old fixed blue placeholder no longer flashes before the desktop appearance loads.
+`npm run dev` remains the Vite development harness at `http://127.0.0.1:5173`. `npm run build && npm start` runs the headless API; it does not serve the production workspace UI.
+
+## Companion and compact chat
+
+The companion walks, rests, stretches, sleeps, jumps, looks around, waves, grooms, adjusts its headphones and responds to clicks, petting or pinching pickup. With Accessibility enabled, it uses exposed window tops and sides, climbs, hangs and falls when a supporting window moves. Its color changes without replacing its character or animation.
+
+Click Dot to open **Chat · Talk · Hide** clouds. Escape or clicking outside dismisses them, and arrow keys navigate the choices. **Chat** opens a compact focusable conversation window using the same bundled workspace and backend: Dots, AI configuration, history, stop controls and approval cards are shared. The workspace button hands the selected Dot and conversation to the main window. Closing compact chat preserves its conversation; reopening reuses it. The avatar reflects the companion's color. **Talk** starts a local call after the speech setup checks. **Hide** hides the companion and compact chat; **Show Dot** restores it from the menu bar. Hiding the companion leaves the main workspace available.
+
+Main and compact renderers are sandboxed and use narrow native bridges for workspace navigation, voice and explicit folder selection. Provider credentials, process launching and owner-token transport stay in the host/backend. Workspace settings and Customize Companion remain separate controls.
 
 See [local voice calls](local-voice-calls.md) for setup and testing. Local Whisper, Silero and Kokoro wrap the existing chat agent, preserving approval cards and conversation history. Ordinary inference remains buffered; the opt-in persistent-provider voice path can deliver validated response text incrementally. The [file-audio prototype report](local-voice-prototype.md) records earlier offline checks.
 
@@ -59,7 +80,7 @@ The observer and nested app components are signed inside out, then verified. Cer
 - Hiding folds Dot into a small circle at its body center that pops away; showing pops a circle in at the same center and unfolds it into Dot. A subtle droplet sound follows master and Interactions volume. Quick toggles reverse smoothly, and reduced motion uses a short fade.
 - A second launch reuses the existing companion. The app respects macOS reduced motion and can also suppress automatic roaming through its own controls.
 
-Preferences are separate from web-workspace data, in `~/Library/Application Support/My Own Dots Desktop/preferences.json`. They include color, sound, motion, the talk shortcut, and a display-relative placement. Native window IDs, active grips, and call intent are never persisted.
+Companion preferences are separate from workspace data, in `~/Library/Application Support/My Own Dots Desktop/preferences.json`. They include color, sound, motion, the talk shortcut, and a display-relative placement. Native window IDs, active grips, and call intent are never persisted.
 
 If Dot disappears while its menu-bar icon remains, check the status line before choosing **Recover companion**. **Open diagnostic logs…** opens the local `diagnostics` folder beside preferences. It records Dot's visibility, permission/tracking status, position, renderer recovery reason, and startup failures. Event history rotates at 256 KiB with one previous file; a separate small file preserves the last uncaught host exception. Logs stay on this Mac and contain no other application's window titles, contents, or screenshots. They help distinguish a renderer failure, a hidden/suspended companion, and a native window placement problem.
 
@@ -84,16 +105,13 @@ The character uses a shared layered plush atlas and a small mesh/limb rig. See [
 ```sh
 npm test -- tests/desktop
 npm run desktop:build
-npm run desktop:preview
 npm run desktop:smoke
-node scripts/desktop-chat-smoke.mjs
-node scripts/desktop-windowless-smoke.mjs
+# Or test an already packaged executable:
+npm run desktop:smoke -- "release/My Own Dots-darwin-arm64/My Own Dots.app/Contents/MacOS/My Own Dots"
 ```
 
-`desktop:preview` writes an action/color contact sheet under `artifacts/desktop/`. `desktop:smoke` launches the standalone development bundle from outside its checkout, checks the renderer sandbox and overlay configuration, and writes a screenshot/report. A packaged executable path can be passed to `scripts/desktop-smoke.mjs` to test the installed layout. These checks supplement the actual desktop interaction matrix in [verification.md](verification.md).
+`desktop:smoke` launches the real app twice from a disposable directory with isolated workspace and userData, muted effects, blank provider keys and a free loopback port. It checks authenticated backend identity and API, rejected unauthenticated access, API-only root 404, a Space saved in SQLite across restart, and orderly process/port/lease cleanup. It needs no Docker initialization and makes no AI or microphone requests. Measurements and limits go to `artifacts/desktop/process-smoke.json`. This is process/API acceptance; native navigation, pixels, compact handoff and real chat/voice require separate native interaction checks.
 
-`desktop-windowless-smoke.mjs` uses a disposable workspace fixture and real Electron registration to check hidden startup, native user activation, stationary voice poses, toggle/end, shortcut recording/persistence/conflicts, disable/reset, and cleanup on lock or companion-renderer failure. It writes screenshots and a report under `artifacts/desktop/windowless/`. It invokes registered callbacks deterministically, without capturing microphone audio or requesting AI replies. Native shortcut delivery from other applications and live voice remain manual acceptance checks.
+`desktop:runtime:smoke` checks the bundled backend under Electron's Node runtime without launching the native app. `desktop:preview` remains a historical visual generator for the companion contact sheet; it is not full-workspace acceptance. The old `desktop-chat-smoke.mjs`, `desktop-windowless-smoke.mjs`, `desktop-live-soak.mjs` and `desktop-visibility-smoke.mjs` harnesses now fail immediately with a retirement message. Their original companion-only assumptions are unsupported after this migration; their source and earlier evidence remain for reference.
 
-The chat smoke needs a running workspace. It checks the click menu, offline/API-only recovery, renderer isolation, compact layout, and close/reopen behavior. Add `--live` to send one tool-free connection-check prompt through the configured AI and verify its reply and history reload. This creates a real workspace conversation. Screenshots and reports go to `artifacts/desktop/`. Run `node scripts/desktop-menu-preview.mjs` to render the production clouds around the plush at their real sizes, including a screen-corner example.
-
-The existing `dev`, `build`, `start`, and web/server test commands retain their original roles. Windows and Linux adapters, public notarization, and sound refinement are future work. The owner has tested local voice calls and confirmed improved reliability; controlled microphone, echo and speaker latency measurements remain separate checks. Possible later mouse gestures include a nose boop, double-click high-five, and opt-in cursor-follow play; these are proposals, not active shortcuts.
+See [verification.md](verification.md) for fresh measured checks, historical records, and outstanding native/OS acceptance. Windows/Linux adapters and public notarization remain future work. Owner feedback about earlier voice reliability is historical evidence; migration acceptance does not include fresh microphone, speaker, echo or latency measurements.

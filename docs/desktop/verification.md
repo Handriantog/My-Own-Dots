@@ -1,6 +1,23 @@
-# Desktop companion verification
+# Desktop workspace and companion verification
 
 Machine: Apple M3 Max, 14 CPU cores, 36 GiB RAM, macOS 26.6.2 (25G83), arm64. Runtime: Electron 44.8.0, PixiJS 8.22.0. Native helper compiled with the installed Swift toolchain, deployment target macOS 14.
+
+## Electron workspace migration — October 19, 2026
+
+This section records the `feat/electron-workspace` source milestone. Final whole-branch review, final package/archive measurements and the final packaged process smoke are still pending here; this is not a merge, publication or public-release claim.
+
+- The controller ran the full suite at `da47493` with dedicated disposable PostgreSQL: **155 files passed, 1,106 tests passed, one optional signing test skipped**, 22.00 seconds. The follow-up companion selection migration fix at `de2af62` passed its focused 18 tests. Task 3 typecheck, lint and production builds passed. Final branch checks are recorded separately after review.
+- `npm run desktop:smoke` passed against the real development Electron bundle from a disposable cwd with isolated userData/workspace, muted effects, a free port, and blank provider keys. It launched twice, checked authenticated identity and API 200, unauthenticated identity 401, root 404, and a Space saved in SQLite across restart. Both exits returned code 0, stopped the owned backend, removed its runtime lease and closed its port. First/restart readiness measured **1,004 / 1,083 ms**; shutdown measured **51 / 148 ms**. These are the final scoped local run, not general performance guarantees. The report is `artifacts/desktop/process-smoke.json` (git-ignored).
+- The smoke lifecycle helper passed **3/3 behavioral tests**, using real child processes for orderly termination, bounded escalation when SIGTERM is ignored, and an already exited process. The smoke invokes no UI automation, Docker initialization, AI provider or microphone.
+- After the owner confirmed the desktop was unlocked, the controller inspected the **actual native development app through CUA** at 1280×840 and about 900 logical pixels wide. Light and dark main views were readable; Cmd+, opened settings and CmdK selected Planner. A native composer sent a disposable message through the real Integrator/Python/SSE fixture path and displayed its offline response. The conversation appeared in the sidebar and quick navigation. Spaces opened the page editor; a title edit saved with CmdS and reappeared in the library. Activity and Memory loaded their real views/filters. The separate Workspace Setup window opened and closed without closing the main workspace.
+- Native CmdW hid the main window and left the plush visible. **File → Open Workspace** reopened the same conversation/reply. Native CmdQ returned code 0 and closed the fixture backend port. The original port 4310 service was preserved. CUA returned screenshots for inline inspection; no native screenshots were saved to disk. macOS window management emitted `TASK_CATEGORY_POLICY` / `TASK_SUPPRESSION_POLICY` invalid-argument warnings during these checks; the listed interactions completed.
+- **Remaining visual/functional gaps:** clicking the overlay through CUA returned `noWindowsAvailable`, so compact chat and its conversation handoff were not visually exercised. Main/compact bridge and selection behavior have host/React test coverage; that does not replace native handoff acceptance. Conversation durability across an actual app restart, final packaged UI inspection, system-theme transitions, real provider login/inference, microphone/speaker behavior, OS permissions and global shortcut delivery remain separate checks. Native fixture chat made no external AI request and opened no audio device. Narrow inspection reached about 900 logical pixels, not every supported size.
+
+The supported process entrypoint is now `npm run desktop:smoke`, optionally followed by `--` and a packaged executable path. The old chat/windowless/live-soak/visibility UI harnesses fail immediately with an explicit retirement message. Their companion-only window and old web-connection assumptions do not validate this migration. `desktop:runtime:smoke` checks just the shipped backend under Electron Node; historical companion visual generators remain available but are not migration acceptance.
+
+## Historical companion evidence
+
+The dated records below describe the versions and harnesses exercised at the time. They are retained as history; they do not establish current full-workspace acceptance or override the migration gaps above.
 
 ## Windowless talk shortcut — October 19
 
@@ -254,7 +271,9 @@ Two earlier instrumented runs of the preceding package lost their Playwright tar
 
 The power log places idle sleep at 07:53:56, five seconds after the eight-minute probe's target closed. That timing is useful environmental evidence, but does not by itself establish whether the app, instrumentation, or a preceding OS transition closed the target.
 
-## Reproduce
+## Historical reproduction commands
+
+These commands belong to the initial companion delivery. Use the supported migration checks above for the current workspace. The retired UI harnesses require migration before reuse.
 
 ```sh
 npm test -- tests/desktop
@@ -265,7 +284,7 @@ npm run desktop:package
 node scripts/desktop-smoke.mjs "release/My Own Dots-darwin-arm64/My Own Dots.app/Contents/MacOS/My Own Dots"
 node scripts/desktop-rig-preview.mjs
 node --import tsx scripts/desktop-soak.mjs
-node scripts/desktop-live-soak.mjs
+# desktop-live-soak.mjs is retired after the workspace migration.
 ```
 
 Generated screenshots and JSON reports are under `artifacts/desktop/` (git-ignored). The native fixture source is `native/desktop-observer/qa-windows.swift`; it is deliberately excluded from the shipped application. The app needs neither the fixture nor the source checkout at runtime.
