@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>My Own Dots</title>
+  </head>
+  <body
+    data-state="loading"
+    data-view="startup"
+    data-warning="false"
+    data-actions="false"
+  >
+    <div class="atmosphere" aria-hidden="true">
+      <div class="aurora aurora-one"></div>
+      <div class="aurora aurora-two"></div>
+      <div class="star-field"></div>
+    </div>
+    <header class="titlebar">
+      <div class="wordmark">
+        <span class="brand-dots" aria-hidden="true"
+          ><i></i><i></i><i></i><i></i></span
+        ><span>My Own Dots</span>
+      </div>
+    </header>
+    <main>
+      <div class="mascot-stage">
+        <div class="scene" id="scene">
+          <div class="halo halo-outer" aria-hidden="true"></div>
+          <div class="halo halo-inner" aria-hidden="true"></div>
+          <div class="orbit orbit-one" aria-hidden="true"><i></i></div>
+          <div class="orbit orbit-two" aria-hidden="true"><i></i></div>
+          <span class="spark spark-one" aria-hidden="true">✦</span
+          ><span class="spark spark-two" aria-hidden="true">✧</span
+          ><span class="spark spark-three" aria-hidden="true">✦</span>
+          <div class="satellite satellite-chat" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l-3 3V11.5A7.5 7.5 0 0 1 9.5 4h3a7.5 7.5 0 0 1 7.5 7.5Z"
+              />
+              <path d="M7 11h8M7 14h5" />
+            </svg>
+          </div>
+          <div class="satellite satellite-idea" aria-hidden="true">✦</div>
+          <div class="portal" aria-hidden="true"><div></div></div>
+          <div class="mascot-float">
+            <button
+              class="mascot-button"
+              id="mascot"
+              type="button"
+              aria-label="Say hello to Dot"
+            >
+              <img
+                src="./desktop-dot/icon.png"
+                width="512"
+                height="512"
+                alt="Dot, your blue plush companion with cream headphones"
+                draggable="false"
+              />
+            </button>
+          </div>
+          <div class="greeting" id="greeting" aria-hidden="true">
+            Hi, you. <span>✦</span>
+          </div>
+          <div class="greeting-sparks" aria-hidden="true">
+            <i>✦</i><i>✦</i><i>✧</i><i>✦</i>
+          </div>
+        </div>
+      </div>
+      <h1 class="setup-heading">Workspace setup</h1>
+      <section class="status-card" aria-label="Workspace startup">
+        <div class="status-heading">
+          <span class="status-indicator" aria-hidden="true"><i></i></span
+          ><span id="status" role="status" aria-live="polite"
+            >Finding your workspace</span
+          ><span class="status-ellipsis" aria-hidden="true"
+            ><i></i><i></i><i></i
+          ></span>
+        </div>
+        <p id="status-detail">Connecting to your local workspace…</p>
+        <div
+          class="progress-track"
+          role="progressbar"
+          aria-label="Workspace startup in progress"
+        >
+          <span></span>
+        </div>
+      </section>
+      <div class="actions" id="recovery-actions" hidden>
+        <button class="primary" id="retry" type="button">
+          Try again <span aria-hidden="true">↗</span></button
+        ><button id="choose" type="button">Choose existing workspace…</button>
+      </div>
+      <details class="setup-panel" id="setup-panel">
+        <summary>
+          <span class="setup-icon" aria-hidden="true">⚙</span> Workspace setup
+          <span class="chevron" aria-hidden="true">⌄</span>
+        </summary>
+        <div class="setup-content">
+          <p>
+            Change the fields you need, then save and reconnect. Open drafts
+            require confirmation before they close. Existing files and databases
+            stay in place.
+          </p>
+          <form id="configuration">
+            <label
+              >Local server port<input
+                name="PORT"
+                inputmode="numeric"
+                placeholder="4310"
+            /></label>
+            <label
+              >Database path<input
+                name="DATABASE_PATH"
+                placeholder="data/opendots.sqlite"
+            /></label>
+            <label class="full-width"
+              >Conversation database URL<input
+                name="LOCAL_DATABASE_URL"
+                type="password"
+                autocomplete="off"
+                placeholder="postgresql://…"
+            /></label>
+            <label
+              >AI provider<input name="LLM_PROVIDER" placeholder="codex"
+            /></label>
+            <label
+              >Codex executable<input name="CODEX_BIN" placeholder="codex"
+            /></label>
+            <label
+              >Docker executable<input name="DOCKER_BIN" placeholder="docker"
+            /></label>
+            <label
+              >Existing owner token<input
+                name="OWNER_TOKEN"
+                type="password"
+                autocomplete="off"
+            /></label>
+            <button class="primary full-width" type="submit">
+              Save configuration
+            </button>
+          </form>
+          <p class="setup-note">
+            If another launcher manages your backend, restart it there after
+            saving. Conversations may require Docker; AI uses your configured
+            provider account.
+          </p>
+        </div>
+      </details>
+    </main>
+    <script type="module" src="./recovery.ts"></script>
+  </body>
+</html>

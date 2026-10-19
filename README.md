@@ -1,6 +1,6 @@
 # My Own Dots
 
-A local agent workspace powered by your existing AI subscriptions. Forked from [OpenDots](https://github.com/CopilotKit/OpenDots), part of MyOwnStack.
+A macOS desktop agent workspace powered by your existing AI subscriptions. Forked from [OpenDots](https://github.com/CopilotKit/OpenDots), part of MyOwnStack.
 
 Give specialist Dots their own instructions and tools, chat with them, save and edit pages in Spaces, and schedule work. Inference uses the published [MyOwnLlmIntegrator](https://github.com/Handriantog/My-Own-LLM-Integrator) npm package. Conversation history lives in PostgreSQL running locally in Docker. The app and your authenticated AI CLI run on the host.
 
@@ -104,13 +104,13 @@ https://github.com/user-attachments/assets/27d03a6c-a9e0-4c29-8d96-fafe0fbae20f
 
 Bring your agents into Slack with [Channels SDK](https://github.com/CopilotKit/channels-sdk). See the [managed Channels documentation](https://docs.copilotkit.ai/intelligence/channels) to connect them through CopilotKit Intelligence.
 
-## Desktop companion (macOS)
+## Desktop workspace and companion (macOS)
 
-A separate desktop entry point runs one recolorable plush Dot above ordinary application windows. It supports continuous roaming, exposed window-edge physics, pinching pickup, local sound effects, and menu-bar appearance/sound controls. Window play uses a bundled Swift geometry observer and requires Accessibility; a clear floor-only mode remains available without permission.
+The Electron app opens a full workspace with Chats, Dots, Spaces, activity, memory and settings. A navigation rail, context sidebar, conversation history, document editor and optional context pane keep work in one native window. **⌘K** opens quick navigation, **⌘N** starts a chat, **⌘,** opens settings, and **⌘⇧B** toggles the sidebar. Closing the workspace hides it; the Dock or **Open Workspace** brings it back. **Quit** stops the backend started by this app.
 
-Click Dot for three floating cloud speech bubbles: **Chat · Talk · Hide**. Chat opens a compact window connected to your local workspace, using its existing Dots, conversation history, AI configuration, and tool approvals. Talk opens and starts a local voice call after checking the installed speech setup. **Command + Shift + Space** toggles a windowless call while Dot stays in place and animates listening, thinking and speaking. Change or disable the shortcut in **Customize Dot → Windowless talk**; see [local voice calls](docs/desktop/local-voice-calls.md). Chat requires the workspace server; the roaming companion still runs independently.
+The same app includes the recolorable plush companion, roaming/window physics, pinching pickup, local effects and menu-bar controls. Click Dot for **Chat · Talk · Hide**. Compact chat uses the same bundled renderer and backend; its workspace button opens the matching conversation in the main window. **⌘⇧Space** toggles windowless talk after local voice setup. Accessibility enables window play; floor-only roaming remains available without it.
 
-Run `npm run desktop:dev` to build and launch, or `npm run desktop:package` for an Apple Silicon `.app` and ZIP. Packaging defaults to ad-hoc signing; set `DOTS_CODESIGN_IDENTITY` to an installed signing identity for stable permissions across rebuilds. The build is not notarized. Local voice uses the existing chat agent. The owner has tested calls and confirmed improved recognition reliability; automated checks use fixture replies and file audio. Windows/Linux adapters remain future work. See the [desktop guide](docs/desktop/README.md), [artwork notes](docs/desktop/asset-notes.md), and [verification evidence and limits](docs/desktop/verification.md).
+The package includes Electron and the production Node backend/dependencies. It starts its own API service and serves its interface from `dots://workspace`; a separate browser or running source checkout is unnecessary. Your AI CLI login, Python/uv environment, Docker/PostgreSQL, and optional voice models remain local prerequisites. The build uses ad-hoc signing by default and is not notarized. See the [desktop setup and data reuse guide](docs/desktop/README.md), [migration notes](docs/desktop/electron-migration.md), and [verification evidence and limits](docs/desktop/verification.md).
 
 ## Architecture
 
@@ -122,7 +122,7 @@ TanStack AI owns the tool loop and validation. A subscription adapter sends each
 
 ```mermaid
 flowchart TB
-  Web[Web workspace] <-->|AG-UI / SSE| Runtime[CopilotKit OSS runtime]
+  Web[Electron workspace / dev Vite interface] <-->|AG-UI / SSE| Runtime[CopilotKit OSS runtime]
   Runtime --> Agent[Dot / TanStack tool loop]
   Agent --> Integrator[myown-llm-integrator]
   Integrator --> CLI[Authenticated AI CLI on host]
@@ -168,7 +168,7 @@ The two backends are selected independently. `LLM_BACKEND=openai` enables the or
 
 ## Get started
 
-Install **Node.js 24+**, **Docker with Compose**, **uv**, and a supported AI CLI. Log in to that CLI with your subscription account (Codex is the default).
+Install **Node.js 24+**, **Docker with Compose**, **uv**, Xcode command-line tools, and a supported AI CLI. Log in to that CLI with your subscription account (Codex is the default). The current native build targets macOS 14+; Apple Silicon is the locally exercised architecture.
 
 ```sh
 git clone https://github.com/Handriantog/My-Own-Dots.git
@@ -178,12 +178,21 @@ npm run setup:local
 npm run conversations:up
 npm run setup:llm
 npm run llm:check
-npm run dev
+npm run desktop:dev
 ```
 
-Open **http://127.0.0.1:5173**. `setup:local` generates `.env` and database credentials; existing nonempty settings are preserved. The configuration check confirms the CLI is available; a real chat confirms authentication and model access.
+`setup:local` generates `.env` and database credentials while preserving existing nonempty settings. Source desktop launches use this checkout's workspace unless a folder is selected or `DOTS_WORKSPACE_DIR` is supplied. The configuration check confirms the CLI is available; a real chat confirms authentication and model access.
 
-Set `LLM_PROVIDER` to choose another integrator provider and optionally set `LLM_MODEL`. Restart after changes. See [Local AI setup](docs/LOCAL-AI.md) for supported configuration, migration, backups, troubleshooting and optional services.
+To create an app and ZIP for the current Mac's architecture:
+
+```sh
+npm run desktop:package
+open "release/My Own Dots-darwin-arm64/My Own Dots.app"
+```
+
+A packaged app defaults to its own workspace under `~/Library/Application Support/My Own Dots Desktop/workspace`. To reuse existing Dots and history, choose the original project folder in **My Own Dots → Workspace Setup…**. Its `.env`, SQLite path and PostgreSQL configuration stay in place; data is not copied. If the old server is running through Command Center, stop it there before handing ownership to this app. Explicit attachment with `DOTS_WORKSPACE_URL` is also supported; Quit leaves an attached service running. See the [desktop guide](docs/desktop/README.md) for ownership and setup details.
+
+Set `LLM_PROVIDER` to choose another Integrator provider and optionally set `LLM_MODEL`. Restart after changes. [Local AI setup](docs/LOCAL-AI.md) covers configuration, backups and optional services. `npm run dev` retains the Vite development interface at `http://127.0.0.1:5173`. `npm run build && npm start` starts the headless API backend; production `GET /` returns 404 and no longer hosts a browser workspace.
 
 ## Data and privacy
 

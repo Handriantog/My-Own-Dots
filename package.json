@@ -8,6 +8,8 @@
     "test": "tests"
   },
   "scripts": {
+    "desktop:runtime:smoke": "node scripts/smoke-desktop-runtime.mjs",
+    "desktop:runtime": "node scripts/build-desktop-runtime.mjs",
     "desktop:build": "node scripts/build-desktop.mjs",
     "desktop:start": "electron dist/desktop",
     "desktop:dev": "npm run desktop:build && npm run desktop:start",

@@ -11,6 +11,9 @@ export default defineConfig({
     target: 'es2023',
     rolldownOptions: {
       input: {
+        recovery: fileURLToPath(
+          new URL('./src/desktop/renderer/recovery.html', import.meta.url),
+        ),
         menu: fileURLToPath(
           new URL('./src/desktop/renderer/menu.html', import.meta.url),
         ),

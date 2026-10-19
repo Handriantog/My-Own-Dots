@@ -5,7 +5,8 @@
     "outDir": "dist/server",
     "rootDir": "src",
     "module": "NodeNext",
-    "moduleResolution": "NodeNext"
+    "moduleResolution": "NodeNext",
+    "allowImportingTsExtensions": false
   },
   "include": ["src/server", "src/browser", "src/shared"]
 }

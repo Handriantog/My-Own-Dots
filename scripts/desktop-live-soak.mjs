@@ -1,3 +1,8 @@
+// Historical companion UI harness; not validated for the native workspace migration.
+throw new Error(
+  'Retired companion UI harness: use npm run desktop:smoke for process/API checks and docs/desktop/verification.md for native acceptance. Update this historical harness before reuse.',
+);
+
 import { _electron as electron } from 'playwright';
 import { mkdir, writeFile, appendFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';

@@ -1,3 +1,8 @@
+// Historical companion UI harness; not validated for the native workspace migration.
+throw new Error(
+  'Retired companion UI harness: use npm run desktop:smoke for process/API checks and docs/desktop/verification.md for native acceptance. Update this historical harness before reuse.',
+);
+
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

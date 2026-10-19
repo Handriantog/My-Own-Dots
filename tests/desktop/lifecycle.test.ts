@@ -19,6 +19,8 @@ const host = vi.hoisted(() => ({
   menu: [] as Array<{ label?: string; click?: () => void }>,
   loads: 0,
   autoAck: true,
+  lifecycle: [] as string[],
+  shutdown: null as Promise<void> | null,
   diagnosticEvents: [] as Array<{
     event: string;
     details: Record<string, unknown>;
@@ -30,6 +32,29 @@ vi.mock('../../src/desktop/host/diagnostics.js', () => ({
     async record(event: string, details: Record<string, unknown>) {
       host.diagnosticEvents.push({ event, details });
     }
+  },
+}));
+vi.mock('../../src/desktop/host/workspace-backend.js', () => ({
+  WorkspaceBackend: class {
+    async stop() {
+      host.lifecycle.push('backend-stop');
+    }
+  },
+}));
+vi.mock('../../src/desktop/host/workspace-window.js', () => ({
+  WorkspaceWindow: class {
+    async open() {
+      host.lifecycle.push('workspace-open');
+    }
+    async command() {}
+    suspend() {}
+    async destroy() {
+      host.lifecycle.push('workspace-terminal');
+      await host.shutdown;
+    }
+    async ready() {}
+    async recover() {}
+    register() {}
   },
 }));
 const exceptionMonitors = new Set(
@@ -91,6 +116,7 @@ vi.mock('electron', async () => {
     isDestroyed() {
       return false;
     }
+    destroy() {}
     isVisible() {
       return this.visible;
     }
@@ -104,20 +130,25 @@ vi.mock('electron', async () => {
   }
   return {
     app: Object.assign(new EventEmitter(), {
+      isPackaged: true,
       setName: vi.fn(),
       setPath: vi.fn(),
       getPath: () => '/unused',
       isHidden: () => false,
       requestSingleInstanceLock: () => true,
       whenReady: async () => {},
-      dock: { hide: vi.fn() },
+      dock: { show: vi.fn(), hide: vi.fn() },
       quit: vi.fn(),
+      exit: vi.fn(),
     }),
     BrowserWindow: Window,
     globalShortcut: { register: vi.fn(() => true), unregister: vi.fn() },
     Notification: { isSupported: () => false },
-    ipcMain: Object.assign(ipc, { handle: vi.fn() }),
-    Menu: { buildFromTemplate: (items: unknown) => items },
+    ipcMain: Object.assign(ipc, { handle: vi.fn(), removeHandler: vi.fn() }),
+    Menu: {
+      buildFromTemplate: (items: unknown) => items,
+      setApplicationMenu: vi.fn(),
+    },
     nativeImage: { createFromPath: () => ({ resize: () => ({}) }) },
     net: {},
     powerMonitor: host.power,
@@ -132,6 +163,7 @@ vi.mock('electron', async () => {
       isTrustedAccessibilityClient: () => host.accessibilityTrusted,
     },
     Tray: class {
+      destroy() {}
       setToolTip() {}
       setContextMenu(items: Array<{ label?: string }>) {
         host.menu = items;
@@ -170,6 +202,8 @@ beforeEach(async () => {
   Object.defineProperty(process, 'platform', { value: 'darwin' });
   vi.resetModules();
   host.windows = [];
+  host.lifecycle = [];
+  host.shutdown = null;
   host.children = [];
   host.cursor = { x: 1200, y: 100 };
   host.frame = null;
@@ -536,4 +570,28 @@ describe('host scene recovery', () => {
     host.power!.emit('unlock-screen');
     expect(host.windows[0].visible).toBe(true);
   });
+});
+
+it('makes the workspace terminal before stopping the backend and ignores activation during delayed quit', async () => {
+  const { app } = await import('electron');
+  let finish!: () => void;
+  host.shutdown = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  host.lifecycle = [];
+  const preventDefault = vi.fn();
+  app.emit('before-quit', { preventDefault });
+  expect(preventDefault).toHaveBeenCalledOnce();
+  expect(host.lifecycle).toEqual(['workspace-terminal', 'backend-stop']);
+  app.emit('activate');
+  app.emit('second-instance');
+  const windows = host.windows.length;
+  for (const label of ['Chat with Dot', 'Talk with Dot', 'Customize Dot'])
+    host.menu.find((item) => item.label === label)?.click?.();
+  expect(host.windows).toHaveLength(windows);
+  expect(host.lifecycle).toEqual(['workspace-terminal', 'backend-stop']);
+  expect(app.exit).not.toHaveBeenCalled();
+  finish();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
 });

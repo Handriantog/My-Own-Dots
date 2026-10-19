@@ -1,6 +1,55 @@
-# Desktop companion verification
+# Desktop workspace and companion verification
 
 Machine: Apple M3 Max, 14 CPU cores, 36 GiB RAM, macOS 26.6.2 (25G83), arm64. Runtime: Electron 44.8.0, PixiJS 8.22.0. Native helper compiled with the installed Swift toolchain, deployment target macOS 14.
+
+## Minimal startup refinement — October 19, 2026
+
+At the owner's request, `af709dd` removes the startup headlines, slogans, descriptions, shortcut footer, visible branding and stage checklist. Normal loading now shows the animated mascot with one 11px status line and a thin progress animation. Setup controls remain hidden until a longer wait or recovery state; warnings and errors retain their actionable details. The separate configuration window keeps its fields and uses a smaller heading. The initial HTML already has the minimal presentation, preventing a flash of the old copy before the script runs.
+
+The two focused suites passed **37 tests** with one worker. Typecheck, targeted lint, formatting, whitespace and the full desktop build passed. CUA inspected the compiled native preview at 1280×840 and confirmed only the mascot, one status line and progress indicator during normal loading, followed by recovery controls on a longer wait and an actionable error state. No new blur/filter effects or startup delay were introduced.
+
+The macOS arm64 package passed the signing helper's strict deep verification and ZIP integrity. After a graceful quit, the app and ZIP at the standard `release/` paths were updated. CUA observed the actual packaged minimal startup screen and its automatic transition to the existing workspace with **Workspace connected**. The app remains running; the temporary preview profile, previous generated bundle and package staging directory were removed.
+
+## Dot startup screen — October 19, 2026
+
+Implementation `0c3b83d` adds the animated blue plush mascot, orbiting lights, glow, greeting interaction, actual backend stages, longer-wait recovery controls and an expanded setup presentation. It adds no minimum loading duration or simulated percentage. The ready workspace opens as soon as the host finishes connecting. Reduced-motion CSS disables animation and parallax; hidden documents pause animation.
+
+- Sequential verification with one test worker: **33 desktop files passed, 374 tests passed, one optional certificate-signing test skipped** in 14.75 seconds. The three focused suites passed 58 tests, including a renderer-crash recovery regression demonstrated failing before the fix. Typecheck, targeted lint, changed-file formatting and whitespace checks passed.
+- A disposable native Electron fixture loaded the actual compiled renderer and preload. CUA inspection covered light/dark appearance, stage changes, longer waits, mascot greeting, connection errors, and recovery form expansion/scrolling at 560×760. Normal launch was inspected at 1280×840. The fixture made no AI request, changed no production configuration and opened no audio device. Native screenshots were inspected in the tool, not saved to disk. Physical OS reduced-motion switching and screen-reader narration were not exercised.
+- The scoped independent review's two P2 findings were fixed and confirmed: a healthy-backend renderer crash retains an actionable reopen button, and dark primary buttons meet 4.5:1 text contrast. See [review notes](review.md#dot-startup-screen--october-19-2026), including the owner's lag report, stopped concurrent jobs and reduced rendering cost. Performance samples are observations, not a cross-device benchmark.
+- The macOS arm64 app and ZIP were rebuilt and replaced at the standard `release/` paths after quitting the old app and confirming its owned backend stopped. Strict deep code-sign verification and ZIP integrity passed. The packaged isolated process smoke passed two launches, authenticated identity/API checks, SQLite persistence, orderly exits, stopped owned backends, removed leases and closed ports. First readiness took 5,673 ms; restart readiness took 1,452 ms. Shutdown took 924 ms and 66 ms respectively; these are single observations, not startup guarantees.
+- CUA then launched the updated standard app against the owner's selected workspace and observed the actual **Waking up your workspace** mascot screen, followed by the bundled main window reporting **Workspace connected** with existing conversations. **Workspace Setup…** displayed the new expanded presentation with its connected state; closing it returned to the main workspace. The app remains running with its owned backend on port 4310. Disposable preview data and the package staging directory were removed. Physical OS reduced-motion switching and assistive narration remain unverified, as above.
+
+The original workspace was selected through the native folder picker during the preceding port-conflict follow-up. Its obsolete Node service was stopped gracefully, and Electron took ownership of the backend while preserving the existing databases and configuration. A separate attachment check reused that healthy backend with `owned:false` and left it alive on stop. This intentional handoff supersedes the earlier migration record's statement that the original service remained untouched.
+
+## Electron workspace migration — October 19, 2026
+
+The local `feat/electron-workspace` review build is complete. The shipped implementation is `31e0585`; later delivery documentation does not change its code. The app and ZIP are under `release/`. This branch has not been merged or published, and the local ad-hoc signature is not a notarized public release. Review findings, their resolutions and implementation decisions are recorded in [review.md](review.md#full-electron-workspace--october-19-2026).
+
+- Final full integration suite: **156 files passed, 1,143 tests passed, one optional certificate-signing test skipped**, 20.04 seconds, with dedicated disposable PostgreSQL and the installed Integrator Python environment. Typecheck, lint, formatting and whitespace checks pass. The final setup-helper correction additionally passed its 12 focused tests, syntax check and targeted lint. No production database, external AI request or microphone was used.
+- The whole-branch review's four Important and five Minor issues were fixed and confirmed by its scoped re-review. A newly found custom Python environment setup error was reproduced, corrected and inspected by the controller. Coverage includes owned versus attached backend lifecycle, configuration cancellation/reset, copied-database navigation, command delivery during recovery, safe renderer errors, native executable discovery, dangling database symlinks, degraded dependency retry and status rendering. The inherited large frontend chunk advisory remains; no new performance guarantee is claimed.
+- `npm run desktop:package` built the complete macOS arm64 app, including renderer, compiled backend, native helper and production dependencies. **Strict deep code-sign verification and ZIP integrity passed.** The app has **676,907,677 logical bytes** across 44,731 regular files; the ZIP has **271,544,037 bytes**. This measures logical file contents, not disk allocation. The scan found no private `.env`, `.venv`, source-checkout marker or database files; the bundled `support/.env.example` is intentional. The custom icon matches the build asset, and the final setup fix is present in the package. The packager's optional `.icon` format warning does not mean the `.icns` icon is absent.
+- The final packaged process smoke ran from a disposable cwd with isolated userData/workspace, blank provider keys and **PATH=/usr/bin:/bin:/usr/sbin:/sbin**. Both launches checked authenticated identity/API 200, rejected unauthenticated identity 401, production root 404, SQLite Space persistence across restart, exit code 0, stopped owned backend, removed lease and closed port. It invokes no UI automation, Docker initialization, AI provider or microphone. Native executable fixture tests separately cover installed prerequisite discovery; this smoke is not a clean-machine Docker/provider setup certification.
+
+| Final packaged smoke | First launch | Restart |
+| -------------------- | ------------ | ------- |
+| Backend readiness    | 5,968 ms     | 837 ms  |
+| Orderly shutdown     | 61 ms        | 55 ms   |
+| Exit code            | 0            | 0       |
+
+These are single local observations, not general startup guarantees; OS caches were not flushed. Reports are `artifacts/desktop/process-smoke.json` and `package-verification.json` (git-ignored). The smoke termination helper also has three real-child behavioral tests for orderly exit, bounded escalation and an already exited process.
+
+After the owner confirmed the desktop was unlocked, the controller inspected the **actual native development app through CUA** at 1280×840 and about 900 logical pixels wide. Light and dark views were readable; Cmd+, opened settings and CmdK selected Planner. A native composer sent a disposable message through the real Integrator/Python/SSE fixture path and displayed its offline response. The conversation appeared in the sidebar and quick navigation. Spaces opened the page editor; a title edit saved with CmdS and reappeared in the library. Activity and Memory loaded their real views/filters. Workspace Setup opened and closed as a separate window. CmdW hid the main window while the plush remained visible; File → Open Workspace restored the same conversation. CmdQ exited cleanly and stopped the owned fixture backend.
+
+The packaged `cf52242` app then restored that same conversation/reply after a process restart, along with dark theme and narrow window geometry; its screenshot was inspected through CUA. No native screenshots were saved to disk. Following the recovery fixes, an `ae60a1a` package again passed process/API checks, but two exact-path CUA bindings timed out, so no fresh pixels are claimed for that attempt. The final `31e0585` follow-up changes only Python setup, its tests and documentation; the final artifact's process smoke and integrity checks above were rerun. macOS window management emitted `TASK_CATEGORY_POLICY` / `TASK_SUPPRESSION_POLICY` invalid-argument warnings during earlier native checks; the listed interactions completed.
+
+**Remaining acceptance limits:** overlay clicks returned `noWindowsAvailable`, so compact chat and conversation handoff were not visually exercised. Host/React coverage does not replace that native check. System-theme transitions, real provider login/inference, microphone/speaker behavior, OS permission prompts, global shortcut delivery, untouched optional external integrations and long-duration performance remain separate checks. Only this Apple Silicon/macOS version was exercised. Native fixture chat made no external AI request and opened no audio device. The original port 4310 service and workspace data were preserved; disposable databases and test profiles were removed after verification.
+
+The supported process entrypoint is `npm run desktop:smoke`, optionally followed by `--` and a packaged executable path. Old chat/windowless/live-soak/visibility UI harnesses fail immediately with an explicit retirement message; their old window and web-connection assumptions do not validate this migration. `desktop:runtime:smoke` checks just the shipped backend under Electron Node. Historical companion visual generators remain available but are not migration acceptance.
+
+## Historical companion evidence
+
+The dated records below describe the versions and harnesses exercised at the time. They are retained as history; they do not establish current full-workspace acceptance or override the migration gaps above.
 
 ## Windowless talk shortcut — October 19
 
@@ -254,7 +303,9 @@ Two earlier instrumented runs of the preceding package lost their Playwright tar
 
 The power log places idle sleep at 07:53:56, five seconds after the eight-minute probe's target closed. That timing is useful environmental evidence, but does not by itself establish whether the app, instrumentation, or a preceding OS transition closed the target.
 
-## Reproduce
+## Historical reproduction commands
+
+These commands belong to the initial companion delivery. Use the supported migration checks above for the current workspace. The retired UI harnesses require migration before reuse.
 
 ```sh
 npm test -- tests/desktop
@@ -265,7 +316,7 @@ npm run desktop:package
 node scripts/desktop-smoke.mjs "release/My Own Dots-darwin-arm64/My Own Dots.app/Contents/MacOS/My Own Dots"
 node scripts/desktop-rig-preview.mjs
 node --import tsx scripts/desktop-soak.mjs
-node scripts/desktop-live-soak.mjs
+# desktop-live-soak.mjs is retired after the workspace migration.
 ```
 
 Generated screenshots and JSON reports are under `artifacts/desktop/` (git-ignored). The native fixture source is `native/desktop-observer/qa-windows.swift`; it is deliberately excluded from the shipped application. The app needs neither the fixture nor the source checkout at runtime.

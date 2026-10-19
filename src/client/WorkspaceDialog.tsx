@@ -20,8 +20,10 @@ export function WorkspaceDialog({
   workspace,
   onClose,
   mutate,
+  embedded = false,
 }: {
   dialog: Dialog;
+  embedded?: boolean;
   state: State;
   workspace: WorkspaceState;
   onClose: () => void;
@@ -72,9 +74,11 @@ export function WorkspaceDialog({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [settingsSection, setSettingsSection] = useState('general');
   const [theme, setTheme] = useState(themePreference);
   const container = useRef<HTMLElement>(null);
   useEffect(() => {
+    if (embedded) return;
     const previous =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -107,35 +111,73 @@ export function WorkspaceDialog({
   }, []);
   const title =
     dialog.type === 'space'
-      ? 'A space for something.'
+      ? 'New Space'
       : dialog.type === 'dot'
         ? dialog.dot
-          ? 'Make this Dot yours.'
-          : 'Meet your next specialist.'
+          ? 'Edit Dot'
+          : 'New Dot'
         : dialog.type === 'settings'
-          ? 'Your workspace, your rules.'
+          ? 'Settings'
           : dialog.type === 'memory'
-            ? 'Something to remember.'
-            : 'Let your Dot keep time.';
+            ? 'Edit memory'
+            : 'Schedule a task';
+  const nativeAction = async (action: () => Promise<void>) => {
+    try {
+      await action();
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : 'Could not open native settings.',
+      );
+    }
+  };
   return (
-    <div className="modal-backdrop" onClick={onClose}>
+    <div
+      className={embedded ? 'settings-page' : 'modal-backdrop'}
+      onClick={embedded ? undefined : onClose}
+    >
       <section
-        className="modal"
-        role="dialog"
-        aria-modal="true"
+        className={`modal ${embedded ? 'settings-content' : ''}`}
+        role={embedded ? undefined : 'dialog'}
+        aria-modal={embedded ? undefined : true}
         aria-labelledby="dialog-title"
         ref={container}
         onClick={(e) => e.stopPropagation()}
       >
-        <button
-          className="modal-close icon-button"
-          aria-label="Close dialog"
-          onClick={onClose}
-        >
-          <X size={18} />
-        </button>
-        <span className="eyebrow">OPENDOTS TEMPLATE</span>
+        {!embedded && (
+          <button
+            className="modal-close icon-button"
+            aria-label="Close dialog"
+            onClick={onClose}
+          >
+            <X size={18} />
+          </button>
+        )}
+        <span className="eyebrow">MY OWN DOTS</span>
         <h2 id="dialog-title">{title}</h2>
+        {dialog.type === 'settings' && (
+          <>
+            <p className="settings-description">
+              Make the workspace work for you.
+            </p>
+            <nav className="settings-tabs" aria-label="Settings categories">
+              {[
+                ['general', 'General'],
+                ['permissions', 'Permissions'],
+                ['services', 'Services & connections'],
+              ].map(([id, label]) => (
+                <button
+                  key={id}
+                  className={settingsSection === id ? 'active' : ''}
+                  onClick={() => setSettingsSection(id)}
+                >
+                  {label}
+                </button>
+              ))}
+            </nav>
+          </>
+        )}
         <form
           onSubmit={async (e) => {
             e.preventDefault();
@@ -282,7 +324,9 @@ export function WorkspaceDialog({
               </select>
             </fieldset>
           )}
-          {(dialog.type === 'dot' || dialog.type === 'settings') && (
+          {(dialog.type === 'dot' ||
+            (dialog.type === 'settings' &&
+              settingsSection === 'permissions')) && (
             <>
               <label className="permission-row">
                 <input
@@ -312,22 +356,20 @@ export function WorkspaceDialog({
                   </small>
                 </span>
               </label>
-              {workspace.setup.composio && (
-                <label className="permission-row">
-                  <input
-                    type="checkbox"
-                    checked={apps}
-                    onChange={(event) => setApps(event.target.checked)}
-                  />
-                  <span>
-                    <strong>Connected apps</strong>
-                    <small>
-                      Allow access to the owner’s apps through Composio. Global
-                      settings always take precedence.
-                    </small>
-                  </span>
-                </label>
-              )}
+              <label className="permission-row">
+                <input
+                  type="checkbox"
+                  checked={apps}
+                  onChange={(event) => setApps(event.target.checked)}
+                />
+                <span>
+                  <strong>Connected apps</strong>
+                  <small>
+                    Allow access to the owner’s apps through Composio. Global
+                    settings always take precedence.
+                  </small>
+                </span>
+              </label>
             </>
           )}
           {dialog.type === 'dot' &&
@@ -339,7 +381,7 @@ export function WorkspaceDialog({
                 onChanged={() => {}}
               />
             )}
-          {dialog.type === 'dot' && workspace.setup.composio && (
+          {dialog.type === 'dot' && (
             <fieldset className="space-access-fields">
               <legend>Connected apps</legend>
               <label className="field-label" htmlFor="composio-toolkits">
@@ -429,13 +471,14 @@ export function WorkspaceDialog({
                 <option value="604800">Every week</option>
               </select>
               <p className="muted">
-                Runs on the server in this same conversation, even with the tab
-                closed. Failed or interrupted runs wait for manual retry. Review
-                completed work before retrying an interrupted run.
+                Runs on the server in this same conversation, while the
+                application is running. Failed or interrupted runs wait for
+                manual retry. Review completed work before retrying an
+                interrupted run.
               </p>
             </>
           )}
-          {dialog.type === 'settings' && (
+          {dialog.type === 'settings' && settingsSection === 'general' && (
             <fieldset className="appearance-fields">
               <legend>Appearance</legend>
               <div className="segmented" role="radiogroup">
@@ -458,11 +501,34 @@ export function WorkspaceDialog({
                 )}
               </div>
               <p className="muted">
-                Saved in this browser. System follows your device.
+                System follows your device’s appearance. Your preference is
+                saved automatically.
               </p>
             </fieldset>
           )}
-          {dialog.type === 'settings' && (
+          {dialog.type === 'settings' &&
+            settingsSection === 'general' &&
+            window.dotWorkspace && (
+              <section className="native-settings">
+                <div>
+                  <h3>Desktop companion</h3>
+                  <p>
+                    Choose your companion’s appearance and desktop behavior.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void nativeAction(() =>
+                      window.dotWorkspace!.openPreferences(),
+                    )
+                  }
+                >
+                  Customize companion
+                </button>
+              </section>
+            )}
+          {dialog.type === 'settings' && settingsSection === 'services' && (
             <div className="config-note">
               <strong>Service setup</strong>
               <p>
@@ -511,23 +577,27 @@ export function WorkspaceDialog({
                   : 'needs VOICE_API_KEY and VOICE_MODEL'}
                 .
               </p>
-              <p>
-                Local mode disables setup and usage telemetry by default.{' '}
-                <a
-                  href="https://github.com/Handriantog/My-Own-Dots/blob/main/docs/SETUP-TELEMETRY.md"
-                  target="_blank"
-                  rel="noreferrer"
+              <div className="service-summary">
+                <strong>Optional connections</strong>
+                <p>
+                  Composio:{' '}
+                  {workspace.setup.composio ? 'configured' : 'not configured'}.
+                  Add MCP servers and choose app toolkits in each Dot’s
+                  settings.
+                </p>
+              </div>
+              {window.dotWorkspace && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void nativeAction(() =>
+                      window.dotWorkspace!.openBackendSettings(),
+                    )
+                  }
                 >
-                  Tracking and opt-out details
-                </a>
-              </p>
-              <a
-                href="https://github.com/Handriantog/My-Own-Dots/blob/main/docs/SETUP.md"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Local setup guide ↗
-              </a>
+                  Workspace setup
+                </button>
+              )}
             </div>
           )}
           {dialog.type === 'memory' && (
@@ -541,9 +611,12 @@ export function WorkspaceDialog({
               {error}
             </p>
           )}
-          <button className="primary full" disabled={busy}>
-            {busy ? 'Saving…' : 'Save'}
-          </button>
+          {(dialog.type !== 'settings' ||
+            settingsSection === 'permissions') && (
+            <button className="primary full" disabled={busy}>
+              {busy ? 'Saving…' : 'Save changes'}
+            </button>
+          )}
         </form>
       </section>
     </div>

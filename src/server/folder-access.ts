@@ -83,9 +83,11 @@ export class FolderAccessError extends Error {
 const sourceHelper = fileURLToPath(
   new URL('../../scripts/folder-access.py', import.meta.url),
 );
-const helperPath = existsSync(sourceHelper)
-  ? sourceHelper
-  : resolve('scripts/folder-access.py');
+const helperPath = process.env.DOTS_RUNTIME_ROOT
+  ? resolve(process.env.DOTS_RUNTIME_ROOT, 'scripts/folder-access.py')
+  : existsSync(sourceHelper)
+    ? sourceHelper
+    : resolve('scripts/folder-access.py');
 
 /** No shell or environment-provided code is evaluated; Python is an app prerequisite. */
 function helper(

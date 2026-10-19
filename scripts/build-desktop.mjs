@@ -9,10 +9,16 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { build } from 'esbuild';
+import { buildDesktopRuntime } from './desktop-runtime.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const out = path.join(root, 'dist/desktop');
 mkdirSync(path.join(out, 'native'), { recursive: true });
+await buildDesktopRuntime(root, path.join(out, 'app'));
+writeFileSync(
+  path.join(out, 'dev-source.json'),
+  JSON.stringify({ sourceRoot: root }),
+);
 if (process.platform !== 'darwin')
   throw new Error('The desktop observer currently builds on macOS only.');
 const architecture = process.arch === 'arm64' ? 'arm64' : 'x86_64';
@@ -86,6 +92,17 @@ const renderer = spawnSync(
   { cwd: root, stdio: 'inherit' },
 );
 if (renderer.status !== 0) process.exit(renderer.status ?? 1);
+const workspaceRenderer = spawnSync(
+  process.execPath,
+  [
+    path.join(root, 'node_modules/vite/bin/vite.js'),
+    'build',
+    '--config',
+    path.join(root, 'vite.workspace.config.ts'),
+  ],
+  { cwd: root, stdio: 'inherit' },
+);
+if (workspaceRenderer.status !== 0) process.exit(workspaceRenderer.status ?? 1);
 cpSync(
   path.join(root, 'public/desktop-dot'),
   path.join(out, 'renderer/desktop-dot'),
@@ -103,7 +120,7 @@ writeFileSync(
       productName: 'My Own Dots',
       version: '0.1.0',
       main: 'main.cjs',
-      description: 'A plush desktop companion',
+      description: 'A local AI desktop workspace and companion',
       author: 'My Own Dots',
       license: 'MIT',
     },

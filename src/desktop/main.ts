@@ -6,7 +6,6 @@ import {
   Menu,
   Notification,
   nativeImage,
-  net,
   powerMonitor,
   protocol,
   screen,
@@ -18,7 +17,11 @@ import {
   type MenuItemConstructorOptions,
 } from 'electron';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { readFile } from 'node:fs/promises';
+import { WorkspaceBackend } from './host/workspace-backend.js';
+import { WorkspaceWindow } from './host/workspace-window.js';
+import { installWorkspaceMenu } from './host/workspace-menu.js';
+import { createWorkspaceProtocol } from './host/workspace-protocol.js';
 import { CompanionSimulation } from './core/simulation.js';
 import { CompanionVisibility } from './core/visibility.js';
 import { hitTestRig } from './core/rig-model.js';
@@ -60,6 +63,8 @@ protocol.registerSchemesAsPrivileged([
       standard: true,
       secure: true,
       supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
       codeCache: true,
     },
   },
@@ -67,7 +72,8 @@ protocol.registerSchemesAsPrivileged([
 app.setName('My Own Dots');
 app.setPath(
   'userData',
-  process.env.DOTS_DESKTOP_DATA ||
+  process.env.DOTS_DESKTOP_USER_DATA ||
+    process.env.DOTS_DESKTOP_DATA ||
     path.join(app.getPath('appData'), 'My Own Dots Desktop'),
 );
 const diagnosticsDirectory = path.join(app.getPath('userData'), 'diagnostics');
@@ -94,20 +100,39 @@ async function start(): Promise<void> {
   if (process.platform !== 'darwin')
     throw new Error('This companion build currently supports macOS only.');
   const rendererDirectory = path.join(__dirname, 'renderer');
-  protocol.handle('dots', (request) => {
-    const url = new URL(request.url);
-    let pathname: string;
+  let sourceRoot: string | undefined;
+  if (!app.isPackaged) {
     try {
-      pathname = decodeURIComponent(url.pathname);
+      sourceRoot = (
+        JSON.parse(
+          await readFile(path.join(__dirname, 'dev-source.json'), 'utf8'),
+        ) as { sourceRoot?: string }
+      ).sourceRoot;
     } catch {
-      return new Response('Bad path', { status: 400 });
+      /* Packaged applications use Application Support. */
     }
-    const file = path.resolve(rendererDirectory, `.${pathname}`);
-    if (url.host !== 'app' || !file.startsWith(rendererDirectory + path.sep))
-      return new Response('Forbidden', { status: 403 });
-    return net.fetch(pathToFileURL(file).toString());
+  }
+  const backend = new WorkspaceBackend({
+    bundle: path.join(__dirname, 'app'),
+    data: app.getPath('userData'),
+    sourceRoot,
   });
-  app.dock?.hide();
+  const workspace = new WorkspaceWindow(
+    __dirname,
+    app.getPath('userData'),
+    backend,
+    () => openSettings(),
+  );
+  protocol.handle(
+    'dots',
+    createWorkspaceProtocol(
+      rendererDirectory,
+      () => workspace.activeConnection,
+      fetch,
+      () => workspace.transportFailed(),
+    ),
+  );
+  app.dock?.show();
   void diagnostics.record('startup', {
     executable: process.execPath,
     pid: process.pid,
@@ -158,6 +183,7 @@ async function start(): Promise<void> {
       },
       error: reportVoiceError,
     },
+    workspace,
   );
   const clickGesture = new CompanionClick();
   let dismissMenuClick = false;
@@ -316,6 +342,7 @@ async function start(): Promise<void> {
     return companionPanelBounds(frame.root, display.workArea, width, height);
   }
   function openChat(): void {
+    if (quitting) return;
     userHidden = false;
     syncVisibility();
     void chat.open(panelBounds(440, 620)).catch((error) => {
@@ -325,6 +352,7 @@ async function start(): Promise<void> {
     });
   }
   function openTalk(): void {
+    if (quitting) return;
     userHidden = false;
     syncVisibility();
     void chat.talk(panelBounds(440, 620)).catch((error) => {
@@ -366,6 +394,7 @@ async function start(): Promise<void> {
     });
   }
   function openCompanionMenu(): void {
+    if (quitting) return;
     if (companionMenu.isOpen) {
       companionMenu.close();
       return;
@@ -477,6 +506,12 @@ async function start(): Promise<void> {
         enabled: false,
       },
       { type: 'separator' },
+      {
+        label: 'Open Workspace',
+        click: () => {
+          void workspace.open();
+        },
+      },
       { label: 'Chat with Dot', click: openChat },
       { label: 'Talk with Dot', click: openTalk },
       {
@@ -687,6 +722,7 @@ async function start(): Promise<void> {
     );
   }
   function openSettings(): void {
+    if (quitting) return;
     if (settingsWindow && !settingsWindow.isDestroyed()) {
       settingsWindow.show();
       settingsWindow.focus();
@@ -1016,6 +1052,7 @@ async function start(): Promise<void> {
   screen.on('display-removed', refreshDisplays);
   screen.on('display-metrics-changed', refreshDisplays);
   const suspend = () => {
+    workspace.suspend();
     osSuspended = true;
     syncVisibility();
   };
@@ -1030,7 +1067,15 @@ async function start(): Promise<void> {
   powerMonitor.on('lock-screen', suspend);
   powerMonitor.on('resume', resume);
   powerMonitor.on('unlock-screen', resume);
+  installWorkspaceMenu(workspace, () => openSettings());
+  app.on('activate', () => {
+    if (quitting) return;
+    void workspace.open();
+  });
+  void workspace.open();
   app.on('second-instance', () => {
+    if (quitting) return;
+    void workspace.open();
     userHidden = false;
     if (rendererReady) syncVisibility();
     else recoverRenderer();
@@ -1039,18 +1084,22 @@ async function start(): Promise<void> {
     if (quitting) return;
     event.preventDefault();
     quitting = true;
+    const workspaceShutdown = workspace.destroy();
     talkShortcut.destroy();
-    chat.hide();
+    chat.destroy();
     clearInterval(ticker);
     if (retryTimer) clearTimeout(retryTimer);
     cancelCapture();
     simulation.suspend();
     helper.stop();
-    void savePreferences().finally(() => {
+    void Promise.allSettled([
+      savePreferences(),
+      backend.stop(),
+      workspaceShutdown,
+    ]).finally(() => {
       tray.destroy();
       settingsWindow?.destroy();
       companionMenu.destroy();
-      chat.destroy();
       overlay.destroy();
       app.exit(0);
     });

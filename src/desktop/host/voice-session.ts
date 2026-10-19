@@ -4,12 +4,14 @@ import {
   type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from 'electron';
+import { isWorkspacePage } from './workspace-protocol.js';
 import type { CompanionVoiceState } from '../shared/voice-contract.js';
 
 type Sender = Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>;
 
 /** Permission and lifecycle boundary only; the workspace owns authenticated call scope. */
 export class CompanionVoiceSession {
+  private static sessions = new Set<CompanionVoiceSession>();
   private available = false;
   private callId: string | null = null;
   private stoppingId: string | null = null;
@@ -32,9 +34,11 @@ export class CompanionVoiceSession {
       state?(value: CompanionVoiceState): void;
       error?(message: string): void;
     },
+    private readonly channel = 'dot:voice',
   ) {
-    ipcMain.on('dot:voice:context', this.context);
-    ipcMain.handle('dot:voice:ready', (event, value: unknown) => {
+    CompanionVoiceSession.sessions.add(this);
+    ipcMain.on(`${this.channel}:context`, this.context);
+    ipcMain.handle(`${this.channel}:ready`, (event, value: unknown) => {
       this.requireTrusted(event);
       if (typeof value !== 'boolean')
         throw new Error('Invalid voice readiness');
@@ -48,7 +52,7 @@ export class CompanionVoiceSession {
         this.stop('unavailable');
       }
     });
-    ipcMain.handle('dot:voice:activate', (event) => {
+    ipcMain.handle(`${this.channel}:activate`, (event) => {
       this.requireTrusted(event);
       const window = this.getWindow()!;
       if (
@@ -74,15 +78,15 @@ export class CompanionVoiceSession {
         )
         .then(() => {});
     });
-    ipcMain.handle('dot:voice:cancel-talk', (event) => {
+    ipcMain.handle(`${this.channel}:cancel-talk`, (event) => {
       this.requireTrusted(event);
       if (this.talkUntil) this.stop('cancelled');
     });
-    ipcMain.handle('dot:voice:cancel-start', (event) => {
+    ipcMain.handle(`${this.channel}:cancel-start`, (event) => {
       this.requireTrusted(event);
       if (this.starting) this.stop('cancelled');
     });
-    ipcMain.handle('dot:voice:phase', (event, value: unknown) => {
+    ipcMain.handle(`${this.channel}:phase`, (event, value: unknown) => {
       this.requireTrusted(event);
       const data = value as { callId?: unknown; phase?: unknown } | null;
       if (
@@ -96,16 +100,22 @@ export class CompanionVoiceSession {
         throw new Error('Invalid voice phase');
       this.changed.state?.(data.phase as CompanionVoiceState);
     });
-    ipcMain.handle('dot:voice:error', (event, value: unknown) => {
+    ipcMain.handle(`${this.channel}:error`, (event, value: unknown) => {
       this.requireTrusted(event);
       if (typeof value !== 'string' || value.length > 500)
         throw new Error('Invalid voice error');
       if (this.windowless && this.engaged) this.changed.error?.(value);
       if (this.engaged) this.stop('error');
     });
-    ipcMain.handle('dot:voice:begin', (event, value: unknown) => {
+    ipcMain.handle(`${this.channel}:begin`, (event, value: unknown) => {
       this.requireTrusted(event);
       const callId = this.validId(value);
+      if (
+        [...CompanionVoiceSession.sessions].some(
+          (session) => session !== this && session.engaged,
+        )
+      )
+        throw new Error('Another window already has an active call.');
       const window = this.getWindow()!;
       if (
         !this.available ||
@@ -124,7 +134,7 @@ export class CompanionVoiceSession {
       this.changed.active(true);
       this.changed.state?.('listening');
     });
-    ipcMain.handle('dot:voice:end', (event, value: unknown) => {
+    ipcMain.handle(`${this.channel}:end`, (event, value: unknown) => {
       this.requireTrusted(event);
       const callId = this.validId(value);
       if (![this.callId, this.stoppingId, this.endedId].includes(callId))
@@ -168,13 +178,14 @@ export class CompanionVoiceSession {
       !this.workspacePage(window.webContents.mainFrame.url)
     )
       return false;
-    if (this.engaged) return false;
+    if ([...CompanionVoiceSession.sessions].some((session) => session.engaged))
+      return false;
     this.windowless = windowless;
     this.talkUntil = Date.now() + 30000;
     this.deadline(30000);
     this.changed.state?.('connecting');
-    if (windowless) window.webContents.send('dot:voice:talk', true);
-    else window.webContents.send('dot:voice:talk');
+    if (windowless) window.webContents.send(`${this.channel}:talk`, true);
+    else window.webContents.send(`${this.channel}:talk`);
     return true;
   }
 
@@ -209,6 +220,8 @@ export class CompanionVoiceSession {
   private workspacePage(value: string): boolean {
     try {
       const url = new URL(value);
+      if (new URL(this.getAddress()).protocol === 'dots:')
+        return isWorkspacePage(value);
       return (
         url.origin === new URL(this.getAddress()).origin &&
         url.pathname === '/' &&
@@ -234,24 +247,46 @@ export class CompanionVoiceSession {
     if (!this.trusted(event)) throw new Error('Invalid voice sender');
   }
 
-  attach(window: BrowserWindow): void {
-    const allowed = (contents: unknown, isMainFrame: boolean, url?: string) =>
+  private permits(
+    contents: unknown,
+    isMainFrame: boolean,
+    url?: string,
+    origin?: string,
+  ): boolean {
+    const window = this.getWindow();
+    const address = new URL(this.getAddress());
+    const expected =
+      address.protocol === 'dots:' ? 'dots://workspace' : address.origin;
+    return (
       !!this.callId &&
+      !!window &&
       !window.isDestroyed() &&
       contents === window.webContents &&
       isMainFrame &&
-      (this.windowless || (window.isVisible() && window.isFocused())) &&
+      (this.windowless ||
+        (window.isVisible() && window.isFocused() && !window.isMinimized())) &&
       this.workspacePage(window.webContents.mainFrame.url) &&
       !!url &&
-      this.workspacePage(url);
-    // Both handlers are required: a Chromium permission check can otherwise skip
-    // the request handler. Deny camera, subframes, and every unrelated permission.
+      this.workspacePage(url) &&
+      (origin === undefined || origin === expected || origin === expected + '/')
+    );
+  }
+  attach(window: BrowserWindow): void {
+    // Electron permission handlers belong to the session, not a BrowserWindow.
+    // Each installation routes against the live registry, never overwrites trust
+    // with one window's closure. A shared engagement lock prevents overlap.
     window.webContents.session.setPermissionCheckHandler(
       (contents, permission, origin, details) =>
         permission === 'media' &&
         details.mediaType === 'audio' &&
-        origin === new URL(this.getAddress()).origin &&
-        allowed(contents, details.isMainFrame, details.requestingUrl),
+        [...CompanionVoiceSession.sessions].some((session) =>
+          session.permits(
+            contents,
+            details.isMainFrame,
+            details.requestingUrl,
+            origin,
+          ),
+        ),
     );
     window.webContents.session.setPermissionRequestHandler(
       (contents, permission, callback, details) => {
@@ -260,7 +295,13 @@ export class CompanionVoiceSession {
           permission === 'media' &&
             types?.length === 1 &&
             types[0] === 'audio' &&
-            allowed(contents, details.isMainFrame, details.requestingUrl),
+            [...CompanionVoiceSession.sessions].some((session) =>
+              session.permits(
+                contents,
+                details.isMainFrame,
+                details.requestingUrl,
+              ),
+            ),
         );
       },
     );
@@ -275,7 +316,7 @@ export class CompanionVoiceSession {
     this.changed.state?.(null);
     const window = this.getWindow();
     if (window && !window.isDestroyed())
-      window.webContents.send('dot:voice:stop', reason);
+      window.webContents.send(`${this.channel}:stop`, reason);
     if (!this.callId) return;
     this.stoppingId = this.callId;
     this.callId = null;
@@ -314,7 +355,8 @@ export class CompanionVoiceSession {
 
   destroy(): void {
     this.reset();
-    ipcMain.removeListener('dot:voice:context', this.context);
+    CompanionVoiceSession.sessions.delete(this);
+    ipcMain.removeListener(`${this.channel}:context`, this.context);
     for (const name of [
       'ready',
       'activate',
@@ -325,6 +367,6 @@ export class CompanionVoiceSession {
       'phase',
       'error',
     ])
-      ipcMain.removeHandler(`dot:voice:${name}`);
+      ipcMain.removeHandler(`${this.channel}:${name}`);
   }
 }

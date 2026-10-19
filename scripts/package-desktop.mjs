@@ -28,9 +28,10 @@ const bundles = await packager({
   icon: path.join(root, 'dist/desktop/icon.icns'),
   overwrite: true,
   prune: false,
+  ignore: /^\/dev-source\.json$/,
   asar: false,
   extendInfo: {
-    LSUIElement: true,
+    LSUIElement: false,
     LSMinimumSystemVersion: '14.0',
     NSHighResolutionCapable: true,
     NSHumanReadableCopyright: 'My Own Dots',
@@ -53,7 +54,7 @@ for (const directory of bundles) {
   if (archive.status !== 0) process.exit(archive.status ?? 1);
   writeFileSync(
     path.join(releaseDirectory, 'BUILD.txt'),
-    `My Own Dots 0.1.0\nBuilt: ${new Date().toISOString()}\nArchitecture: ${process.arch}\nElectron: ${electronVersion}\nSigning: ${signing}; not notarized\nRuntime: bundled companion; AI chat connects to a separately running local Dots workspace\nApp: ${app}\nZip: ${zip}\n`,
+    `My Own Dots 0.1.0\nBuilt: ${new Date().toISOString()}\nArchitecture: ${process.arch}\nElectron: ${electronVersion}\nSigning: ${signing}; not notarized\nRuntime: bundled workspace and owned API backend; AI CLIs, Python integrations and Docker remain local prerequisites\nApp: ${app}\nZip: ${zip}\n`,
   );
   console.log(
     `App: ${app}\nArchive: ${zip}\n${signing}; notarization remains a release step.`,

@@ -5,6 +5,7 @@ import {
   type IpcMainEvent,
   type IpcMainInvokeEvent,
 } from 'electron';
+import { isWorkspacePage } from './workspace-protocol.js';
 import type { DesktopFolderBridge } from '../shared/folder-contract.js';
 
 type Sender = Pick<IpcMainInvokeEvent, 'sender' | 'senderFrame'>;
@@ -22,9 +23,10 @@ export class CompanionFolderPicker {
   constructor(
     private readonly getWindow: () => BrowserWindow | null,
     private readonly getAddress: () => string,
+    private readonly channel = 'dot:folders',
   ) {
-    ipcMain.on('dot:folders:context', this.context);
-    ipcMain.handle('dot:folders:choose', (event, ...args: unknown[]) =>
+    ipcMain.on(`${this.channel}:context`, this.context);
+    ipcMain.handle(`${this.channel}:choose`, (event, ...args: unknown[]) =>
       this.choose(event, args),
     );
   }
@@ -33,6 +35,7 @@ export class CompanionFolderPicker {
     try {
       const url = new URL(value);
       const configured = new URL(this.getAddress());
+      if (configured.protocol === 'dots:') return isWorkspacePage(value);
       return (
         /^https?:$/.test(configured.protocol) &&
         ['localhost', '127.0.0.1', '[::1]'].includes(configured.hostname) &&
@@ -155,7 +158,7 @@ export class CompanionFolderPicker {
     this.revision++;
     this.detach?.();
     this.detach = null;
-    ipcMain.removeListener('dot:folders:context', this.context);
-    ipcMain.removeHandler('dot:folders:choose');
+    ipcMain.removeListener(`${this.channel}:context`, this.context);
+    ipcMain.removeHandler(`${this.channel}:choose`);
   }
 }
