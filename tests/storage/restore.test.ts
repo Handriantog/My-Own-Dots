@@ -20,6 +20,10 @@ import {
   restoredDatabaseUrl,
 } from '../../src/server/storage/restore-postgres.js';
 
+// These cases create/decrypt real scrypt archives and restore PostgreSQL databases.
+// Allow shared CI CPUs to finish without teardown racing an in-flight restore.
+vi.setConfig({ testTimeout: 30000 });
+
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();

@@ -367,18 +367,27 @@ it('keeps the SQLite workspace available with an actionable warning when Docker 
   expect(backend.status.phase).toBe('ready');
 });
 
-it('creates a private persistent configuration under userData on a new installation', async () => {
+it('creates a private persistent configuration in the platform data directory on a new installation', async () => {
   const { root, bundle } = await fixture();
+  const data = path.join(root, 'new-profile');
+  const localAppData = path.join(root, 'local-app-data');
+  const xdgDataHome = path.join(root, 'xdg-data');
+  const expectedWorkspace = {
+    darwin: path.join(data, 'workspace'),
+    win32: path.join(localAppData, 'My Own Dots', 'workspace'),
+    linux: path.join(xdgDataHome, 'my-own-dots', 'workspace'),
+  }[process.platform as 'darwin' | 'win32' | 'linux'];
   const backend = new WorkspaceBackend({
     bundle,
-    data: path.join(root, 'new-profile'),
-    environment: {},
+    data,
+    // Keep native default resolution inside the disposable fixture on every OS.
+    environment: { LOCALAPPDATA: localAppData, XDG_DATA_HOME: xdgDataHome },
   });
   await backend.configure({ CONVERSATION_BACKEND: 'intelligence' });
   const config = backend.configuration!;
-  expect(config.workspace).toBe(path.join(root, 'new-profile/workspace'));
+  expect(config.workspace).toBe(expectedWorkspace);
   expect(config.database).toBe(
-    path.join(root, 'new-profile/workspace/data/opendots.sqlite'),
+    path.join(expectedWorkspace, 'data/opendots.sqlite'),
   );
   const values = await readFile(config.envFile, 'utf8');
   expect(values).toMatch(/OWNER_TOKEN=[a-f0-9]{64}/);

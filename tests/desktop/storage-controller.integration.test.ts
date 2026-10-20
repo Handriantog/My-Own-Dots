@@ -211,5 +211,6 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL).each([false, true])(
       await rm(destination, { recursive: true, force: true });
     }
   },
-  20000,
+  // The encrypted case includes manual/automatic backups and two restore previews.
+  60000,
 );

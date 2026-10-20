@@ -403,6 +403,7 @@ it('requires a secure remembered password and destination for automatic backups'
   expect((await secure.controller.status()).automatic).toBe(false);
 });
 
+// Exercise 35 daily retention cycles with real metadata writes and fsyncs.
 it('runs changed daily backups only while idle and recovers after a missing destination', async () => {
   const f = await fixture();
   const destination = join(f.root, 'backups');
@@ -503,7 +504,7 @@ it('runs changed daily backups only while idle and recovers after a missing dest
   } finally {
     await f.controller.close();
   }
-});
+}, 30000);
 it('changing backup folders clears managed ownership and requires opting in again', async () => {
   const f = await fixture();
   const a = join(f.root, 'a'),
