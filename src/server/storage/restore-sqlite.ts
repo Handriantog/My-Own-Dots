@@ -27,7 +27,8 @@ export async function restoreSQLite(
   const baseline = new DatabaseSync(baselinePath, { readOnly: true });
   const expected = inventory(baseline);
   baseline.close();
-  await rm(baselinePath);
+  for (const suffix of ['', '-wal', '-shm'])
+    await rm(baselinePath + suffix, { force: true });
   const original = new DatabaseSync(source, { readOnly: true });
   try {
     original.exec('PRAGMA trusted_schema=OFF');
@@ -53,6 +54,9 @@ export async function restoreSQLite(
     }
   } finally {
     original.close();
+    // These sidecars belong to the private extracted snapshot, not the source workspace.
+    for (const suffix of ['-wal', '-shm'])
+      await rm(source + suffix, { force: true });
   }
   signal.throwIfAborted();
   await copyFile(source, destination, 1); // COPYFILE_EXCL; the directory is privately owned.

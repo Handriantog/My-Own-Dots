@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { RestoreService } from '../../src/server/storage/restore.js';
 
 // Stay alive while the parent observes the boundary and explicitly kills us.
@@ -17,7 +19,16 @@ process.once('message', async (value: unknown) => {
       profile: input.profile,
       stopWorkspace: async () => {},
       onPhase: async (operationId, phase) => {
-        if (phase === input.crashAt) {
+        const databaseBoundary =
+          input.crashAt === 'database' &&
+          phase === 'staging' &&
+          JSON.parse(
+            await readFile(
+              join(input.profile, 'restore-journals', operationId + '.json'),
+              'utf8',
+            ),
+          ).postgresOid;
+        if (phase === input.crashAt || databaseBoundary) {
           process.send?.({ operationId, phase });
           await new Promise(() => {});
         }

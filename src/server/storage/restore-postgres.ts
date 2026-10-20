@@ -68,6 +68,7 @@ export async function restorePostgres(options: {
   dotIds: string[];
   threads: { id: string; dotId: string; required: boolean }[];
   signal: AbortSignal;
+  onCreated?: (oid: string) => Promise<void>;
 }): Promise<{ url: string; counts: Record<string, number>; seal: string }> {
   const { server, operationId, directory, ownerId, dotIds, signal } = options;
   const admin = restorePool(server);
@@ -81,6 +82,17 @@ export async function restorePostgres(options: {
       `CREATE DATABASE "${restoredDatabaseName(operationId)}" TEMPLATE template0`,
     );
     created = true;
+    await pool.query(
+      'CREATE TABLE dots_restore_identity(operation_id text PRIMARY KEY)',
+    );
+    await pool.query('INSERT INTO dots_restore_identity VALUES($1)', [
+      operationId,
+    ]);
+    const identity = await admin.query(
+      'SELECT oid::text FROM pg_database WHERE datname=$1',
+      [restoredDatabaseName(operationId)],
+    );
+    await options.onCreated?.(identity.rows[0].oid);
     const schema = new PostgresConversations(url, ownerId);
     try {
       await schema.initialize();
@@ -170,12 +182,6 @@ export async function restorePostgres(options: {
       await client.query(
         "UPDATE memory_jobs SET state=CASE WHEN state IN ('queued','running') THEN 'cancelled' ELSE state END, lease_token=NULL,lease_until=NULL,call_started_at=NULL",
       );
-      await client.query(
-        'CREATE TABLE dots_restore_identity(operation_id text PRIMARY KEY)',
-      );
-      await client.query('INSERT INTO dots_restore_identity VALUES($1)', [
-        operationId,
-      ]);
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
@@ -230,6 +236,7 @@ export async function postgresSeal(
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
     await client.query("SET LOCAL timezone='UTC'");
+    await assertRestoredRelations(client);
     const identity = await client.query(
       'SELECT operation_id FROM dots_restore_identity',
     );
@@ -251,4 +258,19 @@ export async function postgresSeal(
   } finally {
     client.release();
   }
+}
+export async function assertRestoredRelations(database: Pool | PoolClient) {
+  const allowed = new Set([
+    ...Object.keys(POSTGRES_RECORDS),
+    'dots_restore_identity',
+    'memory_index_meta',
+    'memory_schema_version',
+  ]);
+  const result = await database.query<{ schema: string; name: string }>(
+    "SELECT n.nspname AS schema,c.relname AS name FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('r','p','m','v','f','S') AND n.nspname NOT LIKE 'pg_%' AND n.nspname<>'information_schema'",
+  );
+  if (
+    result.rows.some((row) => row.schema !== 'public' || !allowed.has(row.name))
+  )
+    throw new Error('Restored database contains unexpected relations');
 }

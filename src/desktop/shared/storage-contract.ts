@@ -24,6 +24,7 @@ export interface StorageOperationStatus {
 }
 export interface StorageRestorePreview {
   operationId: string;
+  expiresAt?: number;
   workspaceId: string;
   counts: Record<string, number>;
   coverage: ArchiveManifest['coverage'];
@@ -31,6 +32,7 @@ export interface StorageRestorePreview {
 }
 export interface StorageStatus {
   secureStorage: boolean;
+  recoveryWarnings?: string[];
   destination?: string;
   automatic: boolean;
   lastAttempt?: string;

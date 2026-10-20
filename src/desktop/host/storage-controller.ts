@@ -118,6 +118,8 @@ export class StorageController {
   }
   private async automaticTick(now: number) {
     if (!this.options.configuration()) return;
+    if (this.preview?.expiresAt && now >= this.preview.expiresAt)
+      await this.discardPreview();
     const metadata = await this.metadata();
     if (!metadata.automatic) return;
     try {
@@ -241,7 +243,14 @@ export class StorageController {
   }
   async status(): Promise<StorageStatus> {
     const metadata = await this.metadata();
+    const recoveryWarnings = await readFile(
+      join(this.options.profile, 'restore-cleanup-warnings.json'),
+      'utf8',
+    )
+      .then((value) => z.array(z.string()).parse(JSON.parse(value)))
+      .catch(() => []);
     return {
+      recoveryWarnings,
       secureStorage: this.keys().available(),
       destination: metadata.destination,
       automatic: metadata.automatic,
@@ -292,7 +301,7 @@ export class StorageController {
     if (method === 'status') return this.status();
     if (method === 'cancel') {
       const id = z.uuid().parse(input);
-      if (this.operation?.id !== id)
+      if (this.operation?.id !== id && this.preview?.operationId !== id)
         throw new Error('Storage operation not found');
       await this.cancelActive();
       this.preview = undefined;
@@ -374,6 +383,7 @@ export class StorageController {
         );
       return this.run('restore', async (signal) => {
         this.guard(context, true);
+        await this.discardPreview(signal);
         const result = await this.options.worker.run(
           {
             kind: 'preview',
@@ -645,12 +655,41 @@ export class StorageController {
         ).catch(() => {});
     }
   }
+  private async discardPreview(signal = new AbortController().signal) {
+    if (!this.preview) return;
+    const preview = this.preview;
+    try {
+      await this.options.worker.run(
+        {
+          kind: 'discard',
+          profile: this.options.profile,
+          operationId: preview.operationId,
+        },
+        { signal },
+      );
+    } catch {
+      const file = join(this.options.profile, 'restore-cleanup-warnings.json');
+      const warnings: string[] = await readFile(file, 'utf8')
+        .then((value) => z.array(z.string()).parse(JSON.parse(value)))
+        .catch(() => []);
+      warnings.push(
+        `Unused restore ${preview.operationId} was retained. Restart Dot for its cleanup location; active and changed data were not removed.`,
+      );
+      await atomicStorageWrite(file, JSON.stringify(warnings));
+    }
+    if (this.preview === preview) this.preview = undefined;
+    await this.emit().catch(() => {});
+  }
   async cancelActive() {
     this.cancelling = true;
-    this.running?.controller.abort();
-    await this.running?.done.catch(() => {});
-    await this.ticking?.catch(() => {});
-    this.cancelling = false;
+    try {
+      this.running?.controller.abort();
+      await this.running?.done.catch(() => {});
+      await this.ticking?.catch(() => {});
+      await this.discardPreview();
+    } finally {
+      this.cancelling = false;
+    }
   }
   async close() {
     this.disposed = true;

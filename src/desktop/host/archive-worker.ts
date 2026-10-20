@@ -79,6 +79,10 @@ async function execute(
     return service.prepareRestore({ ...command, signal });
   if (command.kind === 'activate')
     return service.activateRestore(command.operationId, command.mode, signal);
+  if (command.kind === 'discard') {
+    await service.discardRestore(command.operationId, signal);
+    return { discarded: true };
+  }
   await service.recover();
   return { recovered: true };
 }

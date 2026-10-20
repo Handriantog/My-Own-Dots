@@ -217,6 +217,15 @@ export function StorageSettings({
       {status?.preview && (
         <div>
           <h4>Recovery preview</h4>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void action(() => bridge.cancel(status.preview!.operationId))
+            }
+          >
+            Discard restore preview
+          </button>
           <p>
             {status.preview.counts.local_ai_threads ?? 0} conversations ·{' '}
             {status.preview.counts.memory_items ?? 0} memories ·{' '}
@@ -256,6 +265,11 @@ export function StorageSettings({
         </div>
       )}
       {progress && <p role="status">{progress}</p>}
+      {status?.recoveryWarnings?.map((warning) => (
+        <p role="alert" key={warning}>
+          {warning}
+        </p>
+      ))}
       {(error || operation?.error || status?.error) && (
         <p role="alert">{error || operation?.error || status?.error}</p>
       )}

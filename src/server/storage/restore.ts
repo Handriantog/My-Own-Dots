@@ -6,6 +6,7 @@ import {
   rm,
   writeFile,
   lstat,
+  realpath,
 } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { parseEnv } from 'node:util';
@@ -20,6 +21,8 @@ import { POSTGRES_RECORDS } from './postgres-records.js';
 import {
   postgresSeal,
   restoredDatabaseName,
+  restoredDatabaseUrl,
+  assertRestoredRelations,
   restorePool,
   restorePostgres,
 } from './restore-postgres.js';
@@ -33,10 +36,12 @@ import {
   saveJournal,
   withRestoreLock,
   type RestoreJournal,
+  journalPath,
 } from './restore-journal.js';
 
 export interface RestorePreview {
   operationId: string;
+  expiresAt?: number;
   workspaceId: string;
   counts: Record<string, number>;
   coverage: ArchiveManifest['coverage'];
@@ -73,6 +78,17 @@ export class RestoreService {
     postgresTarget?: string;
     signal: AbortSignal;
   }): Promise<RestorePreview> {
+    return withRestoreLock(this.options.profile, () =>
+      this.prepareLocked(input),
+    );
+  }
+  private async prepareLocked(input: {
+    archive: string;
+    passphrase: string;
+    destination: string;
+    postgresTarget?: string;
+    signal: AbortSignal;
+  }): Promise<RestorePreview> {
     const { destination, signal } = input;
     if (!isAbsolute(destination))
       throw new Error('Choose an absolute restore destination');
@@ -90,8 +106,8 @@ export class RestoreService {
       directory: destination,
       previousSelection: await readSelection(this.options.profile),
       files: [],
+      postgresTarget: input.postgresTarget,
     };
-    let databaseUrl: string | undefined;
     try {
       await writeFile(join(destination, '.restore-owner'), operationId, {
         flag: 'wx',
@@ -143,8 +159,11 @@ export class RestoreService {
         dotIds: sqlite.dotIds,
         threads: sqlite.threads,
         signal,
+        onCreated: async (oid) => {
+          journal.postgresOid = oid;
+          await this.phase(journal, 'staging');
+        },
       });
-      databaseUrl = postgres.url;
       journal.postgresSeal = postgres.seal;
       // Only app-generated safe defaults and the explicitly selected target server.
       const quote = (value: string) => {
@@ -167,9 +186,11 @@ export class RestoreService {
           path,
           sha256: await fileSeal(join(destination, path), signal),
         });
+      journal.verifiedAt = this.now();
       await this.phase(journal, 'verified');
       return {
         operationId,
+        expiresAt: journal.verifiedAt + 15 * 60_000,
         workspaceId: workspaceIdentity(
           join(destination, 'data/opendots.sqlite'),
         ),
@@ -181,23 +202,20 @@ export class RestoreService {
         ],
       };
     } catch (error) {
-      if (databaseUrl) {
-        const admin = restorePool(input.postgresTarget);
-        try {
-          await admin.query(
-            `DROP DATABASE "${restoredDatabaseName(operationId)}"`,
-          );
-        } catch {
-          /* Keep an orphan rather than touching any unrelated database. */
-        } finally {
-          await admin.end();
-        }
+      try {
+        await this.discardLocked(journal, new AbortController().signal);
+      } catch {
+        // Preserve durable ownership information for startup/manual cleanup.
+        await saveJournal(this.options.profile, journal).catch(() => {});
       }
-      await rm(destination, { recursive: true, force: true });
       throw error;
     }
   }
-  private async verify(journal: RestoreJournal, signal: AbortSignal) {
+  private async verify(
+    journal: RestoreJournal,
+    signal: AbortSignal,
+    filesOnly = false,
+  ) {
     await ownedRestoreDirectory(journal);
     validateArchivePaths(journal.files.map((entry) => entry.path));
     for (const entry of journal.files) {
@@ -222,6 +240,7 @@ export class RestoreService {
       }
       throw new Error('Restore target was opened or changed');
     }
+    if (filesOnly) return;
     const env = parseEnv(
       await readFile(join(journal.directory, '.env'), 'utf8'),
     );
@@ -242,6 +261,142 @@ export class RestoreService {
       await pool.end();
     }
   }
+  async discardRestore(operationId: string, signal: AbortSignal) {
+    return withRestoreLock(this.options.profile, async () => {
+      const journal = await loadJournal(this.options.profile, operationId);
+      await this.discardLocked(journal, signal);
+    });
+  }
+  private async discardLocked(journal: RestoreJournal, signal: AbortSignal) {
+    if (!['staging', 'verified'].includes(journal.phase))
+      throw new Error('An active restore cannot be discarded');
+    const selection = await readSelection(this.options.profile);
+    if (selection) {
+      const directory = JSON.parse(selection).directory;
+      if (
+        directory === journal.directory ||
+        (await realpath(directory).catch(() => directory)) ===
+          (await realpath(journal.directory).catch(() => journal.directory))
+      )
+        throw new Error('The selected workspace cannot be discarded');
+    }
+    let present = true;
+    try {
+      await lstat(journal.directory);
+    } catch (error) {
+      if (
+        (error as NodeJS.ErrnoException).code === 'ENOENT' &&
+        journal.cleanupPending
+      )
+        present = false;
+      else throw error;
+    }
+    if (present) await ownedRestoreDirectory(journal);
+    // Do not remove user-added files or follow links, even inside an owned target.
+    const allowed = new Set([
+      '.restore-owner',
+      '.env',
+      'data/opendots.sqlite',
+      'recovery/access-audit.jsonl',
+      'snapshot/core/workspace.sqlite',
+      'snapshot/recovery/configuration.json',
+      ...Object.keys(POSTGRES_RECORDS).map(
+        (table) => `snapshot/postgres/${table}.jsonl`,
+      ),
+    ]);
+    const inspect = async (prefix = '') => {
+      for (const item of await readdir(join(journal.directory, prefix), {
+        withFileTypes: true,
+      })) {
+        const path = prefix ? `${prefix}/${item.name}` : item.name;
+        if (
+          item.isDirectory() &&
+          [...allowed].some((name) => name.startsWith(path + '/'))
+        )
+          await inspect(path);
+        else if (!item.isFile() || !allowed.has(path))
+          throw new Error(
+            `Restore contains changed or unrecognized file ${path}; retained for manual cleanup`,
+          );
+      }
+    };
+    if (present) {
+      await inspect();
+      if (journal.phase === 'verified')
+        await this.verify(journal, signal, !!journal.cleanupPending);
+    }
+    const release = present
+      ? claimWorkspaceDatabase(join(journal.directory, 'data/opendots.sqlite'))
+      : undefined;
+    try {
+      signal.throwIfAborted();
+      journal.cleanupPending = true;
+      await saveJournal(this.options.profile, journal);
+      if (!journal.databaseRemoved) {
+        if (!journal.postgresTarget)
+          throw new Error(
+            'Restore database ownership is unavailable; retained for manual cleanup',
+          );
+        const admin = restorePool(journal.postgresTarget);
+        try {
+          const name = restoredDatabaseName(journal.operationId);
+          const database = await admin.query(
+            'SELECT oid::text FROM pg_database WHERE datname=$1',
+            [name],
+          );
+          if (database.rowCount) {
+            if (
+              !journal.postgresOid ||
+              database.rows[0].oid !== journal.postgresOid
+            )
+              throw new Error(
+                'Restore database identity changed; retained for manual cleanup',
+              );
+            const target = restorePool(
+              restoredDatabaseUrl(journal.postgresTarget, journal.operationId),
+            );
+            try {
+              await assertRestoredRelations(target);
+              const identity = await target.query(
+                'SELECT operation_id FROM dots_restore_identity',
+              );
+              if (
+                identity.rows.length !== 1 ||
+                identity.rows[0].operation_id !== journal.operationId
+              )
+                throw new Error('Restore database ownership changed');
+            } finally {
+              await target.end();
+            }
+            // Never force-disconnect a database another process has opened.
+            if (
+              (
+                await admin.query(
+                  'SELECT 1 FROM pg_stat_activity WHERE datname=$1 LIMIT 1',
+                  [name],
+                )
+              ).rowCount
+            )
+              throw new Error(
+                'Restored database is open; retained for manual cleanup',
+              );
+            await admin.query(`DROP DATABASE "${name}"`);
+          }
+          journal.databaseRemoved = true;
+          await saveJournal(this.options.profile, journal);
+        } finally {
+          await admin.end();
+        }
+      }
+      if (present) await rm(journal.directory, { recursive: true });
+      await rm(journalPath(this.options.profile, journal.operationId), {
+        force: true,
+      });
+    } finally {
+      release?.();
+      if (release) process.removeListener('exit', release);
+    }
+  }
   async activateRestore(
     operationId: string,
     mode: 'new' | 'replace',
@@ -251,7 +406,7 @@ export class RestoreService {
       const journal = await loadJournal(this.options.profile, operationId);
       if (journal.phase !== 'verified')
         throw new Error('Restore preview is not ready');
-      if (this.now() - journal.createdAt > 15 * 60_000)
+      if (this.now() - (journal.verifiedAt ?? journal.createdAt) > 15 * 60_000)
         throw new Error('Restore preview expired');
       if (
         (await readSelection(this.options.profile)) !==
@@ -323,6 +478,7 @@ export class RestoreService {
     return withRestoreLock(this.options.profile, () => this.recoverLocked());
   }
   private async recoverLocked() {
+    const warnings: string[] = [];
     let entries: string[];
     try {
       entries = await readdir(join(this.options.profile, 'restore-journals'));
@@ -337,6 +493,16 @@ export class RestoreService {
         this.options.profile,
         entry.slice(0, -5),
       );
+      if (['staging', 'verified'].includes(journal.phase)) {
+        try {
+          await this.discardLocked(journal, new AbortController().signal);
+        } catch {
+          warnings.push(
+            `Unused restore retained for manual cleanup: ${journal.directory}; database ${restoredDatabaseName(journal.operationId)}. Ownership, changes or database access could not be verified.`,
+          );
+        }
+        continue;
+      }
       if (journal.phase !== 'switching') continue;
       const current = await readSelection(this.options.profile);
       if (current && JSON.parse(current).directory === journal.directory) {
@@ -362,5 +528,9 @@ export class RestoreService {
           'Workspace selection changed during interrupted restoration',
         );
     }
+    await atomicStorageWrite(
+      join(this.options.profile, 'restore-cleanup-warnings.json'),
+      JSON.stringify(warnings),
+    );
   }
 }

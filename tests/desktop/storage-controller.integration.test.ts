@@ -151,6 +151,25 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
         { passphrase: 'private fixture password' },
         context,
       );
+      const abandoned = (await controller.status()).preview!;
+      await controller.invoke('cancel', abandoned.operationId, context);
+      expect(
+        (await readdir(destination)).filter((name) =>
+          name.startsWith('Dots-restored-'),
+        ),
+      ).toEqual([]);
+      expect(
+        (
+          await f.pg.query('SELECT 1 FROM pg_database WHERE datname=$1', [
+            `dots_restore_${abandoned.operationId.replaceAll('-', '')}`,
+          ])
+        ).rowCount,
+      ).toBe(0);
+      await controller.invoke(
+        'previewRestore',
+        { passphrase: 'private fixture password' },
+        context,
+      );
       const preview = (await controller.status()).preview!;
       expect(preview.counts.local_ai_threads).toBe(1);
       expect(preview.counts.memory_items).toBe(2);

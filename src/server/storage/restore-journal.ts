@@ -11,6 +11,11 @@ export const restoreJournalSchema = z
     operationId: z.uuid(),
     phase: z.enum(['staging', 'verified', 'switching', 'active']),
     createdAt: z.number(),
+    verifiedAt: z.number().optional(),
+    postgresTarget: z.string().optional(),
+    postgresOid: z.string().optional(),
+    cleanupPending: z.boolean().optional(),
+    databaseRemoved: z.boolean().optional(),
     directory: z.string(),
     previousSelection: z.string().nullable(),
     files: z.array(

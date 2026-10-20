@@ -28,7 +28,8 @@ export type ArchiveWorkerCommand =
       mode: 'new' | 'replace';
       verifiedBackupDirectory?: string;
     }
-  | { kind: 'recover'; profile: string };
+  | { kind: 'recover'; profile: string }
+  | { kind: 'discard'; profile: string; operationId: string };
 export type ArchiveWorkerResult =
   | {
       verified: true;
@@ -39,7 +40,8 @@ export type ArchiveWorkerResult =
     }
   | StorageRestorePreview
   | { workspaceDirectory: string }
-  | { recovered: true };
+  | { recovered: true }
+  | { discarded: true };
 export interface ArchiveWorkerPort {
   run(
     command: ArchiveWorkerCommand,

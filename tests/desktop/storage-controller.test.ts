@@ -336,3 +336,87 @@ it('close prevents a delayed idle check from starting an automatic backup', asyn
   expect(f.worker.run).not.toHaveBeenCalled();
   expect((await f.controller.status()).lastSuccess).toBeUndefined();
 });
+it('discards superseded, cancelled and closed restore previews through the worker', async () => {
+  const f = await fixture();
+  await writeFile(
+    join(f.workspace, '.env'),
+    'LOCAL_DATABASE_URL=postgres://fixture',
+  );
+  vi.mocked(f.context.chooseArchive).mockResolvedValue(join(f.root, 'archive'));
+  vi.mocked(f.context.chooseDirectory).mockResolvedValue(f.root);
+  const discarded: string[] = [];
+  f.worker.run.mockImplementation(async (command) => {
+    if (command.kind === 'discard') {
+      discarded.push(command.operationId);
+      return { discarded: true };
+    }
+    return {
+      operationId: randomUUID(),
+      workspaceId: 'fixture',
+      counts: {},
+      coverage: [],
+      warnings: [],
+    };
+  });
+  await f.controller.invoke(
+    'previewRestore',
+    { passphrase: 'password' },
+    f.context,
+  );
+  const first = (await f.controller.status()).preview!.operationId;
+  await f.controller.invoke(
+    'previewRestore',
+    { passphrase: 'password' },
+    f.context,
+  );
+  const second = (await f.controller.status()).preview!.operationId;
+  expect(discarded).toEqual([first]);
+  await f.controller.invoke('cancel', second, f.context);
+  expect(discarded).toEqual([first, second]);
+  expect((await f.controller.status()).preview).toBeUndefined();
+  await f.controller.invoke(
+    'previewRestore',
+    { passphrase: 'password' },
+    f.context,
+  );
+  const third = (await f.controller.status()).preview!.operationId;
+  await f.controller.close();
+  expect(discarded).toEqual([first, second, third]);
+});
+it('retains an unremovable preview with a notice without blocking a new recovery', async () => {
+  const f = await fixture();
+  await writeFile(
+    join(f.workspace, '.env'),
+    'LOCAL_DATABASE_URL=postgres://fixture',
+  );
+  vi.mocked(f.context.chooseArchive).mockResolvedValue(join(f.root, 'archive'));
+  vi.mocked(f.context.chooseDirectory).mockResolvedValue(f.root);
+  f.worker.run.mockImplementation(async (command) => {
+    if (command.kind === 'discard') throw new Error('Changed target retained');
+    return {
+      operationId: randomUUID(),
+      workspaceId: 'fixture',
+      counts: {},
+      coverage: [],
+      warnings: [],
+    };
+  });
+  await f.controller.invoke(
+    'previewRestore',
+    { passphrase: 'password' },
+    f.context,
+  );
+  const first = (await f.controller.status()).preview!.operationId;
+  await expect(
+    f.controller.invoke(
+      'previewRestore',
+      { passphrase: 'password' },
+      f.context,
+    ),
+  ).resolves.toBeUndefined();
+  expect((await f.controller.status()).preview!.operationId).not.toBe(first);
+  expect((await f.controller.status()).recoveryWarnings?.join(' ')).toMatch(
+    /retained|cleanup/,
+  );
+  await expect(f.controller.close()).resolves.toBeUndefined();
+});

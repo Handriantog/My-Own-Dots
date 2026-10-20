@@ -301,7 +301,7 @@ describe.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       ).rejects.toThrow(/changed/i);
       expect(await readFile(f.selectionFile, 'utf8')).toBe(other);
     });
-    it.each(['staging', 'verified', 'switching', 'active'])(
+    it.each(['staging', 'database', 'verified', 'switching', 'active'])(
       'recovers selection after crash at journal boundary %s',
       async (crashAt) => {
         const f = await fixture();
@@ -348,7 +348,7 @@ describe.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
           expect(
             JSON.parse(await readFile(f.selectionFile, 'utf8')).directory,
           ).toBe(crashAt === 'active' ? f.destination : f.root);
-          if (crashAt === 'switching' || crashAt === 'verified') {
+          if (crashAt === 'switching') {
             await f.service.activateRestore(
               result.operationId,
               'new',
@@ -358,6 +358,14 @@ describe.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
               JSON.parse(await readFile(f.selectionFile, 'utf8')).directory,
             ).toBe(f.destination);
           }
+          if (
+            crashAt === 'verified' ||
+            crashAt === 'staging' ||
+            crashAt === 'database'
+          )
+            await expect(stat(f.destination)).rejects.toMatchObject({
+              code: 'ENOENT',
+            });
           expect(
             (await f.conversations.getSnapshot(f.thread)).messages,
           ).toHaveLength(2);
@@ -533,5 +541,130 @@ describe.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       ).toBe(f.root);
       expect((await stat(f.sqlitePath)).isFile()).toBe(true);
     });
+  },
+);
+it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
+  'starts preview expiry after a long preparation finishes',
+  async () => {
+    const f = await fixture();
+    let now = Date.now();
+    const service = new RestoreService({
+      profile: f.profile,
+      stopWorkspace: f.stopWorkspace,
+      now: () => now,
+      onPhase: (_id, phase) => {
+        if (phase === 'staging') now += 16 * 60_000;
+      },
+    });
+    const preview = await service.prepareRestore(f.input);
+    await expect(
+      service.activateRestore(
+        preview.operationId,
+        'new',
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({ workspaceDirectory: f.destination });
+  },
+);
+it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
+  'discards only an unchanged unselected restore owned by its journal',
+  async () => {
+    const f = await fixture();
+    const preview = await f.service.prepareRestore(f.input);
+    const name = restoredDatabaseName(preview.operationId);
+    await f.service.discardRestore(
+      preview.operationId,
+      new AbortController().signal,
+    );
+    await expect(stat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(
+      (await f.pg.query('SELECT 1 FROM pg_database WHERE datname=$1', [name]))
+        .rowCount,
+    ).toBe(0);
+    expect(JSON.parse(await readFile(f.selectionFile, 'utf8')).directory).toBe(
+      f.root,
+    );
+    expect((await f.conversations.getSnapshot(f.thread)).messages).toHaveLength(
+      2,
+    );
+  },
+);
+it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
+  'startup reclaims abandoned preparations but retains active and user-changed targets',
+  async () => {
+    const f = await fixture();
+    const preview = await f.service.prepareRestore(f.input);
+    await f.service.recover();
+    await expect(stat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(
+      (
+        await f.pg.query('SELECT 1 FROM pg_database WHERE datname=$1', [
+          restoredDatabaseName(preview.operationId),
+        ])
+      ).rowCount,
+    ).toBe(0);
+    const second = await f.service.prepareRestore(f.input);
+    await writeFile(join(f.destination, 'user-file'), 'keep');
+    await expect(
+      f.service.discardRestore(
+        second.operationId,
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow(/unrecognized/);
+    expect(await readFile(join(f.destination, 'user-file'), 'utf8')).toBe(
+      'keep',
+    );
+    await fs.rm(join(f.destination, 'user-file'));
+    await f.service.activateRestore(
+      second.operationId,
+      'new',
+      new AbortController().signal,
+    );
+    await expect(
+      f.service.discardRestore(
+        second.operationId,
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow(/active|selected/);
+    await f.service.recover();
+    expect(JSON.parse(await readFile(f.selectionFile, 'utf8')).directory).toBe(
+      f.destination,
+    );
+  },
+);
+it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
+  'retains a prepared database after someone adds unrelated data',
+  async () => {
+    const f = await fixture();
+    const preview = await f.service.prepareRestore(f.input);
+    const env = parseEnv(await readFile(join(f.destination, '.env'), 'utf8'));
+    const target = new Pool({ connectionString: env.LOCAL_DATABASE_URL });
+    try {
+      await target.query(
+        "CREATE TABLE user_content(value text); INSERT INTO user_content VALUES('keep')",
+      );
+    } finally {
+      await target.end();
+    }
+    await expect(
+      f.service.discardRestore(
+        preview.operationId,
+        new AbortController().signal,
+      ),
+    ).rejects.toThrow(/changed|unrecognized|unexpected/i);
+    await f.service.recover();
+    const warnings = JSON.parse(
+      await readFile(join(f.profile, 'restore-cleanup-warnings.json'), 'utf8'),
+    );
+    expect(warnings[0]).toContain(f.destination);
+    expect(warnings[0]).not.toContain(env.LOCAL_DATABASE_URL);
+    const check = new Pool({ connectionString: env.LOCAL_DATABASE_URL });
+    try {
+      expect(
+        (await check.query('SELECT value FROM user_content')).rows[0].value,
+      ).toBe('keep');
+    } finally {
+      await check.end();
+    }
   },
 );
