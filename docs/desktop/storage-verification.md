@@ -81,6 +81,10 @@ The first GitHub Linux runs exposed a stale macOS-only fresh-install path expect
 
 The follow-up local full suite passed 1,442 tests with one optional skip across 182 files; typecheck, lint and formatting passed. A focused independent review found no blocking issues. Evidence: `pr-ci-fix-full-suite-final.log` under `.superpowers/sdd/storage-plan-02-unified-workspace/`.
 
+A subsequent Linux run exposed a PostgreSQL pool-shutdown race: the pool's `end()` promise could resolve while its own verification connection was still closing, causing discard to treat it as an external client. Restore pools now await each client's actual `end` event. The existing active-client check remains intact. A deterministic 250-millisecond disconnect delay reproduces the original failure and passes with the fix; another test verifies that a live external client remains connected and the restore can be discarded only after it closes. Focused review found no remaining issue. Evidence: `pr-ci-disconnect-red.log` and `pr-ci-disconnect-green.log` in the same directory.
+
+After this fix, the full local suite passed 1,444 tests with one optional skip across 182 files. Typecheck, lint, repository formatting, production build and macOS desktop build passed. Evidence: `pr-ci-disconnect-full-suite.log`, `pr-ci-disconnect-build.log` and `pr-ci-disconnect-desktop-build.log` in the same directory.
+
 ## Dependencies and review
 
 The owner installed pinned `age-encryption@0.3.1` and `tar-stream@3.2.2`. Their audit update introduced mixed CopilotKit versions; the owner subsequently aligned core, react-core and runtime to 1.75.0. Other compatible audit updates were retained. The execution shell cannot reach npm's audit endpoint, so there is no clean-security-audit claim.

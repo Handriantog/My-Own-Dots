@@ -7,7 +7,7 @@ import { once } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
-import { Pool } from 'pg';
+import { Client, Pool } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { storageWorkspace } from '../fixtures/storage-workspace.js';
 import { LegacySnapshotSource } from '../../src/server/storage/legacy-snapshot.js';
@@ -638,6 +638,81 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
     expect((await f.conversations.getSnapshot(f.thread)).messages).toHaveLength(
       2,
     );
+  },
+);
+it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
+  'discards a verified restore while its own pool connections finish closing',
+  async () => {
+    const f = await fixture();
+    const preview = await f.service.prepareRestore(f.input);
+    const name = restoredDatabaseName(preview.operationId);
+    const end = Client.prototype.end;
+    const closing: Promise<void>[] = [];
+    // pg-pool resolves end() before each client's asynchronous disconnect.
+    // Delay the real disconnect so this race is deterministic.
+    const delayedEnd = vi
+      .spyOn(Client.prototype, 'end')
+      .mockImplementation(function (this: Client, callback) {
+        if (this.database !== name) return end.call(this, callback);
+        closing.push(
+          new Promise<void>((resolve) => {
+            setTimeout(() => {
+              end.call(this, (error) => {
+                callback(error);
+                resolve();
+              });
+            }, 250);
+          }),
+        );
+      });
+    try {
+      await f.service.discardRestore(
+        preview.operationId,
+        new AbortController().signal,
+      );
+      await expect(stat(f.destination)).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      expect(
+        (await f.pg.query('SELECT 1 FROM pg_database WHERE datname=$1', [name]))
+          .rowCount,
+      ).toBe(0);
+    } finally {
+      delayedEnd.mockRestore();
+      await Promise.all(closing);
+    }
+  },
+);
+it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
+  'retains a restore and its journal without disconnecting another database client',
+  async () => {
+    const f = await fixture();
+    const preview = await f.service.prepareRestore(f.input);
+    const target = new Client({
+      connectionString: restoredDatabaseUrl(f.postgresUrl, preview.operationId),
+    });
+    await target.connect();
+    try {
+      await expect(
+        f.service.discardRestore(
+          preview.operationId,
+          new AbortController().signal,
+        ),
+      ).rejects.toThrow(/database is open/i);
+      expect((await target.query('SELECT 1 AS value')).rows[0].value).toBe(1);
+      expect((await stat(f.destination)).isDirectory()).toBe(true);
+      expect(
+        JSON.parse(await readFile(f.selectionFile, 'utf8')).directory,
+      ).toBe(f.root);
+    } finally {
+      await target.end();
+    }
+    // Keeping the journal permits cleanup once the other client exits.
+    await f.service.discardRestore(
+      preview.operationId,
+      new AbortController().signal,
+    );
+    await expect(stat(f.destination)).rejects.toMatchObject({ code: 'ENOENT' });
   },
 );
 it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(

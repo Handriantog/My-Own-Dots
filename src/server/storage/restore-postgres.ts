@@ -21,15 +21,41 @@ export function restoredDatabaseUrl(server: string, id: string) {
   url.pathname = '/' + restoredDatabaseName(id);
   return url.toString();
 }
+class RestorePool extends Pool {
+  private readonly disconnections = new Set<Promise<void>>();
+
+  constructor(url: string) {
+    super({
+      connectionString: url,
+      max: 1,
+      connectionTimeoutMillis: 5000,
+      statement_timeout: 30000,
+    });
+    this.on('error', () => {});
+    this.on('connect', (client) => {
+      const disconnected = new Promise<void>((resolve) =>
+        client.once('end', resolve),
+      );
+      this.disconnections.add(disconnected);
+      void disconnected.then(() => this.disconnections.delete(disconnected));
+    });
+  }
+
+  override end(): Promise<void>;
+  override end(callback: () => void): void;
+  override end(callback?: (error?: Error) => void): Promise<void> | void {
+    // pg-pool can finish draining before its clients finish disconnecting.
+    // Restore cleanup must not mistake our closing clients for external users.
+    const ended = super.end().then(async () => {
+      await Promise.all(this.disconnections);
+    });
+    if (!callback) return ended;
+    void ended.then(() => callback(), callback);
+  }
+}
+
 export function restorePool(url: string) {
-  const pool = new Pool({
-    connectionString: url,
-    max: 1,
-    connectionTimeoutMillis: 5000,
-    statement_timeout: 30000,
-  });
-  pool.on('error', () => {});
-  return pool;
+  return new RestorePool(url);
 }
 export async function* records(
   path: string,
