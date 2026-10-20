@@ -397,8 +397,10 @@ it.each(['committed', 'inflight'])(
       if (child.exitCode === null && !child.signalCode) child.kill('SIGKILL');
       await exit;
     });
-    if (mode === 'committed') await once(child, 'message');
-    else
+    expect((await once(child, 'message'))[0]).toBe(
+      mode === 'committed' ? 'ready' : 'writing',
+    );
+    if (mode === 'inflight')
       await vi.waitFor(async () =>
         expect(await readFile(database + '.started', 'utf8')).toBe('started'),
       );

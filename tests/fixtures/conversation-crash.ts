@@ -35,6 +35,8 @@ await lease.appendEvent({
   messageId: 'answer',
   role: 'assistant',
 });
+// Separate process/worker startup from the short in-transaction barrier wait.
+if (mode === 'inflight') process.send?.('writing');
 await lease.appendEvent({
   type: EventType.TEXT_MESSAGE_CONTENT,
   messageId: 'answer',
