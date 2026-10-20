@@ -369,15 +369,20 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
     const acknowledge = memory.jobs.acknowledge.bind(memory.jobs);
     const ack = vi
       .spyOn(memory.jobs, 'acknowledge')
-      .mockImplementation(async (id) => {
+      .mockImplementation(async (...args) => {
         await blocked;
-        return acknowledge(id);
+        return acknowledge(...args);
       });
     try {
       await conversations.initialize();
       const job = await memory.requestDream(dot.id);
       await memory.tick();
-      await vi.waitFor(() => expect(ack).toHaveBeenCalledWith(job.id));
+      await vi.waitFor(() =>
+        expect(ack).toHaveBeenCalledWith(job.id, {
+          lease: expect.any(String),
+          generation: 1,
+        }),
+      );
       expect(ws.memory.history.receipt(job.id)).toBeDefined();
       let captured = false;
       const pending = gate

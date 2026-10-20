@@ -132,7 +132,21 @@ export class StorageClient {
       connections: groups.connections,
       folders: groups.folders,
     });
+    groups.evidence.indexRun = async (runId: string) => {
+      while (
+        !(
+          await this.call('evidence.indexBatch', [runId], {
+            priority: 'background',
+          })
+        ).complete
+      ) {
+        /* each request yields to foreground work */
+      }
+    };
     this.repositories = {
+      evidence: groups.evidence,
+      jobs: groups.jobs,
+      recall: groups.recall,
       store: groups.store,
       workspace: groups.workspace,
     } as unknown as AsyncRepositories;

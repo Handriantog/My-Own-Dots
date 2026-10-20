@@ -74,10 +74,10 @@ New workspace resolution and manifests: `src/shared/workspace-manifest.ts`, `src
 
 **Interfaces:** `ConversationEvidenceRepository` contains the existing ConversationMemory public methods plus explicit maintenance queries for eligible threads/runs/sources and compact snapshots. `MemoryJobRepository` preserves enqueue/find/list/claim/renew/usage/defer/settle/admission semantics. Replace callback-based `withLease` publication with `publishDream(input: { jobId: string; lease: string; generation: number; proposal: DreamProposal; policy: PublicationPolicy; dotId: string }): Promise<ApplyReceipt>` (proposal/policy/receipt types from `src/shared/memory.ts`), committing memory changes, receipt and evidence acknowledgement together in SQLite.
 
-- [ ] Run the same evidence, checkpoint, job and publication cases against both adapters. Add FTS5 scope/suppression cases, missing evidence, stale checkpoint hashes, expired job leases, concurrent admission limits and crash after publication-before-ack. Assert idempotent receipt and no double publication.
-- [ ] Run SQLite adapter tests; expect missing implementations.
-- [ ] Implement FTS5 plus indexed owner/Dot/thread/source filters; apply final access/dependency checks before returning evidence. Rebuild derived indexes in bounded batches. Preserve source hashes, forgotten/rejected suppressions, revision history, daily budgets and processed-source receipts. Do not assume PostgreSQL ranking equivalence.
-- [ ] Run memory recall/context/jobs/publication/access suites; expect equivalent permission/correctness outcomes and no replay. Commit `feat: consolidate memory evidence and jobs`.
+- [x] Run the same evidence, checkpoint, job and publication cases against both adapters. Add FTS5 scope/suppression cases, missing evidence, stale checkpoint hashes, expired job leases, concurrent admission limits and crash after publication-before-ack. Assert idempotent receipt and no double publication.
+- [x] Run SQLite adapter tests; expect missing implementations.
+- [x] Implement FTS5 plus indexed owner/Dot/thread/source filters; apply final access/dependency checks before returning evidence. Rebuild derived indexes in bounded batches. Preserve source hashes, forgotten/rejected suppressions, revision history, daily budgets and processed-source receipts. Do not assume PostgreSQL ranking equivalence.
+- [x] Run memory recall/context/jobs/publication/access suites; expect equivalent permission/correctness outcomes and no replay. Commit `feat: consolidate memory evidence and jobs`.
 
 ## Task 5: Async repositories throughout runtime
 

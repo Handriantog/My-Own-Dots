@@ -1,4 +1,13 @@
-import type { PublicationPolicy } from '../shared/memory.js';
+import {
+  assertPublicationAllowed,
+  assertPublicationScope,
+} from './memory-publication-policy.js';
+import type { DreamPublication } from './dream-publication.js';
+import type {
+  ApplyReceipt,
+  DreamProposal,
+  PublicationPolicy,
+} from '../shared/memory.js';
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 export type MemoryJobState =
@@ -40,12 +49,42 @@ export interface MemoryJobInput {
   idleMs?: number;
   dueAt?: number;
 }
+export interface PublishDreamInput {
+  jobId: string;
+  lease: string;
+  generation: number;
+  proposal: DreamProposal;
+  policy: PublicationPolicy;
+  dotId: string;
+}
+export interface JobPublicationContext {
+  publication: DreamPublication;
+  check?(job: MemoryJob): void;
+}
+export type MemoryJobRepository = Pick<
+  MemoryJobs,
+  | 'enqueue'
+  | 'get'
+  | 'list'
+  | 'claim'
+  | 'find'
+  | 'lastAutomatic'
+  | 'admitAutomatic'
+  | 'cancelQueued'
+  | 'defer'
+  | 'renew'
+  | 'recordUsage'
+  | 'settle'
+  | 'publishDream'
+  | 'reconcileReceipt'
+>;
 type JobRow = Record<string, unknown>;
 export class MemoryJobs {
   constructor(
     readonly pg: Pool,
     readonly ownerId: string,
     readonly clock: () => number = Date.now,
+    private publicationContext?: JobPublicationContext,
   ) {}
   private row(row: JobRow): MemoryJob {
     return {
@@ -155,6 +194,8 @@ export class MemoryJobs {
     day: string,
     limit: number,
   ): Promise<boolean> {
+    if (!Number.isSafeInteger(limit) || limit < 1)
+      throw new Error('Invalid automatic admission limit');
     const client = await this.pg.connect();
     try {
       await client.query('BEGIN');
@@ -230,7 +271,47 @@ export class MemoryJobs {
       client.release();
     }
   }
-  async acknowledge(id: string): Promise<void> {
+  async publishDream(input: PublishDreamInput): Promise<ApplyReceipt> {
+    const context = this.publicationContext;
+    if (!context) throw new Error('Dream publication is not configured');
+    const job = await this.get(input.jobId);
+    if (!job) throw new Error('Maintenance job not found');
+    assertPublicationScope(job, input);
+    const existing = context.publication.recall.memory.history.receipt(job.id);
+    if (existing && job.state === 'succeeded') return existing;
+    if (
+      job.state !== 'running' ||
+      job.leaseToken !== input.lease ||
+      job.attempts !== input.generation ||
+      (job.leaseUntil ?? 0) <= this.clock()
+    )
+      throw new Error('Maintenance lease or generation lost');
+    assertPublicationAllowed(job, context, this.clock());
+    // Legacy databases retain the durable receipt-before-ack recovery protocol.
+    const receipt = await context.publication.apply(
+      job.id,
+      input.proposal,
+      input.policy,
+      input.dotId,
+      (work) =>
+        this.withLease(job.id, input.lease, () => {
+          assertPublicationAllowed(job, context, this.clock());
+          return work();
+        }),
+    );
+    await this.acknowledge(job.id, {
+      lease: input.lease,
+      generation: input.generation,
+    });
+    return receipt;
+  }
+  async reconcileReceipt(id: string): Promise<boolean> {
+    return this.acknowledge(id);
+  }
+  async acknowledge(
+    id: string,
+    ownership?: { lease: string; generation: number },
+  ): Promise<boolean> {
     const client = await this.pg.connect();
     try {
       await client.query('BEGIN');
@@ -240,6 +321,25 @@ export class MemoryJobs {
       );
       const job = found.rows[0];
       if (!job) throw new Error('Maintenance job not found');
+      if (ownership) {
+        if (
+          job.state !== 'running' ||
+          job.lease_token !== ownership.lease ||
+          Number(job.attempts) !== ownership.generation ||
+          Number(job.lease_until) <= this.clock()
+        )
+          throw new Error('Maintenance lease lost before acknowledgement');
+      } else {
+        if (
+          !this.publicationContext?.publication.recall.memory.history.receipt(
+            id,
+          ) ||
+          (job.state === 'running' && Number(job.lease_until) > this.clock())
+        ) {
+          await client.query('COMMIT');
+          return false;
+        }
+      }
       await client.query(
         'INSERT INTO memory_processed_sources SELECT $1,value,$2 FROM jsonb_array_elements_text($3::jsonb) ON CONFLICT DO NOTHING',
         [this.ownerId, id, JSON.stringify(job.source_ids)],
@@ -255,6 +355,7 @@ export class MemoryJobs {
         [this.ownerId, id],
       );
       await client.query('COMMIT');
+      return true;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       throw error;

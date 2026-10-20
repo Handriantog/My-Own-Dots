@@ -1,3 +1,9 @@
+import { DreamPublication } from '../dream-publication.js';
+import type { PublishDreamInput } from '../memory-jobs.js';
+import { SQLiteEvidence } from './sqlite-evidence.js';
+import { SQLiteJobs } from './sqlite-jobs.js';
+import { MemoryRecall } from '../memory-recall.js';
+import { MemoryAccess } from '../memory-access.js';
 import { initializeSQLiteSchema } from './sqlite-schema.js';
 import { SQLiteConversationRecords } from './sqlite-conversation-records.js';
 import { DatabaseSync } from 'node:sqlite';
@@ -16,6 +22,10 @@ import {
 } from './repository-contract.js';
 
 const asynchronous = new Set([
+  'jobs.publishDream',
+  'recall.search',
+  'recall.read',
+  'recall.readSource',
   'folders.select',
   'folders.decide',
   'folders.listDirectory',
@@ -49,7 +59,30 @@ export function serveStorage(
     db.exec('ROLLBACK');
     throw error;
   }
+  const evidence = new SQLiteEvidence(
+    db,
+    ownerId,
+    workspace,
+    () => store.settings().memoryAllowed,
+  );
+  const episodes = {
+    generation: () => evidence.generation(),
+    coverage: (dotId?: string) => evidence.coverage(dotId),
+    searchEpisodes: evidence.searchEpisodes.bind(evidence),
+    sourceById: evidence.sourceById.bind(evidence),
+    readSource: evidence.readSource.bind(evidence),
+  };
+  const recall = new MemoryRecall(
+    workspace.memory,
+    episodes,
+    new MemoryAccess(workspace, store),
+  );
   const repositories = {
+    evidence,
+    jobs: new SQLiteJobs(db, ownerId, Date.now, {
+      publication: new DreamPublication(recall),
+    }),
+    recall,
     conversations: new SQLiteConversationRecords(db, ownerId),
     store,
     workspace,
@@ -94,6 +127,24 @@ export function serveStorage(
   function resultSize(value: unknown) {
     if (serialize(value).byteLength > storageLimits.bytes)
       throw new Error('Storage result exceeds size limit; use a bounded query');
+  }
+  function retryOrFinish(item: Queued, error: unknown) {
+    const code = (error as { errcode?: number }).errcode;
+    if (
+      typeof code === 'number' &&
+      (code & 255) === 5 &&
+      Date.now() < item.deadline &&
+      !isCancelled(item)
+    ) {
+      item.availableAt = Date.now() + 10;
+      queue.push(item);
+      schedule();
+    } else
+      finish(
+        item,
+        undefined,
+        isCancelled(item) ? cancelledStorageError() : error,
+      );
   }
   function pump() {
     scheduled = undefined;
@@ -140,13 +191,27 @@ export function serveStorage(
       if (request.method === 'folders.writeFile')
         args[4] = item.controller.signal;
       Promise.resolve()
-        .then(() => handler(...args))
+        .then(() =>
+          request.method === 'jobs.publishDream'
+            ? repositories.jobs.publishDreamWithFence(
+                args[0] as PublishDreamInput,
+                () => {
+                  if (isCancelled(item)) throw cancelledStorageError();
+                },
+              )
+            : handler(...args),
+        )
         .then(
           (value) => {
             resultSize(value);
             finish(item, value);
           },
-          (error) => finish(item, undefined, error),
+          // Publication has no external side effects: its transaction rolled back before retry.
+          // Folder operations may already have performed I/O and must never be replayed here.
+          (error) =>
+            request.method === 'jobs.publishDream'
+              ? retryOrFinish(item, error)
+              : finish(item, undefined, error),
         )
         .catch((error) => finish(item, undefined, error));
       // External folder helpers may wait; permission revocation must still run while they do.
@@ -162,22 +227,7 @@ export function serveStorage(
       finish(item, value);
     } catch (error) {
       if (db.isTransaction) db.exec('ROLLBACK');
-      const code = (error as { errcode?: number }).errcode;
-      if (
-        typeof code === 'number' &&
-        (code & 255) === 5 &&
-        Date.now() < item.deadline &&
-        !isCancelled(item)
-      ) {
-        item.availableAt = Date.now() + 10;
-        queue.push(item);
-        schedule();
-      } else
-        finish(
-          item,
-          undefined,
-          isCancelled(item) ? cancelledStorageError() : error,
-        );
+      retryOrFinish(item, error);
     }
   }
   function schedule() {

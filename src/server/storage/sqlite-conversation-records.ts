@@ -466,7 +466,9 @@ export class SQLiteConversationRecords {
       );
       const guard: EvidenceGuard = JSON.parse(run.evidence_guard);
       this.db
-        .prepare('INSERT OR IGNORE INTO memory_evidence VALUES(?,?,?,?,?,?,?)')
+        .prepare(
+          'INSERT OR IGNORE INTO memory_evidence(owner_id,id,thread_id,run_id,dot_id,workflow_complete,completed_at) VALUES(?,?,?,?,?,?,?)',
+        )
         .run(
           this.ownerId,
           evidenceHash([this.ownerId, lease.threadId, run.run_id]),

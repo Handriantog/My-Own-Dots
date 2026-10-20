@@ -8,7 +8,7 @@ import {
 } from '../shared/memory.js';
 import {
   evidenceHash,
-  type ConversationMemory,
+  type ConversationEvidenceRepository,
   type IndexCoverage,
   type SourceRecord,
 } from './conversation-memory.js';
@@ -54,7 +54,7 @@ export interface RecallExcerpt {
   nextCursor?: string;
 }
 type Episodes = Pick<
-  ConversationMemory,
+  ConversationEvidenceRepository,
   'generation' | 'coverage' | 'searchEpisodes' | 'sourceById' | 'readSource'
 >;
 interface Cursor {

@@ -1,3 +1,6 @@
+import type { SQLiteEvidence } from './sqlite-evidence.js';
+import type { SQLiteJobs } from './sqlite-jobs.js';
+import type { MemoryRecall } from '../memory-recall.js';
 import type { SQLiteConversationRecords } from './sqlite-conversation-records.js';
 import type { Store } from '../store.js';
 import type { WorkspaceStore } from '../workspace.js';
@@ -24,9 +27,49 @@ interface Repositories {
   connections: ConnectionStore;
   folders: FolderAccessService;
   conversations: SQLiteConversationRecords;
+  evidence: SQLiteEvidence;
+  jobs: SQLiteJobs;
+  recall: MemoryRecall;
 }
 // Explicit names are the wire protocol. Never dispatch arbitrary paths/prototype properties.
 export const repositoryMethods = {
+  evidence: [
+    'blockedThreads',
+    'sourceThreads',
+    'pendingRuns',
+    'pendingSources',
+    'compactSnapshot',
+    'completedExchanges',
+    'threadMessages',
+    'modelMessages',
+    'indexBatch',
+    'generation',
+    'coverage',
+    'searchEpisodes',
+    'sourceById',
+    'readSource',
+    'latestCheckpoint',
+    'saveCheckpoint',
+    'sourcesExist',
+    'dependenciesAllowed',
+  ],
+  jobs: [
+    'publishDream',
+    'reconcileReceipt',
+    'enqueue',
+    'get',
+    'list',
+    'find',
+    'lastAutomatic',
+    'claim',
+    'admitAutomatic',
+    'cancelQueued',
+    'defer',
+    'renew',
+    'recordUsage',
+    'settle',
+  ],
+  recall: ['search', 'read', 'readSource'],
   conversations: [
     'createThread',
     'getOrCreateThread',
@@ -226,6 +269,11 @@ export type AsyncWorkspace = AsyncRepository<'workspace'> & {
   folders: AsyncRepository<'folders'>;
 };
 export interface AsyncRepositories {
+  evidence: AsyncRepository<'evidence'> & {
+    indexRun(runId: string): Promise<void>;
+  };
+  jobs: AsyncRepository<'jobs'>;
+  recall: AsyncRepository<'recall'>;
   store: AsyncRepository<'store'>;
   workspace: AsyncWorkspace;
 }

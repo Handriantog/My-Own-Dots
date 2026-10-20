@@ -128,8 +128,11 @@ export class MemoryMaintenance {
       },
       this.compaction,
     );
-    this.jobs = new MemoryJobs(this.pg, workspace.ownerId, this.clock);
     this.publication = new DreamPublication(this.recall);
+    this.jobs = new MemoryJobs(this.pg, workspace.ownerId, this.clock, {
+      publication: this.publication,
+      check: (job) => this.ensureJobAllowed(job),
+    });
     workspace.memory.importLegacy(store.memories());
     for (const dot of workspace.dots())
       workspace.memory.settings(dot.id, this.clock());
@@ -229,25 +232,13 @@ export class MemoryMaintenance {
       throw new Error('Maintenance disabled');
   }
   private async blockedThreads(threads: string[]): Promise<Set<string>> {
-    const result = await this.pg.query<{ id: string }>(
-      `SELECT t.id FROM local_ai_threads t JOIN local_ai_runs r ON r.owner_id=t.owner_id AND r.thread_id=t.id AND r.run_id=t.last_run_id
-      WHERE t.owner_id=$1 AND t.id=ANY($2::text[]) AND r.status='finished'
-      AND EXISTS(SELECT 1 FROM jsonb_array_elements(t.messages) m CROSS JOIN LATERAL jsonb_array_elements(coalesce(m->'toolCalls','[]'::jsonb)) c
-        WHERE m->>'role'='assistant' AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(t.messages) answer WHERE answer->>'role'='tool' AND answer->>'toolCallId'=c->>'id'))`,
-      [this.workspace.ownerId, threads],
-    );
-    return new Set(result.rows.map((row) => row.id));
+    return new Set(await this.repository.blockedThreads(threads));
   }
   private async jobBlocked(job: MemoryJob): Promise<boolean> {
     if (job.origin !== 'automatic') return false;
     const threads = job.threadId
       ? [job.threadId]
-      : (
-          await this.pg.query<{ thread_id: string }>(
-            'SELECT DISTINCT thread_id FROM memory_episode_chunks WHERE owner_id=$1 AND source_id=ANY($2::text[])',
-            [this.workspace.ownerId, job.sourceIds],
-          )
-        ).rows.map((row) => row.thread_id);
+      : await this.repository.sourceThreads(job.sourceIds);
     return (await this.blockedThreads(threads)).size > 0;
   }
   private async indexPending(dotId?: string): Promise<void> {
@@ -256,19 +247,14 @@ export class MemoryMaintenance {
       .filter((t) => !dotId || t.dotId === dotId)
       .map((t) => t.id);
     const cursorKey = 'index:' + (dotId ?? 'all');
-    const rows = await this.pg.query<{ run_id: string }>(
-      `SELECT r.run_id FROM local_ai_runs r WHERE r.owner_id=$1 AND r.thread_id=ANY($2::text[]) AND r.status<>'running' AND r.provenance_complete=true
-      AND r.run_id>$3 AND NOT EXISTS(SELECT 1 FROM memory_index_runs i WHERE i.owner_id=r.owner_id AND i.thread_id=r.thread_id AND i.run_id=r.run_id) ORDER BY r.run_id LIMIT 5`,
-      [
-        this.workspace.ownerId,
-        threads,
-        this.workspace.memory.scanCursor(cursorKey),
-      ],
+    const runs = await this.repository.pendingRuns(
+      threads,
+      this.workspace.memory.scanCursor(cursorKey),
     );
-    for (const row of rows.rows) await this.repository.indexRun(row.run_id);
+    for (const run of runs) await this.repository.indexRun(run);
     this.workspace.memory.saveScanCursor(
       cursorKey,
-      rows.rows.length === 5 ? rows.rows.at(-1)!.run_id : '',
+      runs.length === 5 ? runs.at(-1)! : '',
     );
   }
   async requestCompact(
@@ -333,47 +319,40 @@ export class MemoryMaintenance {
       origin === 'automatic'
         ? await this.blockedThreads(threads)
         : new Set<string>();
-    const rows = await this.pg.query<{ source_id: string }>(
-      `SELECT c.source_id FROM memory_episode_chunks c JOIN memory_evidence e ON e.owner_id=c.owner_id AND e.thread_id=c.thread_id AND e.run_id=c.run_id
-      LEFT JOIN memory_processed_sources p ON p.owner_id=c.owner_id AND p.source_id=c.source_id
-      WHERE c.owner_id=$1 AND e.dot_id=$2 AND e.completed_at>=$3 AND c.thread_id=ANY($4::text[]) AND p.source_id IS NULL AND c.source_id>$5 ORDER BY c.source_id LIMIT 40`,
-      [
-        this.workspace.ownerId,
-        dotId,
-        since,
-        threads,
-        this.workspace.memory.scanCursor(cursorKey),
-      ],
-    );
+    const rows = await this.repository.pendingSources({
+      dotId,
+      since,
+      threadIds: threads,
+      cursor: this.workspace.memory.scanCursor(cursorKey),
+    });
     const sourceIds: string[] = [];
     let bytes = 0;
-    for (const row of rows.rows) {
-      const source = await this.repository.sourceById(row.source_id);
+    for (const row of rows) {
+      const source = await this.repository.sourceById(row);
       if (
         !source ||
         blocked.has(source.source.threadId) ||
         !this.recall.access.canRead(this.recall.access.forDot(dotId), source)
       ) {
-        this.workspace.memory.saveScanCursor(cursorKey, row.source_id);
+        this.workspace.memory.saveScanCursor(cursorKey, row);
         continue;
       }
       const size = estimateTokens(
         JSON.stringify({ id: source.id, text: source.text, role: source.role }),
       );
       if (size > 10000) {
-        this.workspace.memory.saveScanCursor(cursorKey, row.source_id);
+        this.workspace.memory.saveScanCursor(cursorKey, row);
         continue;
       }
       if (sourceIds.length >= 20 || bytes + size > 10000) break;
-      this.workspace.memory.saveScanCursor(cursorKey, row.source_id);
+      this.workspace.memory.saveScanCursor(cursorKey, row);
       sourceIds.push(source.id);
       bytes += size;
     }
     if (
-      rows.rows.length < 40 &&
-      (!rows.rows.length ||
-        this.workspace.memory.scanCursor(cursorKey) ===
-          rows.rows.at(-1)!.source_id)
+      rows.length < 40 &&
+      (!rows.length ||
+        this.workspace.memory.scanCursor(cursorKey) === rows.at(-1)!)
     )
       this.workspace.memory.saveScanCursor(cursorKey, '');
     if (!sourceIds.length && origin === 'automatic') return;
@@ -451,7 +430,7 @@ export class MemoryMaintenance {
           job.state !== 'succeeded' &&
           this.workspace.memory.history.receipt(job.id)
         )
-          await this.jobs.acknowledge(job.id);
+          await this.jobs.reconcileReceipt(job.id);
     if (this.store.settings().paused || this.scheduler.busy || this.worker)
       return;
     await this.indexPending();
@@ -474,17 +453,8 @@ export class MemoryMaintenance {
         for (const thread of this.workspace
           .conversations()
           .filter((t) => t.dotId === dot.id && scan.has(t.id))) {
-          const snapshot = await this.pg.query<{
-            last_run_id: string;
-            updated_at: Date;
-            last_status: string;
-            checkpoint_id: string | null;
-          }>(
-            `SELECT t.last_run_id,t.updated_at,r.status AS last_status,(SELECT id FROM memory_checkpoints c WHERE c.owner_id=t.owner_id AND c.thread_id=t.id ORDER BY covered_count DESC,created_at DESC LIMIT 1) AS checkpoint_id FROM local_ai_threads t LEFT JOIN local_ai_runs r ON r.owner_id=t.owner_id AND r.thread_id=t.id AND r.run_id=t.last_run_id WHERE t.owner_id=$1 AND t.id=$2`,
-            [this.workspace.ownerId, thread.id],
-          );
-          const row = snapshot.rows[0];
-          if (!row || row.last_status === 'running') continue;
+          const row = await this.repository.compactSnapshot(thread.id);
+          if (!row || row.lastStatus === 'running') continue;
           const key = JSON.stringify([
             row,
             this.workspace.memory.suppressionGeneration(),
@@ -498,20 +468,20 @@ export class MemoryMaintenance {
               thread.id,
               messages,
             );
-            const exchanges = await this.pg.query(
-              'SELECT count(*) AS n FROM memory_evidence WHERE owner_id=$1 AND thread_id=$2 AND workflow_complete=true AND completed_at>$3',
-              [this.workspace.ownerId, thread.id, checkpoint?.createdAt ?? 0],
+            const exchanges = await this.repository.completedExchanges(
+              thread.id,
+              checkpoint?.createdAt ?? 0,
             );
             boundary = {
               key,
               blocked:
-                row.last_status === 'finished' && pendingApproval(messages),
+                row.lastStatus === 'finished' && pendingApproval(messages),
               bytes: estimateTokens(
                 JSON.stringify(
                   messages.slice(checkpoint?.sourceMessageIds.length ?? 0),
                 ),
               ),
-              exchanges: Number(exchanges.rows[0].n),
+              exchanges: exchanges,
               hash: evidenceHash(messages),
             };
             this.boundaries.delete(thread.id);
@@ -639,28 +609,23 @@ export class MemoryMaintenance {
       } else {
         this.ensureAllowed(job.dotId);
         const receipt = this.workspace.memory.history.receipt(job.id);
-        if (!receipt) {
-          const proposal = await new DreamAnalysis(
-            this.recall,
-            inference,
-          ).analyze(job, controller.signal);
-          controller.signal.throwIfAborted();
-          this.ensureJobAllowed(job);
-          if (await this.jobBlocked(job))
-            throw new Error('Waiting for approval');
-          await this.publication.apply(
-            job.id,
-            proposal,
-            job.publicationPolicy ?? 'review_all',
-            job.dotId,
-            (work) =>
-              this.jobs.withLease(job.id, job.leaseToken!, () => {
-                this.ensureJobAllowed(job);
-                return work();
-              }),
-          );
-        }
-        await this.jobs.acknowledge(job.id);
+        const proposal = receipt
+          ? { changes: [], evidence: [] }
+          : await new DreamAnalysis(this.recall, inference).analyze(
+              job,
+              controller.signal,
+            );
+        controller.signal.throwIfAborted();
+        this.ensureJobAllowed(job);
+        if (await this.jobBlocked(job)) throw new Error('Waiting for approval');
+        await this.jobs.publishDream({
+          jobId: job.id,
+          lease: job.leaseToken!,
+          generation: job.attempts,
+          proposal,
+          policy: job.publicationPolicy ?? 'review_all',
+          dotId: job.dotId,
+        });
       }
       this.lastError = undefined;
     } catch (error) {
