@@ -1,3 +1,4 @@
+import type { StorageOptions } from './legacy-evidence.js';
 import { Worker } from 'node:worker_threads';
 import { serialize } from 'node:v8';
 import { PageError } from '../pages.js';
@@ -16,7 +17,7 @@ import {
   type StorageFailure,
   type StorageResponse,
 } from './repository-contract.js';
-interface OpenOptions {
+interface OpenOptions extends StorageOptions {
   database: string;
   ownerId: string;
   entry?: string | URL;
@@ -60,6 +61,7 @@ export class StorageClient {
   private constructor(
     private worker: Worker,
     readonly ownerId: string,
+    readonly engine: 'legacy-postgres' | 'sqlite',
   ) {
     this.ready = new Promise((resolve, reject) => {
       this.resolveReady = resolve;
@@ -90,9 +92,11 @@ export class StorageClient {
         error instanceof Error ? error : new Error('Storage worker failed'),
       ),
     );
-    worker.on('exit', (code) =>
-      this.fail(new Error(`Storage worker exited (${code})`)),
-    );
+    worker.on('exit', (code) => {
+      if (!this.closing || code !== 0 || this.pending.size)
+        this.fail(new Error(`Storage worker exited (${code})`));
+      else this.closed = true;
+    });
     const groups: Record<string, Record<string, unknown>> = {};
     for (const [group, names] of Object.entries(repositoryMethods)) {
       const facade: Record<string, unknown> = {};
@@ -126,6 +130,7 @@ export class StorageClient {
       enumerable: true,
     });
     Object.assign(groups.workspace, {
+      policy: groups.policy,
       memory: Object.assign(groups.memory, { history: groups.history }),
       pages: groups.pages,
       computers: groups.computers,
@@ -143,10 +148,17 @@ export class StorageClient {
         /* each request yields to foreground work */
       }
     };
+    groups.jobs.publishDream = (
+      input: RepositoryArguments<'jobs.publishDream'>[0],
+      signal?: AbortSignal,
+    ) => this.call('jobs.publishDream', [input], { signal });
     this.repositories = {
       evidence: groups.evidence,
       jobs: groups.jobs,
       recall: groups.recall,
+      access: groups.access,
+      publication: groups.publication,
+      context: groups.context,
       store: groups.store,
       workspace: groups.workspace,
     } as unknown as AsyncRepositories;
@@ -162,12 +174,24 @@ export class StorageClient {
     // TS workers use the same installed loader as development; packaged workers have no loader dependency.
     const execArgv =
       options.execArgv ??
-      (String(entry).endsWith('.ts') ? ['--import', 'tsx'] : []);
+      (String(entry).endsWith('.ts')
+        ? ['--import', import.meta.resolve('tsx')]
+        : []);
     const worker = new Worker(entry, {
-      workerData: { database: options.database, ownerId: options.ownerId },
+      workerData: {
+        database: options.database,
+        ownerId: options.ownerId,
+        engine: options.engine,
+        postgresUrl: options.postgresUrl,
+        pinnedTokenLimit: options.pinnedTokenLimit,
+      },
       execArgv,
     });
-    const client = new StorageClient(worker, options.ownerId);
+    const client = new StorageClient(
+      worker,
+      options.ownerId,
+      options.engine ?? 'sqlite',
+    );
     try {
       await client.ready;
       return client;

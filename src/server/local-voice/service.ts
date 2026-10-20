@@ -55,16 +55,16 @@ export class LocalVoiceService {
     private readonly platform: Platform,
     private readonly config: LocalVoiceConfig,
   ) {}
-  settings(dotId: string) {
-    return this.platform.workspace.voiceSettings(dotId);
+  async settings(dotId: string) {
+    return await this.platform.workspace.voiceSettings(dotId);
   }
-  saveSettings(dotId: string, input: unknown) {
+  async saveSettings(dotId: string, input: unknown) {
     if (
       this.starting ||
       (this.call && !this.call.ended && this.call.scope.dotId === dotId)
     )
       throw Error('End the call before changing its voice.');
-    return this.platform.workspace.setVoiceSettings(
+    return await this.platform.workspace.setVoiceSettings(
       dotId,
       voiceSettingsSchema.parse(input),
     );
@@ -107,10 +107,10 @@ export class LocalVoiceService {
       let release: (() => void) | undefined;
       try {
         signal.throwIfAborted();
-        this.settings(dotId); // Verify the Dot belongs to this workspace.
+        await this.settings(dotId); // Verify the Dot belongs to this workspace.
         if (
           !(await this.status()).ready ||
-          this.platform.store.settings().paused
+          (await this.platform.store.settings()).paused
         )
           throw Error('Local speech is unavailable.');
         const foreground = this.platform
@@ -237,8 +237,14 @@ export class LocalVoiceService {
       const status = await waitForVoiceOperation(this.status(), signal);
       if (!status.ready) throw Error(status.reason);
       this.platform.requireReady();
-      const binding = this.platform.workspace.requireThread(threadId, dotId);
-      if (binding.dotId !== dotId || this.platform.store.settings().paused)
+      const binding = await this.platform.workspace.requireThread(
+        threadId,
+        dotId,
+      );
+      if (
+        binding.dotId !== dotId ||
+        (await this.platform.store.settings()).paused
+      )
         throw Error('This conversation is unavailable.');
       const snapshot = await waitForVoiceOperation(
         this.platform.localConversations!.getSnapshot(threadId),
@@ -247,8 +253,8 @@ export class LocalVoiceService {
       if (snapshot.lastRun?.status === 'running')
         throw Error('Wait for the current response before starting a call.');
       signal.throwIfAborted();
-      const receipt = this.platform.workspace.createCall(threadId);
-      const voiceSettings = this.settings(dotId);
+      const receipt = await this.platform.workspace.createCall(threadId);
+      const voiceSettings = await this.settings(dotId);
       const providerSession =
         this.config.providerSession &&
         this.platform.config.llmProvider === 'codex'
@@ -281,13 +287,18 @@ export class LocalVoiceService {
                 ...(providerSession
                   ? {
                       stream: providerSession.runDecision,
-                      commitText: (
+                      commitText: async (
                         messageId: string,
                         assistantId: string,
                         sequence: number,
                         text: string,
                       ) =>
-                        call.commitText(messageId, assistantId, sequence, text),
+                        await call.commitText(
+                          messageId,
+                          assistantId,
+                          sequence,
+                          text,
+                        ),
                       finishText: (messageId: string, failed: boolean) =>
                         call.finishText(messageId, failed),
                     }
@@ -296,18 +307,23 @@ export class LocalVoiceService {
               });
             else clearVoiceTurn(this.platform.workspace, receipt.id);
           },
-          requireThread: () =>
-            this.platform.workspace.requireThread(threadId, dotId),
-          paused: () => this.platform.store.settings().paused,
+          requireThread: async () =>
+            await this.platform.workspace.requireThread(threadId, dotId),
+          paused: async () => (await this.platform.store.settings()).paused,
           foreground: (s) => this.platform.memory!.enterForeground(s, threadId),
           snapshot: () =>
             this.platform.localConversations!.getSnapshot(threadId),
           stop: (messageId) => this.platform.stopVoiceTurn(threadId, messageId),
-          receipt: (state, text, error) => {
-            this.platform.workspace.setCall(receipt.id, state, text, error);
+          receipt: async (state, text, error) => {
+            await this.platform.workspace.setCall(
+              receipt.id,
+              state,
+              text,
+              error,
+            );
           },
-          delivery: (rows) =>
-            this.platform.workspace.saveVoiceDelivery(receipt.id, rows),
+          delivery: async (rows) =>
+            await this.platform.workspace.saveVoiceDelivery(receipt.id, rows),
           closed: release,
         },
         () => {
@@ -340,11 +356,11 @@ export class LocalVoiceService {
       this.starting = false;
     }
   }
-  require(
+  async require(
     id: string,
     token: string | undefined,
     options: { allowEnded?: boolean } = {},
-  ): LiveVoiceCall {
+  ): Promise<LiveVoiceCall> {
     const call = this.call;
     const supplied = Buffer.from(token ?? '');
     const expected = Buffer.from(call?.scope.token ?? '');
@@ -356,7 +372,7 @@ export class LocalVoiceService {
       !timingSafeEqual(supplied, expected)
     )
       throw Error('Call authorization failed.');
-    this.platform.workspace.requireThread(
+    await this.platform.workspace.requireThread(
       call.scope.threadId,
       call.scope.dotId,
     );

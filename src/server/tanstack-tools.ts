@@ -20,7 +20,7 @@ export function tanstackTools(tools: ToolDefinition[]) {
 // their execution tied to that verified snapshot, with validated inputs.
 export function learnedSkillTools(
   { learnedSkills, abortSignal }: BuiltInAgentFactoryContext,
-  check: () => void,
+  check: () => void | Promise<void>,
 ) {
   return Object.entries(learnedSkills.tools).map(([name, tool]) => {
     const inputSchema =
@@ -37,7 +37,7 @@ export function learnedSkillTools(
       description: tool.description ?? name,
       inputSchema,
     }).server(async (input, context) => {
-      check();
+      await check();
       abortSignal.throwIfAborted();
       return execute(input, {
         toolCallId: context?.toolCallId ?? name,

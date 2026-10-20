@@ -83,7 +83,7 @@ it('migrates legacy threads without enrolling them and persists configuration ac
   });
 });
 
-it('selects only owned web threads and binds the configured channel Dot before its first run', () => {
+it('selects only owned web threads and binds the configured channel Dot before its first run', async () => {
   const { ws, dot } = fixture();
   ws.updateDot(dot.id, {
     ...dot,
@@ -94,13 +94,24 @@ it('selects only owned web threads and binds the configured channel Dot before i
   const select = learningSelector(ws, dot.id);
   const user = { id: 'owner', name: 'Owner' };
   expect(
-    select({ surface: 'web', user, agentId: dot.id, input: input('web') }),
+    await select({
+      surface: 'web',
+      user,
+      agentId: dot.id,
+      input: input('web'),
+    }),
   ).toBe('research');
-  expect(() =>
-    select({ surface: 'web', user, agentId: dot.id, input: input('unknown') }),
-  ).toThrow();
+  await expect(
+    async () =>
+      await select({
+        surface: 'web',
+        user,
+        agentId: dot.id,
+        input: input('unknown'),
+      }),
+  ).rejects.toThrow();
   expect(
-    select({
+    await select({
       surface: 'channel',
       user,
       agentId: dot.id,
@@ -110,34 +121,43 @@ it('selects only owned web threads and binds the configured channel Dot before i
   expect(ws.requireThread('slack', dot.id).learningContainerId).toBe(
     'research',
   );
-  expect(() =>
-    select({
-      surface: 'channel',
-      user: null,
-      agentId: dot.id,
-      input: input('unauthorized'),
-    }),
-  ).toThrow();
-  expect(() =>
-    select({
-      surface: 'web',
-      user: { id: 'other', name: 'Other' },
-      agentId: dot.id,
-      input: input('web'),
-    }),
-  ).toThrow();
+  await expect(
+    async () =>
+      await select({
+        surface: 'channel',
+        user: null,
+        agentId: dot.id,
+        input: input('unauthorized'),
+      }),
+  ).rejects.toThrow();
+  await expect(
+    async () =>
+      await select({
+        surface: 'web',
+        user: { id: 'other', name: 'Other' },
+        agentId: dot.id,
+        input: input('web'),
+      }),
+  ).rejects.toThrow();
   const other = ws.createDot(dot.spaceId, 'Other', 'Other role', true, true);
-  expect(() =>
-    select({
-      surface: 'channel',
-      user,
-      agentId: other.id,
-      input: input('wrong-dot'),
-    }),
-  ).toThrow();
-  expect(() =>
-    select({ surface: 'web', user, agentId: other.id, input: input('web') }),
-  ).toThrow();
+  await expect(
+    async () =>
+      await select({
+        surface: 'channel',
+        user,
+        agentId: other.id,
+        input: input('wrong-dot'),
+      }),
+  ).rejects.toThrow();
+  await expect(
+    async () =>
+      await select({
+        surface: 'web',
+        user,
+        agentId: other.id,
+        input: input('web'),
+      }),
+  ).rejects.toThrow();
   expect(ws.conversations()).toHaveLength(2);
 });
 

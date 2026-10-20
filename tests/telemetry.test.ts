@@ -24,7 +24,7 @@ const { WorkspaceStore } = await import(${JSON.stringify(workspaceUrl)});
 const store = new Store(':memory:');
 const workspace = new WorkspaceStore(':memory:', 'fixture-owner');
 try {
-  const platform = new Platform(store, workspace, {
+  const platform = await Platform.create(store, workspace, {
     intelligenceKey: 'test-project-key-never-sent',
     baseUrl: '', runtimeUrl: '', voiceName: 'marin', slackUsers: [],
   });

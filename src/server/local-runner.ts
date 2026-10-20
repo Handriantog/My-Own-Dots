@@ -33,7 +33,7 @@ import {
 } from './local-conversations.js';
 
 interface EvidenceAgent extends AbstractAgent {
-  evidenceGuard?(threadId: string): EvidenceGuard;
+  evidenceGuard?(threadId: string): EvidenceGuard | Promise<EvidenceGuard>;
   setEvidenceRecorder?(record?: (guard: EvidenceGuard) => Promise<void>): void;
   onPersistedEvent?(input: RunAgentInput, event: BaseEvent): void;
   onRunSettled?(input: RunAgentInput, failed: boolean): void;
@@ -248,7 +248,7 @@ export class LocalAgentRunner extends AgentRunner {
       const evidenceAgent = request.agent as EvidenceAgent;
       await lease.beginRun(
         input,
-        evidenceAgent.evidenceGuard?.(request.threadId),
+        await evidenceAgent.evidenceGuard?.(request.threadId),
       );
       evidenceAgent.setEvidenceRecorder?.(async (guard) => {
         if (!lease?.addEvidenceGuard)

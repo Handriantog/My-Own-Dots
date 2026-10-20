@@ -12,7 +12,7 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       store = new Store(':memory:'),
       ws = new WorkspaceStore(':memory:', owner);
     const legacy = store.saveMemory('Existing preference');
-    const platform = new Platform(store, ws, {
+    const platform = await Platform.create(store, ws, {
       conversationBackend: 'local',
       localDatabaseUrl: process.env.LOCAL_TEST_DATABASE_URL,
       llmBackend: 'subscription',

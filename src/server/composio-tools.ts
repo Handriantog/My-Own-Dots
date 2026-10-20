@@ -18,10 +18,10 @@ type CancellableSession = Session & {
 
 export async function composioTools(
   session: Session,
-  check: () => void,
+  check: () => void | Promise<void>,
   signal?: AbortSignal,
 ) {
-  check();
+  await check();
   // @composio/core 0.22 supports request options at runtime but omits them
   // from the public Session function aliases.
   const cancellable = session as CancellableSession;
@@ -34,7 +34,7 @@ export async function composioTools(
         description: fn.description ?? `Use the Composio ${fn.name} tool.`,
         parameters: fn.parameters as unknown as ToolDefinition['parameters'],
         execute: async (input: unknown) => {
-          check();
+          await check();
           try {
             const { data, error } = await cancellable.execute(
               fn.name,

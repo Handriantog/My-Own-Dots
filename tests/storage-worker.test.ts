@@ -35,6 +35,7 @@ it('persists typed repository operations through a worker and drains on close', 
   const task = await store.createTask('Plan the trip');
   const write = store.saveMemory('Train ticket', 'memory-fixed-id');
   await client.close();
+  expect(client.signal.aborted).toBe(false);
   expect(await write).toMatchObject({
     id: 'memory-fixed-id',
     text: 'Train ticket',
@@ -203,6 +204,7 @@ it('rejects all outstanding requests when the storage worker dies', async () => 
     );
     await writeFile(database + '.crash', 'crash');
     await Promise.all(rejected);
+    expect(client.signal.aborted).toBe(true);
     await expect(client.repositories.store.settings()).rejects.toThrow(
       /closed|worker/i,
     );

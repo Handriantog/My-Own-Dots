@@ -8,10 +8,10 @@ afterEach(async () => {
   for (const close of closers.splice(0)) await close();
   vi.restoreAllMocks();
 });
-function fixture() {
+async function fixture() {
   const store = new Store(':memory:');
   const workspace = new WorkspaceStore(':memory:', 'owner');
-  const platform = new Platform(store, workspace, {
+  const platform = await Platform.create(store, workspace, {
     conversationBackend: 'local',
     localDatabaseUrl: 'postgresql://127.0.0.1:1/unused',
     llmBackend: 'subscription',
@@ -29,7 +29,7 @@ function fixture() {
   return { platform, workspace };
 }
 it('discovers SSE and thread inspection with no hosted Intelligence or model API key', async () => {
-  const { platform } = fixture();
+  const { platform } = await fixture();
   const response = await platform.handle(
     new Request('http://localhost/api/copilotkit/info'),
   );
@@ -44,7 +44,7 @@ it('creates conversations in local storage and preserves workspace bindings', as
   const create = vi
     .spyOn(PostgresConversations.prototype, 'createThread')
     .mockResolvedValue({} as never);
-  const { platform, workspace } = fixture();
+  const { platform, workspace } = await fixture();
   const dot = workspace.dots()[0];
   const thread = await platform.createConversation(dot.id, 'Local note');
   expect(create).toHaveBeenCalledWith(
@@ -64,7 +64,7 @@ it('only lists threads bound to this workspace and rejects unbound inspection', 
       { id: 'visible', agentId: 'x' },
       { id: 'foreign', agentId: 'x' },
     ] as never);
-  const { platform, workspace } = fixture();
+  const { platform, workspace } = await fixture();
   workspace.bindThread('visible', workspace.dots()[0].id, 'Bound');
   const response = await platform.handle(
     new Request('http://localhost/api/copilotkit/threads'),

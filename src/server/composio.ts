@@ -1,8 +1,8 @@
+import type { WorkspaceRepository } from './storage/runtime-repositories.js';
 import { createHash } from 'node:crypto';
 import { Composio } from '@composio/core';
 import type { Dot } from '../shared/types.js';
 import type { PlatformConfig } from './platform-config.js';
-import type { WorkspaceStore } from './workspace.js';
 
 let client: Composio | undefined;
 let clientKey: string | undefined;
@@ -17,7 +17,7 @@ function composioClient(apiKey: string) {
 
 export async function composioSession(
   config: PlatformConfig,
-  workspace: WorkspaceStore,
+  workspace: WorkspaceRepository,
   dot: Dot,
   ownerId: string,
   signal?: AbortSignal,
@@ -40,6 +40,6 @@ export async function composioSession(
     },
     { signal },
   );
-  workspace.saveComposioSession(dot.id, session.sessionId, policyHash);
+  await workspace.saveComposioSession(dot.id, session.sessionId, policyHash);
   return session;
 }

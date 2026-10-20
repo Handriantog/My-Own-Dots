@@ -1,7 +1,8 @@
+import type { StoreRepository } from './storage/runtime-repositories.js';
 import { randomUUID } from 'node:crypto';
 import { EventType } from '@ag-ui/core';
 import { z } from 'zod';
-import type { Store } from './store.js';
+
 import type { MaintenanceGate } from './storage/maintenance.js';
 
 const step = z.enum(['setup_required', 'ready', 'settings']);
@@ -103,7 +104,7 @@ export class SetupTelemetry {
   private readonly signal = new AbortController().signal;
   private timer?: ReturnType<typeof setInterval>;
   constructor(
-    private store: Store,
+    private store: StoreRepository,
     private env: NodeJS.ProcessEnv = process.env,
     private send: Send = productionSend,
     private report: (diagnostic: Diagnostic) => void = (diagnostic) =>
@@ -113,10 +114,16 @@ export class SetupTelemetry {
         timestamp: new Date().toISOString(),
       }),
     private maintenance?: MaintenanceGate,
-  ) {
-    if (!this.enabled()) return;
+  ) {}
+  static async create(...args: ConstructorParameters<typeof SetupTelemetry>) {
+    const telemetry = new SetupTelemetry(...args);
+    await telemetry.initialize();
+    return telemetry;
+  }
+  private async initialize() {
+    if (!(await this.enabled())) return;
     try {
-      const saved = this.store.setupTelemetryState();
+      const saved = await this.store.setupTelemetryState();
       const parsed = saved
         ? stateSchema.safeParse(JSON.parse(saved))
         : undefined;
@@ -136,9 +143,9 @@ export class SetupTelemetry {
         : this.state.installationId;
       if (this.state.lastStep && !this.state.activated) {
         const last = this.state.lastStep;
-        this.captureNow({ kind: 'setup_abandoned', step: last });
+        await this.captureNow({ kind: 'setup_abandoned', step: last });
       }
-      this.persist();
+      await this.persist();
     } catch {
       this.report('storage_failed');
     }
@@ -152,7 +159,7 @@ export class SetupTelemetry {
       ...(this.state ? { installation_id: this.state.installationId } : {}),
     };
   }
-  private enabled() {
+  private async enabled() {
     const off =
       ['DO_NOT_TRACK', 'COPILOTKIT_TELEMETRY_DISABLED'].some((key) =>
         ['true', '1'].includes(this.env[key] ?? ''),
@@ -160,30 +167,30 @@ export class SetupTelemetry {
     if (off) {
       this.state = undefined;
       try {
-        this.store.clearSetupTelemetry();
+        await this.store.clearSetupTelemetry();
       } catch {
         this.report('storage_failed');
       }
     }
     return !off;
   }
-  private persist() {
+  private async persist() {
     if (!this.state) return false;
     try {
-      this.store.saveSetupTelemetryState(JSON.stringify(this.state));
+      await this.store.saveSetupTelemetryState(JSON.stringify(this.state));
       return true;
     } catch {
       this.report('storage_failed');
       return false;
     }
   }
-  capture(input: SetupEvent) {
-    if (!this.maintenance) return this.captureNow(input);
+  async capture(input: SetupEvent) {
+    if (!this.maintenance) return await this.captureNow(input);
     const pending = this.maintenance
       .runWrite(
         this.signal,
         async () => {
-          this.captureNow(input);
+          await this.captureNow(input);
         },
         { background: true },
       )
@@ -196,8 +203,8 @@ export class SetupTelemetry {
     this.captures.add(pending);
     return pending;
   }
-  private captureNow(input: SetupEvent) {
-    if (!this.enabled() || !this.state) return;
+  private async captureNow(input: SetupEvent) {
+    if (!(await this.enabled()) || !this.state) return;
     const parsed = eventSchema.safeParse(input);
     if (!parsed.success) {
       this.report('invalid_event');
@@ -220,7 +227,7 @@ export class SetupTelemetry {
       event,
     });
     this.state.queue = this.state.queue.slice(-256);
-    this.persist();
+    await this.persist();
   }
   start() {
     if (this.timer || !this.state) return;
@@ -263,13 +270,14 @@ export class SetupTelemetry {
     } else await this.deliver();
   }
   private async deliver() {
-    if (!this.enabled() || !this.state || !this.persist()) return;
+    if (!(await this.enabled()) || !this.state || !(await this.persist()))
+      return;
     // One bounded pass. New events and retries are handled by the next pass.
     const queued = this.state?.queue.slice() ?? [];
     const deadline = Date.now() + 2000;
     for (const entry of queued) {
       if (Date.now() >= deadline) return;
-      if (!this.enabled() || !this.state) return;
+      if (!(await this.enabled()) || !this.state) return;
       try {
         await this.send(this.state.identity, {
           event: names[entry.event.kind],
@@ -283,11 +291,11 @@ export class SetupTelemetry {
         this.report('delivery_failed');
         return;
       }
-      if (!this.enabled() || !this.state) return;
+      if (!(await this.enabled()) || !this.state) return;
       this.state.queue = this.state.queue.filter(
         (event) => event.id !== entry.id,
       );
-      this.persist();
+      await this.persist();
     }
   }
 }

@@ -1,3 +1,4 @@
+import type { MemoryJobs } from '../src/server/memory-jobs.js';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { expect, it, vi } from 'vitest';
@@ -366,9 +367,11 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
     const blocked = new Promise<void>((resolve) => {
       releaseAck = resolve;
     });
-    const acknowledge = memory.jobs.acknowledge.bind(memory.jobs);
+    const acknowledge = (memory.jobs as MemoryJobs).acknowledge.bind(
+      memory.jobs,
+    );
     const ack = vi
-      .spyOn(memory.jobs, 'acknowledge')
+      .spyOn(memory.jobs as MemoryJobs, 'acknowledge')
       .mockImplementation(async (...args) => {
         await blocked;
         return acknowledge(...args);

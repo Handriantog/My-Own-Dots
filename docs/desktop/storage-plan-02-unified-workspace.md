@@ -85,10 +85,10 @@ New workspace resolution and manifests: `src/shared/workspace-manifest.ts`, `src
 
 **Interfaces:** `Platform.create(...)` performs asynchronous repository initialization before exposing routes; Store and Workspace contracts return Promises for database operations. Services that need callbacks use async callbacks or immutable initialized metadata, never synchronous IPC. Existing HTTP/AG-UI/voice payloads remain unchanged. `CONVERSATION_BACKEND=local` plus manifest engine chooses legacy PostgreSQL or unified SQLite explicitly.
 
-- [ ] Add runtime tests exercising conversation, page write, permission revocation, scheduled task, telemetry flush, Dream publication, voice final receipts and shutdown through the real storage worker. Assert a delayed/revoked permission cannot authorize an external tool and no speech precedes event persistence.
-- [ ] Run these tests before conversion; expect missing async worker integration failures.
-- [ ] Convert call sites end-to-end; await compound reads before permission decisions and hold maintenance admission through detached writes. Do not use `Atomics.wait`, a synchronous worker bridge or unawaited mutations. Move policy reads needed for inference into bounded snapshots and revalidate before durable/external actions.
-- [ ] Run the whole suite, typecheck, lint and both builds. Grep production startup paths for DatabaseSync construction outside worker/offline services. Expect no remaining synchronous core database paths in the backend event loop. Commit `refactor: route runtime storage through async repositories`.
+- [x] Add runtime tests exercising conversation, page write, permission revocation, scheduled task, telemetry flush, Dream publication, voice final receipts and shutdown through the real storage worker. Assert a delayed/revoked permission cannot authorize an external tool and no speech precedes event persistence.
+- [x] Run these tests before conversion; expect missing async worker integration failures.
+- [x] Convert call sites end-to-end; await compound reads before permission decisions and hold maintenance admission through detached writes. Do not use `Atomics.wait`, a synchronous worker bridge or unawaited mutations. Move policy reads needed for inference into bounded snapshots and revalidate before durable/external actions.
+- [x] Run the whole suite, typecheck, lint and both builds. Grep production startup paths for DatabaseSync construction outside worker/offline services. Expect no remaining synchronous core database paths in the backend event loop. Commit `refactor: route runtime storage through async repositories`.
 
 ## Task 6: Verified unified snapshots and explicit legacy migration
 

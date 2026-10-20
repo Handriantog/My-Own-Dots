@@ -734,3 +734,41 @@ async function expireJob(
     }
   }
 }
+it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
+  'uses legacy PostgreSQL evidence from the storage worker without creating unified tables',
+  async () => {
+    const f = await fixture('postgres');
+    const { StorageClient } =
+      await import('../src/server/storage/storage-client.js');
+    const pg = (f.jobs as import('../src/server/memory-jobs.js').MemoryJobs).pg;
+    const storage = await StorageClient.open({
+      database: f.database,
+      ownerId: f.owner,
+      engine: 'legacy-postgres',
+      postgresUrl: pg.options.connectionString,
+    });
+    cleanups.push(() => storage.close());
+    await storage.repositories.evidence.indexRun(f.input.runId);
+    expect(
+      (
+        await storage.repositories.recall.search(f.dot.id, {
+          query: 'opalword',
+          kinds: ['episode'],
+        })
+      ).matches,
+    ).toHaveLength(2);
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(f.database, { readOnly: true });
+    try {
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_schema WHERE name='conversation_threads'",
+          )
+          .get(),
+      ).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  },
+);

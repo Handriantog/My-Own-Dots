@@ -271,7 +271,18 @@ export class MemoryJobs {
       client.release();
     }
   }
-  async publishDream(input: PublishDreamInput): Promise<ApplyReceipt> {
+  async publishDream(
+    input: PublishDreamInput,
+    signal?: AbortSignal,
+  ): Promise<ApplyReceipt> {
+    return this.publishDreamWithFence(input, () => signal?.throwIfAborted());
+  }
+  /** Worker-local cancellation fence; never serialized as a callback. */
+  async publishDreamWithFence(
+    input: PublishDreamInput,
+    checkCancellation: () => void,
+  ): Promise<ApplyReceipt> {
+    checkCancellation();
     const context = this.publicationContext;
     if (!context) throw new Error('Dream publication is not configured');
     const job = await this.get(input.jobId);
@@ -295,8 +306,13 @@ export class MemoryJobs {
       input.dotId,
       (work) =>
         this.withLease(job.id, input.lease, () => {
+          checkCancellation();
           assertPublicationAllowed(job, context, this.clock());
-          return work();
+          return context.publication.recall.memory.atomic(() => {
+            const receipt = work();
+            checkCancellation();
+            return receipt;
+          });
         }),
     );
     await this.acknowledge(job.id, {

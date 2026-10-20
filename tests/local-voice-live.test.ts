@@ -282,7 +282,7 @@ it('does not attribute stale playback acknowledgements to a new turn or treat ca
   try {
     await f.call.start();
     const first = await utterance(f);
-    f.call.commitText(first.messageId, 'a', 0, 'Saved sentence.');
+    await f.call.commitText(first.messageId, 'a', 0, 'Saved sentence.');
     await vi.waitFor(() =>
       expect(f.events.some((event) => event.type === 'audio')).toBe(true),
     );
@@ -290,7 +290,7 @@ it('does not attribute stale playback acknowledgements to a new turn or treat ca
     if (audio.type !== 'audio') throw Error('Expected audio');
     await f.call.interrupt();
     const second = await utterance(f);
-    f.call.played(audio.generation, audio.sequence, 960);
+    await f.call.played(audio.generation, audio.sequence, 960);
     const rows = logs.mock.calls
       .filter(([name]) => name === '[voice-timing]')
       .map(([, row]) => JSON.parse(row));
@@ -323,17 +323,27 @@ it('plays saved text spans before the answer completes and never repeats the fin
     f.port.snapshot.mockResolvedValue(
       snapshot([{ ...user, id: turn.messageId }], 'running'),
     );
-    f.call.commitText(turn.messageId, 'stream-answer', 0, 'First sentence. ');
+    await f.call.commitText(
+      turn.messageId,
+      'stream-answer',
+      0,
+      'First sentence. ',
+    );
     await vi.waitFor(() =>
       expect(f.events.some((e) => e.type === 'audio')).toBe(true),
     );
     expect(f.synthesis.synthesize).toHaveBeenCalledTimes(1);
-    f.call.commitText(turn.messageId, 'stream-answer', 1, 'Second sentence.');
+    await f.call.commitText(
+      turn.messageId,
+      'stream-answer',
+      1,
+      'Second sentence.',
+    );
     await f.call.answer(turn.messageId);
     expect(f.synthesis.synthesize).toHaveBeenCalledTimes(1);
     for (const e of [...f.events])
       if (e.type === 'audio')
-        f.call.played(
+        await f.call.played(
           e.generation,
           e.sequence,
           Buffer.from(e.pcm, 'base64').length / 2,
@@ -344,7 +354,7 @@ it('plays saved text spans before the answer completes and never repeats the fin
     f.call.finishText(turn.messageId);
     for (const e of [...f.events])
       if (e.type === 'audio')
-        f.call.played(
+        await f.call.played(
           e.generation,
           e.sequence,
           Buffer.from(e.pcm, 'base64').length / 2,
@@ -367,20 +377,20 @@ it('discards unplayed spans and late commits when inference fails or the caller 
   await f.call.start();
   try {
     const turn = await utterance(f);
-    f.call.commitText(turn.messageId, 'a', 0, 'Saved sentence.');
+    await f.call.commitText(turn.messageId, 'a', 0, 'Saved sentence.');
     await vi.waitFor(() =>
       expect(f.events.some((e) => e.type === 'audio')).toBe(true),
     );
-    f.call.commitText(turn.messageId, 'a', 1, 'Queued sentence.');
+    await f.call.commitText(turn.messageId, 'a', 1, 'Queued sentence.');
     f.call.finishText(turn.messageId, true);
     await vi.waitFor(() =>
       expect(f.events.some((e) => e.type === 'notice')).toBe(true),
     );
-    f.call.commitText(turn.messageId, 'a', 2, 'Late sentence.');
+    await f.call.commitText(turn.messageId, 'a', 2, 'Late sentence.');
     expect(f.synthesis.synthesize).toHaveBeenCalledTimes(1);
     expect(f.call.ended).toBe(false);
     await f.call.interrupt();
-    f.call.commitText(turn.messageId, 'a', 3, 'Stale sentence.');
+    await f.call.commitText(turn.messageId, 'a', 3, 'Stale sentence.');
     expect(f.synthesis.synthesize).toHaveBeenCalledTimes(1);
   } finally {
     await f.call.end();
@@ -395,7 +405,7 @@ it('records a turn that starts with speaker mute without claiming playback compl
     await f.call.start();
     await f.call.speaker(true);
     const turn = await utterance(f);
-    f.call.commitText(turn.messageId, 'a', 0, 'Saved but muted.');
+    await f.call.commitText(turn.messageId, 'a', 0, 'Saved but muted.');
     f.call.finishText(turn.messageId);
     const rows = logs.mock.calls
       .filter(([name]) => name === '[voice-timing]')
@@ -429,7 +439,7 @@ it('warms interrupted synthesis before the next answer and reuses that warmup ac
   try {
     await f.call.start();
     const first = await utterance(f);
-    f.call.commitText(first.messageId, 'first', 0, 'First response.');
+    await f.call.commitText(first.messageId, 'first', 0, 'First response.');
     await vi.waitFor(() =>
       expect(f.events.filter((e) => e.type === 'audio')).toHaveLength(1),
     );
@@ -439,12 +449,17 @@ it('warms interrupted synthesis before the next answer and reuses that warmup ac
     await f.call.speaker(false);
     // Transcription and agent dispatch proceed while the replacement is still warming.
     const second = await utterance(f);
-    f.call.commitText(second.messageId, 'second', 0, 'Now stale response.');
+    await f.call.commitText(
+      second.messageId,
+      'second',
+      0,
+      'Now stale response.',
+    );
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(replacement.synthesize).not.toHaveBeenCalled();
     await f.call.interrupt();
     const third = await utterance(f);
-    f.call.commitText(third.messageId, 'third', 0, 'Current response.');
+    await f.call.commitText(third.messageId, 'third', 0, 'Current response.');
     expect(replacement.warm).toHaveBeenCalledOnce();
     expect(replacement.close).not.toHaveBeenCalled();
     warming.resolve();
@@ -485,7 +500,7 @@ it('has the replacement ready before the next provider answer and records no rem
   try {
     await f.call.start();
     const first = await utterance(f);
-    f.call.commitText(first.messageId, 'first', 0, 'Initial response.');
+    await f.call.commitText(first.messageId, 'first', 0, 'Initial response.');
     await vi.waitFor(() =>
       expect(f.events.some((e) => e.type === 'audio')).toBe(true),
     );
@@ -495,7 +510,7 @@ it('has the replacement ready before the next provider answer and records no rem
     await vi.waitFor(() =>
       expect(trace().some((row) => row.stage === 'synthesis_ready')).toBe(true),
     );
-    f.call.commitText(next.messageId, 'next', 0, 'Next response.');
+    await f.call.commitText(next.messageId, 'next', 0, 'Next response.');
     await vi.waitFor(() =>
       expect(replacement.synthesize).toHaveBeenCalledOnce(),
     );
@@ -540,7 +555,7 @@ it.each(['closing', 'warming'] as const)(
     try {
       await f.call.start();
       const turn = await utterance(f);
-      f.call.commitText(turn.messageId, 'a', 0, 'Initial response.');
+      await f.call.commitText(turn.messageId, 'a', 0, 'Initial response.');
       await vi.waitFor(() =>
         expect(f.events.some((e) => e.type === 'audio')).toBe(true),
       );
@@ -586,7 +601,7 @@ it('handles early synthesis warmup failure once and closes the call without leak
   try {
     await f.call.start();
     const turn = await utterance(f);
-    f.call.commitText(turn.messageId, 'a', 0, 'First response.');
+    await f.call.commitText(turn.messageId, 'a', 0, 'First response.');
     await vi.waitFor(() =>
       expect(f.events.some((e) => e.type === 'audio')).toBe(true),
     );
@@ -615,15 +630,16 @@ it('bounds committed speech, keeps code out of audio, and honors speaker mute', 
   try {
     const turn = await utterance(f);
     await f.call.speaker(true);
-    f.call.commitText(turn.messageId, 'a', 0, 'Muted sentence.');
+    await f.call.commitText(turn.messageId, 'a', 0, 'Muted sentence.');
     expect(f.synthesis.synthesize).not.toHaveBeenCalled();
     await f.call.speaker(false);
-    f.call.commitText('other-user', 'a', 1, 'Wrong turn.');
-    expect(() =>
-      f.call.commitText(turn.messageId, 'a', 2, 'Skipped sequence.'),
-    ).toThrow();
-    f.call.commitText(turn.messageId, 'a', 1, '```javascript');
-    f.call.commitText(turn.messageId, 'a', 2, 'private code');
+    await f.call.commitText('other-user', 'a', 1, 'Wrong turn.');
+    await expect(
+      (async () =>
+        await f.call.commitText(turn.messageId, 'a', 2, 'Skipped sequence.'))(),
+    ).rejects.toThrow();
+    await f.call.commitText(turn.messageId, 'a', 1, '```javascript');
+    await f.call.commitText(turn.messageId, 'a', 2, 'private code');
     f.call.finishText(turn.messageId);
     expect(f.synthesis.synthesize).not.toHaveBeenCalled();
   } finally {
@@ -991,14 +1007,14 @@ describe('local call supervision', () => {
       );
       const audio = f.events.filter((event) => event.type === 'audio');
       expect(audio).toHaveLength(2);
-      f.call.played(audio[0].generation, audio[0].sequence, 960);
+      await f.call.played(audio[0].generation, audio[0].sequence, 960);
 
       f.speech(1);
       for (let i = 0; i < 3; i++) await f.frame();
       await vi.waitFor(() =>
         expect(f.synthesis.close).toHaveBeenCalledTimes(1),
       );
-      f.call.played(audio[1].generation, audio[1].sequence, 960);
+      await f.call.played(audio[1].generation, audio[1].sequence, 960);
       expect(f.events.filter((event) => event.type === 'audio')).toHaveLength(
         2,
       );

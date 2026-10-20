@@ -85,7 +85,9 @@ export async function memoryRepositories(
       await pg.end();
       workspace.close();
       store.close();
-      await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
+      // Pool.end() can resolve before PostgreSQL observes the final socket close.
+      // Normal DROP waits for those exits instead of killing a client still closing.
+      await admin.query(`DROP DATABASE "${name}"`);
       await admin.end();
       await rm(root, { recursive: true, force: true });
     },

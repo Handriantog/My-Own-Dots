@@ -36,7 +36,7 @@ it('records generic scheduled runs without research wording', async () => {
     ]);
     expect(execute).toHaveBeenCalledOnce();
   } finally {
-    runner.stop();
+    await runner.stop();
     store.close();
   }
 });
@@ -64,7 +64,7 @@ it('aborts research when permissions are revoked outside the runner instance', a
   expect(requestSignal?.aborted).toBe(true);
   expect(request).toHaveBeenCalledOnce();
   expect(store.tasks()[0].status).toBe('interrupted');
-  runner.stop();
+  await runner.stop();
   store.close();
 });
 it('checks abort again before sending source evidence or memories to the model', async () => {
@@ -106,7 +106,7 @@ it('omits stored memories from research when memory permission is disabled', asy
       'Fictional sample brief ready.',
     );
   } finally {
-    runner.stop();
+    await runner.stop();
     store.close();
   }
 });
@@ -127,7 +127,7 @@ it('holds active work for review on graceful shutdown', async () => {
   store.createTask('Read https://example.com');
   const pending = runner.tick();
   await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
-  runner.stop();
+  await runner.stop();
   await pending;
   expect(store.tasks()[0].status).toBe('interrupted');
   expect(store.claim()).toBeNull();
@@ -228,7 +228,7 @@ it('defers scheduled claims through snapshot cleanup and cancels queued work on 
     await new Promise((resolve) => setImmediate(resolve));
     expect(called).toBe(false);
     expect(store.detail(task.id)?.runs).toHaveLength(0);
-    runner.stop();
+    await runner.stop();
   } finally {
     lease.release();
   }

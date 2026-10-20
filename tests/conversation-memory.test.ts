@@ -157,7 +157,7 @@ it('waits for durable page provenance before returning tool content', async () =
     release = resolve;
   });
   const tools = pageTools(
-    pageAccess(workspace, dot.spaceId, 'thread', () => {}),
+    await pageAccess(workspace, dot.spaceId, 'thread', () => {}),
     async (guard) => {
       await gate;
       recorded.push(guard);

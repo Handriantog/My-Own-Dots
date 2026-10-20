@@ -72,7 +72,7 @@ it('binds voice history and compute to the existing thread, deduplicates tools a
   const body = f.transport.mock.calls[0][1]?.body;
   expect(body).toBeInstanceOf(FormData);
   expect(String((body as FormData).get('session'))).toContain('Earlier topic');
-  f.voice.activate(call.id);
+  await f.voice.activate(call.id);
   await Promise.all([
     f.voice.compute(call.id, 'tool-1', 'Research'),
     f.voice.compute(call.id, 'tool-1', 'Research'),
@@ -258,7 +258,7 @@ it('allows a rejected compute call to be retried with the same tool ID', async (
     offer,
     new AbortController().signal,
   );
-  f.voice.activate(call.id);
+  await f.voice.activate(call.id);
   f.turn.mockRejectedValueOnce(new Error('Provider unavailable'));
   await expect(f.voice.compute(call.id, 'retry', 'Research')).rejects.toThrow(
     'Provider unavailable',
@@ -276,7 +276,7 @@ it('counts failed compute attempts toward the six-turn limit', async () => {
     offer,
     new AbortController().signal,
   );
-  f.voice.activate(call.id);
+  await f.voice.activate(call.id);
   for (let i = 0; i < 6; i++) {
     f.turn.mockRejectedValueOnce(new Error('Provider unavailable'));
     await expect(
@@ -296,7 +296,7 @@ it('counts a retry of the same tool ID as another attempt', async () => {
     offer,
     new AbortController().signal,
   );
-  f.voice.activate(call.id);
+  await f.voice.activate(call.id);
   for (let i = 0; i < 6; i++) {
     f.turn.mockRejectedValueOnce(new Error('Provider unavailable'));
     await expect(f.voice.compute(call.id, 'same', 'Research')).rejects.toThrow(
@@ -316,7 +316,7 @@ it('keeps successful compute turns cached and enforces the six-turn cap', async 
     offer,
     new AbortController().signal,
   );
-  f.voice.activate(call.id);
+  await f.voice.activate(call.id);
   for (let i = 0; i < 6; i++) {
     await expect(f.voice.compute(call.id, String(i), 'Research')).resolves.toBe(
       'Current answer',

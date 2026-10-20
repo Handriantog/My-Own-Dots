@@ -25,7 +25,7 @@ async function fixture(ownerToken?: string) {
     workspace.close();
   });
   const config = { mode: 'live' as const, baseUrl: 'http://localhost' };
-  const platform = new Platform(store, workspace, {
+  const platform = await Platform.create(store, workspace, {
     baseUrl: config.baseUrl,
     voiceName: 'marin',
     slackUsers: [],

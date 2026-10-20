@@ -1,6 +1,7 @@
+import type { WorkspaceRepository } from './storage/runtime-repositories.js';
 import { randomUUID } from 'node:crypto';
 import { PageError } from './pages.js';
-import type { WorkspaceStore } from './workspace.js';
+
 import type { MaintenanceGate } from './storage/maintenance.js';
 export interface PageIntelligence {
   getOrCreateThread(input: {
@@ -38,10 +39,10 @@ async function bounded<T>(operation: Promise<T>): Promise<T> {
 export class PageService {
   private pending = new Map<
     string,
-    Promise<ReturnType<WorkspaceStore['requireThread']>>
+    Promise<ReturnType<WorkspaceRepository['requireThread']>>
   >();
   constructor(
-    private workspace: WorkspaceStore,
+    private workspace: WorkspaceRepository,
     private intelligence: () => PageIntelligence,
     private maintenance?: MaintenanceGate,
   ) {}
@@ -53,9 +54,9 @@ export class PageService {
       : work();
   }
   async conversation(spaceId: string, pageId: string, dotId: string) {
-    const page = this.workspace.pages.get(spaceId, pageId);
-    const dot = this.workspace.dot(dotId);
-    if (!dot || !this.workspace.canAccessSpace(dotId, spaceId))
+    const page = await this.workspace.pages.get(spaceId, pageId);
+    const dot = await this.workspace.dot(dotId);
+    if (!dot || !(await this.workspace.canAccessSpace(dotId, spaceId)))
       throw new PageError(
         'Choose a specialist in this Space with access enabled.',
         400,
@@ -63,18 +64,21 @@ export class PageService {
     const key = `${pageId}:${dotId}`;
     const pending = this.pending.get(key);
     if (pending) return pending;
-    const current = this.workspace.pages.thread(pageId, dotId);
-    if (current?.ready)
-      return this.workspace.requireThread(current.threadId, dotId);
-    const sdk = this.intelligence();
     const task = (async () => {
+      const current = await this.workspace.pages.thread(pageId, dotId);
+      if (current?.ready)
+        return this.workspace.requireThread(current.threadId, dotId);
+      const sdk = this.intelligence();
       const candidateId = randomUUID();
-      if (!this.workspace.pages.reserveThread(pageId, dotId, candidateId))
+      if (
+        !(await this.workspace.pages.reserveThread(pageId, dotId, candidateId))
+      )
         throw new PageError(
           'This page conversation is being created. Retry shortly.',
           409,
         );
-      const threadId = this.workspace.pages.thread(pageId, dotId)!.threadId;
+      const threadId = (await this.workspace.pages.thread(pageId, dotId))!
+        .threadId;
       try {
         await bounded(
           this.operation(() =>
@@ -86,15 +90,16 @@ export class PageService {
             }),
           ),
         );
-        if (!this.workspace.canAccessSpace(dotId, spaceId))
+        if (!(await this.workspace.canAccessSpace(dotId, spaceId)))
           throw new PageError('Space access has been revoked.');
         const thread =
-          this.workspace.conversations().find((t) => t.id === threadId) ??
-          this.workspace.bindThread(threadId, dotId, page.title);
-        this.workspace.pages.finishThread(pageId, dotId);
+          (await this.workspace.conversations()).find(
+            (t) => t.id === threadId,
+          ) ?? (await this.workspace.bindThread(threadId, dotId, page.title));
+        await this.workspace.pages.finishThread(pageId, dotId);
         return thread;
       } catch (error) {
-        this.workspace.pages.releaseThread(pageId, dotId);
+        await this.workspace.pages.releaseThread(pageId, dotId);
         throw error;
       }
     })();
@@ -110,8 +115,8 @@ export class PageService {
     title: string,
     parentId: string | null,
   ) {
-    const thread = this.workspace.requireThread(threadId);
-    const dot = this.workspace.dot(thread.dotId)!;
+    const thread = await this.workspace.requireThread(threadId);
+    const dot = (await this.workspace.dot(thread.dotId))!;
     const history = await bounded(
       this.operation(() =>
         this.intelligence().getThreadMessages({
@@ -148,10 +153,10 @@ export class PageService {
         'This conversation exceeds the 100,000 character page limit. Save a shorter conversation.',
       );
     const destination =
-      this.workspace.pages.forThread(threadId)?.spaceId ?? dot.spaceId;
-    if (!this.workspace.canAccessSpace(dot.id, destination))
+      (await this.workspace.pages.forThread(threadId))?.spaceId ?? dot.spaceId;
+    if (!(await this.workspace.canAccessSpace(dot.id, destination)))
       throw new PageError('Space access has been revoked.', 400);
-    return this.workspace.pages.create(
+    return await this.workspace.pages.create(
       destination,
       { title, content, parentId },
       threadId,

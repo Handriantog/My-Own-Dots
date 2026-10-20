@@ -4,15 +4,15 @@ import type { ConnectionService } from './connections.js';
 // Connected MCP tools for one Dot. Tools that need approval never execute
 // here: the model is told to request owner approval, and only the owner's
 // approval route runs them.
-export function connectionTools(
+export async function connectionTools(
   connections: ConnectionService,
   dotId: string,
   threadId: string,
-  check: () => void,
+  check: () => void | Promise<void>,
   signal: AbortSignal,
   approvals: boolean,
 ) {
-  return connections.tools(dotId).map((exposed) =>
+  return (await connections.tools(dotId)).map((exposed) =>
     toolDefinition({
       name: exposed.name,
       description:
@@ -22,15 +22,15 @@ export function connectionTools(
         ),
       inputSchema: exposed.tool.inputSchema,
     }).server(async (args) => {
-      check();
+      await check();
       // Re-resolve so a tool the owner just disabled or gated is honored.
-      const current = connections.resolve(dotId, exposed.name);
+      const current = await connections.resolve(dotId, exposed.name);
       const input = (args ?? {}) as Record<string, unknown>;
       if (current.tool.requiresApproval)
         return approvals
           ? {
               status: 'approval_required',
-              approvalId: connections.store.createApproval({
+              approvalId: await connections.store.createApproval({
                 threadId,
                 dotId,
                 connectionId: current.connection.id,
@@ -45,7 +45,7 @@ export function connectionTools(
                 'This action needs owner approval in the OpenDots web app. Ask the owner to continue there.',
             };
       const result = await connections.call(current, input, signal);
-      check();
+      await check();
       return result;
     }),
   );

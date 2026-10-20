@@ -13,6 +13,7 @@ const MAX_TIMER_DELAY_MS = 2_147_483_647;
 export interface LocalAiConfig {
   conversationBackend?: 'local' | 'intelligence';
   localDatabaseUrl?: string;
+  storageEngine?: 'legacy-postgres' | 'sqlite';
   llmBackend?: 'subscription' | 'openai';
   llmProvider?: string;
   subscriptionModel?: string;
@@ -129,7 +130,9 @@ export function setupStatus(
 ): SetupStatus {
   const missing = [
     config.conversationBackend === 'local'
-      ? !config.localDatabaseUrl && 'LOCAL_DATABASE_URL'
+      ? config.storageEngine !== 'sqlite' &&
+        !config.localDatabaseUrl &&
+        'LOCAL_DATABASE_URL'
       : !config.intelligenceKey && INTELLIGENCE_KEY_MISSING_LABEL,
     config.llmBackend !== 'subscription' && !config.apiKey && 'OPENAI_API_KEY',
     config.llmBackend !== 'subscription' && !config.model && 'OPENAI_MODEL',
@@ -155,7 +158,7 @@ export function setupStatus(
         : undefined,
     intelligence:
       config.conversationBackend === 'local'
-        ? !!config.localDatabaseUrl
+        ? config.storageEngine === 'sqlite' || !!config.localDatabaseUrl
         : !!config.intelligenceKey,
     model: modelConfigured(config),
     browser: !!(config.browserUrl && config.browserSecret),

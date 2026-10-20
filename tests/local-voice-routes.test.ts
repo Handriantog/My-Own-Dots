@@ -307,7 +307,9 @@ describe('local voice HTTP security boundaries', () => {
     ).toBe(400);
     expect(f.detect).toHaveBeenCalledTimes(1);
     expect(f.release).toHaveBeenCalledTimes(1);
-    expect(() => f.service.require(handle.id, handle.token)).toThrow();
+    await expect(
+      (async () => await f.service.require(handle.id, handle.token))(),
+    ).rejects.toThrow();
   });
   it('bounds call payloads and rejects noncanonical PCM before inference', async () => {
     const f = await fixture();
@@ -363,7 +365,7 @@ describe('local voice HTTP security boundaries', () => {
         reaped = resolve;
       }),
     );
-    const ended = f.service.require(handle.id, handle.token).end();
+    const ended = (await f.service.require(handle.id, handle.token)).end();
     const starting = f.service.start(
       threadId,
       'dot',
@@ -376,7 +378,9 @@ describe('local voice HTTP security boundaries', () => {
     await ended;
     await starting;
     expect(LocalSpeechWorker.prototype.warm).toHaveBeenCalledTimes(6);
-    expect(() => f.service.require(handle.id, handle.token)).toThrow();
+    await expect(
+      (async () => await f.service.require(handle.id, handle.token))(),
+    ).rejects.toThrow();
   });
   it('accepts authenticated duplicate ends but rejects other expired-call controls', async () => {
     const f = await fixture();
@@ -446,13 +450,15 @@ describe('local voice HTTP security boundaries', () => {
       await reader.cancel();
     }
     await vi.waitFor(() => expect(f.release).toHaveBeenCalledTimes(1));
-    expect(() => f.service.require(handle.id, handle.token)).toThrow();
+    await expect(
+      (async () => await f.service.require(handle.id, handle.token))(),
+    ).rejects.toThrow();
   });
   it('aborts a stalled SSE writer after a grace period without blocking End', async () => {
     const f = await fixture();
     vi.useFakeTimers();
     const handle = await f.start();
-    const call = f.service.require(handle.id, handle.token);
+    const call = await f.service.require(handle.id, handle.token);
     const headers = { 'x-dot-voice-token': handle.token };
     const response = await f.request(
       `calls/${handle.id}/events`,
@@ -488,7 +494,7 @@ describe('local voice HTTP security boundaries', () => {
     const f = await fixture();
     vi.useFakeTimers();
     const handle = await f.start();
-    const call = f.service.require(handle.id, handle.token);
+    const call = await f.service.require(handle.id, handle.token);
     const headers = { 'x-dot-voice-token': handle.token };
     const request = new Request(
       `${origin}/api/local-voice/calls/${handle.id}/events`,
@@ -528,7 +534,7 @@ it('refuses manual snapshots until local voice workers and final receipts settle
     finish = resolve;
   });
   f.close.mockReturnValue(pending);
-  const ending = f.service.require(handle.id, handle.token).end();
+  const ending = (await f.service.require(handle.id, handle.token)).end();
   let captured = false;
   const snapshot = gate
     .acquire({ origin: 'automatic', signal: new AbortController().signal })

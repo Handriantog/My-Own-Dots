@@ -125,7 +125,7 @@ describe('durable task lifecycle', () => {
       false,
     );
   });
-  it('holds an expired run for review after a local page effect', () => {
+  it('holds an expired run for review after a local page effect', async () => {
     const { store, path } = fixture();
     const workspace = new WorkspaceStore(path, 'synthetic-owner');
     try {
@@ -139,8 +139,16 @@ describe('durable task lifecycle', () => {
       workspace.bindTask(task.id, thread.id);
       const now = Date.now();
       const old = store.claim(now)!;
-      const pages = pageAccess(workspace, dot.spaceId, thread.id, () => {});
-      pages.create({ title: 'Sample', content: 'Synthetic fixture body' });
+      const pages = await pageAccess(
+        workspace,
+        dot.spaceId,
+        thread.id,
+        () => {},
+      );
+      await pages.create({
+        title: 'Sample',
+        content: 'Synthetic fixture body',
+      });
 
       expect(store.claim(now + 180_001)).toBeNull();
       expect(store.task(task.id)?.status).toBe('interrupted');

@@ -1,3 +1,4 @@
+import type { MemoryJobs } from '../src/server/memory-jobs.js';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -88,7 +89,7 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       await lease.release();
       const job = await service.requestDream(dot.id, ['t']);
       const acknowledge = vi
-        .spyOn(service.jobs, 'acknowledge')
+        .spyOn(service.jobs as MemoryJobs, 'acknowledge')
         .mockRejectedValue(
           new Error('Injected process failure after SQLite commit'),
         );

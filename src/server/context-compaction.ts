@@ -1,11 +1,9 @@
+import type { EvidenceRepository } from './storage/runtime-repositories.js';
 import type { InferencePriority } from './inference-scheduler.js';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { Message } from '@ag-ui/core';
-import {
-  evidenceHash,
-  type ConversationMemory,
-} from './conversation-memory.js';
+import { evidenceHash } from './conversation-memory.js';
 import type { MemoryInference } from './memory-inference.js';
 import { estimateTokens } from './context-budget.js';
 import type { SubscriptionPayload } from './subscription-prompt.js';
@@ -55,7 +53,7 @@ function safeBoundary(messages: Message[], candidate: number): number {
 }
 export class ContextCompaction {
   constructor(
-    readonly repository: ConversationMemory,
+    readonly repository: EvidenceRepository,
     readonly inference: MemoryInference,
     private publish?: (
       checkpoint: ContextCheckpoint,
@@ -68,14 +66,17 @@ export class ContextCompaction {
     messages: Message[],
   ): Promise<string> {
     const visible = await this.repository.modelMessages(threadId, messages);
-    return this.permissionFingerprint(dotId, visible);
+    return await this.permissionFingerprint(dotId, visible);
   }
-  private permissionFingerprint(dotId: string, visible: Message[]): string {
-    const dot = this.repository.workspace.dot(dotId);
+  private async permissionFingerprint(
+    dotId: string,
+    visible: Message[],
+  ): Promise<string> {
+    const dot = await this.repository.workspace.dot(dotId);
     return evidenceHash([
       dot?.spaceIds,
       dot?.memoryAllowed,
-      this.repository.memoryEnabled(),
+      await this.repository.memoryEnabled(),
       visible,
     ]);
   }
@@ -85,9 +86,9 @@ export class ContextCompaction {
     priority: InferencePriority = 'compact',
   ): Promise<'updated' | 'no_change' | 'stale'> {
     signal.throwIfAborted();
-    const binding = this.repository.workspace.requireThread(threadId);
+    const binding = await this.repository.workspace.requireThread(threadId);
     const suppressionGeneration =
-      this.repository.workspace.memory.suppressionGeneration();
+      await this.repository.workspace.memory.suppressionGeneration();
     const messages = await this.repository.threadMessages(threadId);
     const visibleMessages = await this.repository.modelMessages(
       threadId,
@@ -177,7 +178,7 @@ export class ContextCompaction {
         permissionGeneration !==
           (await this.permissions(binding.dotId, threadId, sourcePrefix)) ||
         suppressionGeneration !==
-          this.repository.workspace.memory.suppressionGeneration()
+          (await this.repository.workspace.memory.suppressionGeneration())
       )
         return 'stale';
       if (
@@ -226,12 +227,12 @@ export class ContextCompaction {
     if (
       !checkpoint ||
       checkpoint.permissionGeneration !==
-        this.permissionFingerprint(
+        (await this.permissionFingerprint(
           frame.dotId,
           visible.slice(0, checkpoint.sourceMessageIds.length),
-        ) ||
+        )) ||
       checkpoint.suppressionGeneration !==
-        this.repository.workspace.memory.suppressionGeneration()
+        (await this.repository.workspace.memory.suppressionGeneration())
     )
       return payload;
     const prefix = frame.canonicalMessages.slice(

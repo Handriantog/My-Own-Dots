@@ -6,7 +6,7 @@ import { Runner } from '../src/server/runner.js';
 import { createApp } from '../src/server/app.js';
 const cleanup: (() => void)[] = [];
 afterEach(() => cleanup.splice(0).forEach((fn) => fn()));
-function fixture(ownerToken?: string) {
+async function fixture(ownerToken?: string) {
   const store = new Store(':memory:');
   const ws = new WorkspaceStore(':memory:', 'owner');
   cleanup.push(() => {
@@ -14,7 +14,7 @@ function fixture(ownerToken?: string) {
     ws.close();
   });
   const config = { mode: 'live' as const, baseUrl: 'https://example.com' };
-  const platform = new Platform(store, ws, {
+  const platform = await Platform.create(store, ws, {
     baseUrl: config.baseUrl,
     voiceName: 'marin',
     slackUsers: [],
@@ -39,7 +39,7 @@ const request = (body: unknown, method = 'POST') => ({
 });
 
 it('saves Learning settings through the owner API and rejects malformed container IDs', async () => {
-  const { ws, app } = fixture();
+  const { ws, app } = await fixture();
   const dot = ws.dots()[0];
   const body = {
     name: dot.name,
@@ -81,7 +81,7 @@ it('saves Learning settings through the owner API and rejects malformed containe
     learningContainerId: 'research',
     skillDeliveryEnabled: true,
   });
-  const privateApp = fixture('owner-secret');
+  const privateApp = await fixture('owner-secret');
   expect(
     (
       await privateApp.app.request(
@@ -92,7 +92,7 @@ it('saves Learning settings through the owner API and rejects malformed containe
   ).toBe(401);
 });
 it('supports manual pages without credentials and returns validation, scope and conflict statuses', async () => {
-  const { ws, app } = fixture();
+  const { ws, app } = await fixture();
   const space = ws.spaces()[0].id;
   const path = `/api/spaces/${space}/pages`;
   expect((await app.request(path, request({ title: '' }))).status).toBe(400);
@@ -136,7 +136,7 @@ it('supports manual pages without credentials and returns validation, scope and 
   ).toBe(400);
 });
 it('keeps page routes behind owner authentication and browser origin checks', async () => {
-  const { ws, app } = fixture('owner-secret');
+  const { ws, app } = await fixture('owner-secret');
   const path = `/api/spaces/${ws.spaces()[0].id}/pages`;
   expect((await app.request(path)).status).toBe(401);
   expect(
@@ -161,7 +161,7 @@ it('keeps page routes behind owner authentication and browser origin checks', as
 });
 
 it('saves reviewed drafts once and rechecks the Dot’s Space access', async () => {
-  const { ws, app } = fixture();
+  const { ws, app } = await fixture();
   const dot = ws.dots()[0];
   ws.bindThread('review-thread', dot.id, 'Review');
   const draft = {
@@ -231,7 +231,7 @@ it('saves reviewed drafts once and rechecks the Dot’s Space access', async () 
 });
 
 it('restores review receipts through the owner API with current thread and Space authorization', async () => {
-  const { ws, app } = fixture('owner-secret');
+  const { ws, app } = await fixture('owner-secret');
   const dot = ws.dots()[0];
   ws.bindThread('review-restore', dot.id, 'Review');
   const base = '/api/conversations/review-restore/reviewed-page';
@@ -271,7 +271,7 @@ it('restores review receipts through the owner API with current thread and Space
 });
 
 it('answers malformed JSON and invalid Space access with 400 on workspace routes', async () => {
-  const { ws, app } = fixture();
+  const { ws, app } = await fixture();
   const dot = ws.dots()[0];
   for (const path of ['/api/spaces', '/api/dots', '/api/conversations']) {
     const response = await app.request(path, {
@@ -306,7 +306,7 @@ it('answers malformed JSON and invalid Space access with 400 on workspace routes
 });
 
 it('keeps upstream JSON parsing failures on workspace routes as 503', async () => {
-  const { ws, app } = fixture();
+  const { ws, app } = await fixture();
   vi.spyOn(ws, 'createSpace').mockImplementation(() => {
     throw new SyntaxError('Unexpected token in upstream response');
   });
@@ -318,7 +318,7 @@ it('keeps upstream JSON parsing failures on workspace routes as 503', async () =
 });
 
 it('deletes pages through the API and returns 404 for missing pages or spaces', async () => {
-  const { ws, app } = fixture();
+  const { ws, app } = await fixture();
   const space = ws.spaces()[0].id;
   const page = ws.pages.create(space, { title: 'To Delete' });
   const path = `/api/spaces/${space}/pages/${page.id}`;
@@ -343,7 +343,7 @@ it('deletes pages through the API and returns 404 for missing pages or spaces', 
 });
 
 it('reports a deleted reviewed page instead of failing or recreating it', async () => {
-  const { ws, app } = fixture();
+  const { ws, app } = await fixture();
   const dot = ws.dots()[0];
   ws.bindThread('review-deleted', dot.id, 'Review');
   const base = '/api/conversations/review-deleted/reviewed-page';
@@ -388,7 +388,7 @@ it.each([
 ])(
   'returns 404 for an unknown conversation on %s %s',
   async (method, suffix) => {
-    const { ws, app } = fixture();
+    const { ws, app } = await fixture();
     const body =
       suffix === '/reviewed-page'
         ? {
@@ -415,7 +415,7 @@ it.each([
 ])(
   'keeps real Intelligence failures as 503 without exposing details: %s',
   async (error) => {
-    const { ws, app, platform } = fixture();
+    const { ws, app, platform } = await fixture();
     ws.bindThread('valid-thread', ws.dots()[0].id, 'Conversation');
     vi.spyOn(platform.pages, 'saveConversation').mockRejectedValueOnce(error);
     const response = await app.request(
@@ -431,7 +431,7 @@ it.each([
 );
 
 it('keeps page conversation response parsing failures as 503', async () => {
-  const { ws, app, platform } = fixture();
+  const { ws, app, platform } = await fixture();
   const dot = ws.dots()[0];
   const page = ws.pages.create(dot.spaceId, { title: 'Document' });
   vi.spyOn(platform.pages, 'conversation').mockRejectedValueOnce(
@@ -457,7 +457,7 @@ it.each([
 ])(
   'rejects malformed request JSON before any page operation on %s %s',
   async (method, path) => {
-    const { app, platform, ws } = fixture();
+    const { app, platform, ws } = await fixture();
     const conversation = vi.spyOn(platform.pages, 'conversation');
     const save = vi.spyOn(platform.pages, 'saveConversation');
     const create = vi.spyOn(ws.pages, 'create');
@@ -475,7 +475,7 @@ it.each([
 );
 
 it('answers 404, not 503, for a conversation or call that does not exist', async () => {
-  const { app } = fixture();
+  const { app } = await fixture();
   for (const path of [
     '/api/conversations/missing/capture',
     '/api/voice/calls/missing',

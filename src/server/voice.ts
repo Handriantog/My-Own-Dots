@@ -26,10 +26,10 @@ export class VoiceService {
       Partial<Pick<Platform, 'maintenance'>>,
     private transport: typeof fetch = fetch,
   ) {}
-  private requireCall(id: string) {
-    const call = this.platform.workspace.call(id);
+  private async requireCall(id: string) {
+    const call = await this.platform.workspace.call(id);
     if (call.endedAt) throw new Error('This call has ended.');
-    if (this.platform.store.settings().paused)
+    if ((await this.platform.store.settings()).paused)
       throw new Error('Dot is paused.');
     return call;
   }
@@ -50,10 +50,10 @@ export class VoiceService {
   }
   private async beginCall(threadId: string, sdp: string, signal: AbortSignal) {
     this.platform.requireReady();
-    this.platform.workspace.requireThread(threadId);
+    await this.platform.workspace.requireThread(threadId);
     if (!this.platform.setup().voice)
       throw new Error('Voice setup required: VOICE_API_KEY and VOICE_MODEL.');
-    if (this.platform.store.settings().paused)
+    if ((await this.platform.store.settings()).paused)
       throw new Error('Dot is paused.');
     if (!sdp.startsWith('v=0') || !sdp.includes('m=audio'))
       throw new Error('An audio WebRTC SDP offer is required.');
@@ -62,7 +62,7 @@ export class VoiceService {
     const release = await this.platform.maintenance?.enterWrite(signal);
     let call;
     try {
-      call = this.platform.workspace.createCall(threadId);
+      call = await this.platform.workspace.createCall(threadId);
     } catch (error) {
       release?.();
       throw error;
@@ -80,9 +80,9 @@ export class VoiceService {
       release,
     });
     const timeout = AbortSignal.timeout(20_000);
-    const dot = this.platform.workspace.dot(
-      this.platform.workspace.requireThread(threadId).dotId,
-    )!;
+    const dot = (await this.platform.workspace.dot(
+      (await this.platform.workspace.requireThread(threadId)).dotId,
+    ))!;
     try {
       const combined = AbortSignal.any([signal, timeout, controller.signal]);
       const history = await new Promise<string>((resolve, reject) => {
@@ -182,8 +182,8 @@ export class VoiceService {
       throw error;
     }
   }
-  activate(id: string) {
-    const existingCall = this.requireCall(id);
+  async activate(id: string) {
+    const existingCall = await this.requireCall(id);
     if (existingCall.status === 'active') return existingCall;
     const job = this.jobs.get(id);
     if (!job) throw new Error('Call session expired.');
@@ -192,14 +192,14 @@ export class VoiceService {
       void this.expire(id, 'Call session expired after 15 minutes.');
     }, 15 * 60_000);
     job.deadline.unref();
-    return this.platform.workspace.setCall(id, 'active', '');
+    return await this.platform.workspace.setCall(id, 'active', '');
   }
   async compute(
     id: string,
     toolCallId: string,
     request: string,
   ): Promise<string> {
-    const call = this.requireCall(id);
+    const call = await this.requireCall(id);
     const job = this.jobs.get(id);
     if (!job) throw new Error('Call session expired; start a new call.');
     const existing = job.calls.get(toolCallId);
@@ -237,25 +237,25 @@ export class VoiceService {
       await this.finish(id, job, async () => {
         job.controller.abort();
         clearTimeout(job.deadline);
-        this.platform.workspace.setCall(id, 'ended', transcript);
+        await this.platform.workspace.setCall(id, 'ended', transcript);
         await this.hangup(id, job.providerId);
         await Promise.allSettled(job.calls.values());
         await this.syncReceipt(id, transcript);
       });
-      return this.platform.workspace.call(id);
+      return await this.platform.workspace.call(id);
     }
     const late = async () => {
-      const previous = this.platform.workspace.call(id);
+      const previous = await this.platform.workspace.call(id);
       if (!previous.endedAt) {
-        this.platform.workspace.setCall(id, 'ended', transcript);
+        await this.platform.workspace.setCall(id, 'ended', transcript);
         await this.syncReceipt(id, transcript);
       } else if (
         transcript &&
-        this.platform.workspace.saveLateTranscript(id, transcript)
+        (await this.platform.workspace.saveLateTranscript(id, transcript))
       ) {
         await this.syncReceipt(id, transcript);
       }
-      return this.platform.workspace.call(id);
+      return await this.platform.workspace.call(id);
     };
     return this.platform.maintenance
       ? this.platform.maintenance.runWrite(this.shutdown.signal, late)
@@ -270,9 +270,9 @@ export class VoiceService {
       }));
   }
   private async syncReceipt(id: string, transcript: string) {
-    const call = this.platform.workspace.call(id);
-    if (this.platform.store.settings().paused) {
-      this.platform.workspace.setCallError(
+    const call = await this.platform.workspace.call(id);
+    if ((await this.platform.store.settings()).paused) {
+      await this.platform.workspace.setCallError(
         id,
         'Transcript saved locally; pending Intelligence sync until workspace resumes.',
       );
@@ -286,7 +286,7 @@ export class VoiceService {
         { opendotsSource: 'voice_receipt' },
       );
     } catch {
-      this.platform.workspace.setCallError(
+      await this.platform.workspace.setCallError(
         id,
         'Call ended; its local receipt is saved, but Intelligence transcript sync failed.',
       );
@@ -300,9 +300,9 @@ export class VoiceService {
     } else await this.syncPending();
   }
   private async syncPending() {
-    for (const call of this.platform.workspace.calls())
+    for (const call of await this.platform.workspace.calls())
       if (call.error?.includes('pending Intelligence sync')) {
-        this.platform.workspace.setCallError(call.id, null);
+        await this.platform.workspace.setCallError(call.id, null);
         await this.syncReceipt(call.id, call.transcript);
       }
   }
@@ -320,7 +320,7 @@ export class VoiceService {
         },
       );
       if (!response.ok && response.status !== 404)
-        this.platform.workspace.setCallError(
+        await this.platform.workspace.setCallError(
           id,
           `The local call stopped, but provider hangup returned HTTP ${response.status}.`,
         );
@@ -332,7 +332,7 @@ export class VoiceService {
           : ['AbortError', 'TypeError', 'Error'].includes(name)
             ? `failed (${name})`
             : 'failed (transport error)';
-      this.platform.workspace.setCallError(
+      await this.platform.workspace.setCallError(
         id,
         `The local call stopped, but provider hangup ${reason}.`,
       );
@@ -344,7 +344,7 @@ export class VoiceService {
     await this.finish(id, job, async () => {
       job.controller.abort();
       clearTimeout(job.deadline);
-      this.platform.workspace.setCall(id, 'failed', '', reason);
+      await this.platform.workspace.setCall(id, 'failed', '', reason);
       await this.hangup(id, job.providerId);
       await Promise.allSettled(job.calls.values());
     });

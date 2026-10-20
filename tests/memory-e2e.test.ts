@@ -32,7 +32,7 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       slackUsers: [],
       webSearchProvider: 'disabled' as const,
     };
-    let platform = new Platform(store, ws, config);
+    let platform = await Platform.create(store, ws, config);
     const dot = ws.dots()[0];
     const make = (id: string) =>
       new ProxiedCopilotRuntimeAgent({
@@ -97,7 +97,7 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
         'superseded',
       );
       await platform.stop();
-      platform = new Platform(store, ws, config);
+      platform = await Platform.create(store, ws, config);
       await platform.start();
       const answer = (
         await chat('recall-fixture fixture')
@@ -142,7 +142,9 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
           )?.content,
         ).toContain(text);
       }
-      const preview = platform.memory!.publication.previewRestore(corrected.id);
+      const preview = await platform.memory!.publication.previewRestore(
+        corrected.id,
+      );
       platform.memory!.publication.restore(
         preview.id,
         preview.expectedRevisions,
@@ -205,7 +207,7 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
         await platform.memory!.repository.threadMessages(longThread.id),
       ).toEqual(canonical);
       await platform.stop();
-      platform = new Platform(store, ws, config);
+      platform = await Platform.create(store, ws, config);
       await platform.start();
       const resumed = make(longThread.id);
       await resumed.connectAgent();

@@ -4,7 +4,7 @@
 
 The encrypted archive codec, runtime writer coordination, legacy capture API, and staged restore service are implemented. Native desktop backup/restore controls, trusted IPC, OS-protected password integration, and a separate archive/restore worker are connected. Opt-in daily automatic backups and managed retention are connected. This is not a release-ready backup feature or a Docker-free storage migration. The approved [design](storage-portability-design.md) and [stage-one plan](storage-plan-01-backup-recovery.md) remain the acceptance criteria.
 
-Core conversations and memory evidence still use PostgreSQL. No production database, Docker volume, or selected user workspace has been migrated or restored.
+Existing/default workspaces still use PostgreSQL. The unified SQLite backend and worker integration are implemented and tested when selected explicitly by a workspace manifest; desktop migration and default activation remain pending. No production database, Docker volume, or selected user workspace has been migrated or restored.
 
 ## Implemented behavior
 
@@ -17,13 +17,21 @@ Core conversations and memory evidence still use PostgreSQL. No production datab
 - Desktop storage settings and recovery-screen controls choose paths through native dialogs and clear password inputs immediately. The worker independently reads and verifies each encrypted archive before reporting success. Startup restore reconciliation also runs in the worker.
 - OS-protected password integration rejects unavailable or insecure Linux storage. Daily backups check for changes while idle, use an OS-protected password scoped to the workspace, and retain seven daily plus four weekly recovery points. Missing destinations preserve the last success and retry later. Retention runs after verified publication and preserves unrecognized/replaced files.
 
+## Unified storage implementation through task 5
+
+- Versioned workspace identities and normal/portable location resolution preserve explicit selections and reject missing selected roots. Desktop movement and migration controls remain pending.
+- One worker owns the runtime SQLite handles. Typed async repositories serve chat, voice, pages, settings, permissions, scheduler, telemetry, recall, and Dream jobs. Existing PostgreSQL evidence remains available through the same runtime.
+- SQLite conversations persist incremental events and immutable message versions under fenced thread leases. Evidence uses bounded indexing, FTS5, suppression and access checks; Dream publication commits its receipt, memory changes and source acknowledgments together.
+- Runtime tests cover actual worker chat/page writes, delayed permission revocation, scheduled progress, telemetry, Dream publication/cancellation, and final voice receipts. A queued Dream cannot publish after shutdown cancellation. Backups wait for durable voice cleanup; the shutdown deadline includes scheduler draining.
+- Production startup constructs core databases only in the storage worker. Offline capture/recovery retain their controlled database handles. A worker failure closes the backend.
+
 ## Verification evidence
 
 Environment: macOS, Node 24.20.0, isolated worktree based on `20d3285`. PostgreSQL integration tests use only disposable `dots-storage-backup-test-9a43` on port 55439; the production PostgreSQL service on port 5434 is not used.
 
 | Check                                                             | Result                                                                                                                                                                  |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Full Vitest suite after automatic-backup integration              | 1,305 passed; one optional skipped; no failures                                                                                                                         |
+| Full Vitest suite after async runtime integration                 | 1,373 passed across 177 files; one optional skipped; no failures                                                                                                        |
 | Real PostgreSQL capture                                           | WAL, ownership, reference validation, blocked-read cancellation, config change, disk-write failure and source usability tested                                          |
 | Restore crash recovery                                            | Child process killed at staging, database creation, verified, switching and active journal boundaries; original or verified new selection retained                      |
 | Restore failure handling                                          | Missing references, unknown SQLite trigger, changed target files/database, expired preview, missing database-creation permission, and final journal disk failure tested |
@@ -57,7 +65,7 @@ Independent reviews of the foundations and runtime integration found writer wake
 
 1. Native UI and real OS credential-store checks; independent backup-stage review and regression fixes are complete.
 2. Automatic capture and restore are integration-tested, including source-disconnected recovery. Full native runtime acceptance remains pending.
-3. Unified SQLite storage/migration, Dot export/import, portable workspace placement, and matched typed/voice performance measurements.
+3. Explicit legacy migration and unified backup/restore, Dot export/import, desktop workspace placement/movement, and matched typed/voice performance measurements. Backend SQLite correctness is tested; performance/default activation remains gated.
 4. macOS, Windows and Linux package/runtime acceptance. A macOS build does not establish support on another OS.
 
 Archive publication currently uses an exclusive same-filesystem hard link to avoid overwriting an existing destination. Filesystems without hard-link support fail safely; this portability limitation must be resolved before release. Core-only coverage excludes optional computer volumes and provider/OS credentials.

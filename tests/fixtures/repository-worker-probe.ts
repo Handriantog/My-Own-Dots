@@ -4,7 +4,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { parentPort, workerData } from 'node:worker_threads';
 import { serveStorage } from '../../src/server/storage/storage-worker.js';
 const db = new DatabaseSync(workerData.database);
-serveStorage(parentPort!, db, workerData.ownerId);
+await serveStorage(parentPort!, db, workerData.ownerId);
 db.function('probe_write', () => {
   writeFileSync(workerData.database + '.started', 'started');
   const deadline = Date.now() + 3000;

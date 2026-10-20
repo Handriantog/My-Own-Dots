@@ -1,3 +1,7 @@
+import { RuntimePolicy } from './runtime-policy.js';
+import { MemoryJobs } from '../memory-jobs.js';
+import { LegacyEvidence, type StorageOptions } from './legacy-evidence.js';
+import { ContextBuilder } from '../context-builder.js';
 import { DreamPublication } from '../dream-publication.js';
 import type { PublishDreamInput } from '../memory-jobs.js';
 import { SQLiteEvidence } from './sqlite-evidence.js';
@@ -23,6 +27,9 @@ import {
 
 const asynchronous = new Set([
   'jobs.publishDream',
+  'publication.review',
+  'publication.share',
+  'context.essentials',
   'recall.search',
   'recall.read',
   'recall.readSource',
@@ -39,10 +46,11 @@ interface Queued {
   deadline: number;
 }
 /** All core handles live on this worker. No transaction spans an await or external I/O. */
-export function serveStorage(
+export async function serveStorage(
   port: MessagePort,
   db: DatabaseSync,
   ownerId: string,
+  options: StorageOptions = {},
 ) {
   db.exec(
     'PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL; PRAGMA busy_timeout=0;',
@@ -53,18 +61,41 @@ export function serveStorage(
   try {
     store = new Store(':memory:', db);
     workspace = new WorkspaceStore(':memory:', ownerId, db);
-    initializeSQLiteSchema(db);
+    if (options.engine !== 'legacy-postgres') initializeSQLiteSchema(db);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;
   }
-  const evidence = new SQLiteEvidence(
-    db,
-    ownerId,
-    workspace,
-    () => store.settings().memoryAllowed,
-  );
+  const legacy = options.engine === 'legacy-postgres';
+  const pg =
+    legacy && options.postgresUrl
+      ? new (await import('pg')).Pool({
+          connectionString: options.postgresUrl,
+          max: 2,
+          connectionTimeoutMillis: 5000,
+          query_timeout: 10000,
+        })
+      : undefined;
+  pg?.on('error', () => {});
+  const asyncMethods = new Set(asynchronous);
+  if (pg)
+    for (const group of ['evidence', 'jobs'] as const)
+      for (const name of repositoryMethods[group])
+        asyncMethods.add(`${group}.${name}`);
+  const evidence = pg
+    ? new LegacyEvidence(
+        pg,
+        ownerId,
+        workspace,
+        () => store.settings().memoryAllowed,
+      )
+    : new SQLiteEvidence(
+        db,
+        ownerId,
+        workspace,
+        () => store.settings().memoryAllowed,
+      );
   const episodes = {
     generation: () => evidence.generation(),
     coverage: (dotId?: string) => evidence.coverage(dotId),
@@ -78,11 +109,21 @@ export function serveStorage(
     new MemoryAccess(workspace, store),
   );
   const repositories = {
+    policy: new RuntimePolicy(store, workspace),
     evidence,
-    jobs: new SQLiteJobs(db, ownerId, Date.now, {
-      publication: new DreamPublication(recall),
-    }),
+    jobs: pg
+      ? new MemoryJobs(pg, ownerId, Date.now, {
+          publication: new DreamPublication(recall),
+        })
+      : new SQLiteJobs(db, ownerId, Date.now, {
+          publication: new DreamPublication(recall),
+        }),
     recall,
+    access: recall.access,
+    publication: new DreamPublication(recall),
+    context: new ContextBuilder(recall, {
+      pinnedTokenLimit: options.pinnedTokenLimit,
+    }),
     conversations: new SQLiteConversationRecords(db, ownerId),
     store,
     workspace,
@@ -152,8 +193,12 @@ export function serveStorage(
       workspace.close();
       store.close();
       db.close();
-      send({ kind: 'closed' });
-      port.close();
+      const closed = () => {
+        send({ kind: 'closed' });
+        port.close();
+      };
+      if (pg) void pg.end().then(closed, closed);
+      else closed();
       return;
     }
     const now = Date.now();
@@ -181,7 +226,7 @@ export function serveStorage(
       return;
     }
     const handler = handlers.get(request.method)!;
-    if (asynchronous.has(request.method)) {
+    if (asyncMethods.has(request.method)) {
       const args = [...request.args];
       if (
         request.method === 'folders.readFile' ||

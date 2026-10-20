@@ -42,7 +42,7 @@ afterEach(() => {
 });
 
 it('uses the conversation container for delivery and preserves tools and override restrictions', async () => {
-  const f = fixture(false);
+  const f = await fixture(false);
   const dot = f.workspace.dots()[0];
   f.workspace.updateDot(dot.id, {
     ...dot,
@@ -98,13 +98,13 @@ it('uses the conversation container for delivery and preserves tools and overrid
     expect.objectContaining({ learnedSkills: undefined, type: 'tanstack' }),
   );
 });
-function fixture(channel = true) {
+async function fixture(channel = true) {
   const store = new Store(':memory:');
   const workspace = new WorkspaceStore(':memory:', 'owner');
   databases.push(store, workspace);
   const dot = workspace.dots()[0];
   workspace.bindThread('thread', dot.id, 'Test');
-  const telemetry = new SetupTelemetry(store, {}, async () => {});
+  const telemetry = await SetupTelemetry.create(store, {}, async () => {});
   const agent = new DotAgent(
     store,
     workspace,
@@ -135,7 +135,7 @@ function fixture(channel = true) {
 it('aborts an active turn when connected-app permission is revoked', async () => {
   vi.useFakeTimers();
   try {
-    const f = fixture(false);
+    const f = await fixture(false);
     f.store.updateSettings({ appsAllowed: true });
     inner.run.mockReturnValue(new Subject<BaseEvent>());
     const subscription = f.agent.run(f.input).subscribe();
@@ -150,7 +150,7 @@ it('aborts an active turn when connected-app permission is revoked', async () =>
 });
 
 it('replaces channel RUN_ERROR payload entirely before the SDK renderer sees it', async () => {
-  const f = fixture();
+  const f = await fixture();
   inner.run.mockReturnValue(
     of({
       type: EventType.RUN_ERROR,
@@ -169,7 +169,7 @@ it('replaces channel RUN_ERROR payload entirely before the SDK renderer sees it'
   ]);
 });
 it('sanitizes observable errors and startup exceptions without retaining causes', async () => {
-  const f = fixture();
+  const f = await fixture();
   inner.run.mockReturnValue(throwError(() => new Error('SECRET transport')));
   const events = await lastValueFrom(f.agent.run(f.input).pipe(toArray()));
   expect(events[0].type).toBe(EventType.RUN_ERROR);
@@ -181,7 +181,7 @@ it('sanitizes observable errors and startup exceptions without retaining causes'
   expect(startup).toEqual(events);
 });
 it('preserves normal channel text and existing web error behavior', async () => {
-  const f = fixture();
+  const f = await fixture();
   const text = {
     type: EventType.TEXT_MESSAGE_CONTENT,
     messageId: 'msg',
@@ -191,7 +191,7 @@ it('preserves normal channel text and existing web error behavior', async () => 
   expect(await lastValueFrom(f.agent.run(f.input).pipe(toArray()))).toEqual([
     text,
   ]);
-  const web = fixture(false);
+  const web = await fixture(false);
   const error = { type: EventType.RUN_ERROR, message: 'Provider details' };
   inner.run.mockReturnValue(of(error));
   expect(await lastValueFrom(web.agent.run(web.input).pipe(toArray()))).toEqual(
@@ -214,7 +214,7 @@ it('exposes only the canonical review tool to web chat and none to Slack', async
     },
     { name: 'untrusted_tool', description: 'unexpected', parameters: {} },
   ];
-  const web = fixture(false);
+  const web = await fixture(false);
   await lastValueFrom(
     web.agent.run({ ...web.input, tools: offered }).pipe(toArray()),
   );
@@ -229,7 +229,7 @@ it('exposes only the canonical review tool to web chat and none to Slack', async
       forwardedProps: {},
     }),
   );
-  const slack = fixture(true);
+  const slack = await fixture(true);
   await lastValueFrom(
     slack.agent.run({ ...slack.input, tools: offered }).pipe(toArray()),
   );
@@ -243,7 +243,7 @@ it.each(['abort', 'timeout'])(
   async (reason) => {
     vi.useFakeTimers();
     try {
-      const f = fixture(false);
+      const f = await fixture(false);
       const capture = vi.spyOn(f.telemetry, 'capture');
       const stream = new Subject<BaseEvent>();
       inner.run.mockReturnValue(stream);
@@ -280,7 +280,7 @@ it.each(['abort', 'timeout'])(
 );
 
 it('records startup failure and activates once from an actual successful agent stream', async () => {
-  const f = fixture(false);
+  const f = await fixture(false);
   const capture = vi.spyOn(f.telemetry, 'capture');
   inner.run.mockReturnValue(
     of(

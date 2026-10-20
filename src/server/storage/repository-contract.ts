@@ -1,3 +1,8 @@
+import type { RuntimePolicy } from './runtime-policy.js';
+import type { MemoryJobRepository } from '../memory-jobs.js';
+import type { MemoryAccess } from '../memory-access.js';
+import type { DreamPublication } from '../dream-publication.js';
+import type { ContextBuilder } from '../context-builder.js';
 import type { SQLiteEvidence } from './sqlite-evidence.js';
 import type { SQLiteJobs } from './sqlite-jobs.js';
 import type { MemoryRecall } from '../memory-recall.js';
@@ -30,9 +35,25 @@ interface Repositories {
   evidence: SQLiteEvidence;
   jobs: SQLiteJobs;
   recall: MemoryRecall;
+  access: MemoryAccess;
+  publication: DreamPublication;
+  context: ContextBuilder;
+  policy: RuntimePolicy;
 }
 // Explicit names are the wire protocol. Never dispatch arbitrary paths/prototype properties.
 export const repositoryMethods = {
+  policy: [
+    'turnState',
+    'pageContext',
+    'pageSpaces',
+    'listPages',
+    'readPage',
+    'create',
+    'editPage',
+  ],
+  access: ['forDot', 'canRead', 'guardAllowed'],
+  publication: ['review', 'forget', 'share', 'previewRestore', 'restore'],
+  context: ['essentials', 'validateEssentials'],
   evidence: [
     'blockedThreads',
     'sourceThreads',
@@ -258,6 +279,7 @@ export type AsyncRepository<G extends Group> = {
   ) => Promise<Awaited<ReturnType<Method<G, N>>>>;
 };
 export type AsyncWorkspace = AsyncRepository<'workspace'> & {
+  policy: AsyncRepository<'policy'>;
   readonly ownerId: string;
   memory: AsyncRepository<'memory'> & {
     readonly ownerId: string;
@@ -272,8 +294,12 @@ export interface AsyncRepositories {
   evidence: AsyncRepository<'evidence'> & {
     indexRun(runId: string): Promise<void>;
   };
-  jobs: AsyncRepository<'jobs'>;
+  jobs: Omit<AsyncRepository<'jobs'>, 'publishDream'> &
+    Pick<MemoryJobRepository, 'publishDream'>;
   recall: AsyncRepository<'recall'>;
+  access: AsyncRepository<'access'>;
+  publication: AsyncRepository<'publication'>;
+  context: AsyncRepository<'context'>;
   store: AsyncRepository<'store'>;
   workspace: AsyncWorkspace;
 }

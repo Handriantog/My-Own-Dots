@@ -13,11 +13,12 @@ import { webSearchProvider } from './parallel.js';
 import { createShutdown } from './shutdown.js';
 import { reportChannelFailure, safeFailure } from './slack-channel.js';
 import { serve } from '@hono/node-server';
-import { Store } from './store.js';
+import { StorageClient } from './storage/storage-client.js';
+import { sqliteStorageSchema } from './storage/sqlite-schema.js';
 import { Runner } from './runner.js';
 import { createApp } from './app.js';
 import { resolveAppOrigins } from './app-origin.js';
-import { WorkspaceStore } from './workspace.js';
+
 import { Platform } from './platform.js';
 import {
   agentRunTimeoutMsFromEnv,
@@ -43,7 +44,9 @@ const manifest = await readWorkspaceManifest(
 );
 if (
   manifest &&
-  (manifest.storage !== 'legacy-postgres' || manifest.schema !== 1)
+  (manifest.storage === 'sqlite'
+    ? manifest.schema > sqliteStorageSchema
+    : manifest.schema !== 1)
 )
   throw new Error(
     'This workspace requires a compatible SQLite storage runtime',
@@ -56,11 +59,14 @@ if (
   throw new Error('Workspace manifest owner does not match its configuration');
 claimWorkspaceDatabase(database);
 const workspaceId = manifest?.id ?? workspaceIdentity(database);
-const store = new Store(database);
-const workspace = new WorkspaceStore(
+const storage = await StorageClient.open({
   database,
-  manifest?.ownerId ?? process.env.OWNER_ID ?? 'opendots-owner',
-);
+  ownerId: manifest?.ownerId ?? process.env.OWNER_ID ?? 'opendots-owner',
+  engine: manifest?.storage ?? 'legacy-postgres',
+  postgresUrl: localAi.localDatabaseUrl,
+  pinnedTokenLimit: localAi.memoryPinnedTokenLimit,
+});
+const { store, workspace } = storage.repositories;
 const config: PlatformConfig = {
   ...localAi,
   intelligenceKey: intelligenceApiKeyFromEnv(process.env),
@@ -99,10 +105,12 @@ const config: PlatformConfig = {
   runtimeUrl: `http://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/api/copilotkit`,
   ownerToken,
 };
-const platform = new Platform(store, workspace, config);
+const platform = await Platform.create(store, workspace, config, { storage });
 const configurationPath = resolve(process.env.DOTS_WORKSPACE_ENV || '.env');
 const snapshots =
-  ownerToken && config.conversationBackend === 'local'
+  ownerToken &&
+  config.conversationBackend === 'local' &&
+  storage.engine === 'legacy-postgres'
     ? new SnapshotOperations(
         new LegacySnapshotSource({
           sqlitePath: database,
@@ -138,7 +146,7 @@ const runner = new Runner(
   store,
   researchConfig,
   async (claim, _memories, signal, progress) => {
-    const threadId = workspace.taskThread(claim.id);
+    const threadId = await workspace.taskThread(claim.id);
     if (!threadId)
       throw new Error(
         'This legacy task has no conversation. Create a new scheduled task from a conversation.',
@@ -200,14 +208,18 @@ const server = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
     );
 });
 const shutdown = createShutdown({
-  stopRunner: () => {
+  stopRunner: async () => {
     platform.maintenance.close();
-    runner.stop();
+    await runner.stop();
   },
   stopPlatform: async () => {
     await snapshots?.close();
     await localVoice.close();
-    await platform.stop();
+    try {
+      await platform.stop();
+    } finally {
+      await storage.close();
+    }
   },
   closeServer: () =>
     new Promise<void>((resolve, reject) =>
@@ -219,3 +231,11 @@ const shutdown = createShutdown({
 });
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+const storageFailed = () => {
+  reportChannelFailure('Storage worker stopped; closing the backend', [
+    safeFailure(storage.signal.reason),
+  ]);
+  void shutdown();
+};
+storage.signal.addEventListener('abort', storageFailed, { once: true });
+if (storage.signal.aborted) storageFailed();

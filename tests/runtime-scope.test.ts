@@ -5,35 +5,38 @@ import {
   INTELLIGENCE_KEY_MISSING_LABEL,
   setupStatus,
 } from '../src/server/platform-config.js';
-it('blocks unbound cross-Dot run and inspector routes before contacting Intelligence', () => {
+it('blocks unbound cross-Dot run and inspector routes before contacting Intelligence', async () => {
   const store = new WorkspaceStore(':memory:', 'owner');
   const dot = store.dots()[0];
   store.bindThread('thread-a', dot.id, 'A');
-  expect(() =>
-    validateRuntimeScope(
-      new Request(`http://localhost/api/copilotkit/agent/${dot.id}/run`, {
-        method: 'POST',
-      }),
-      store,
-      { threadId: 'other-owner' },
-    ),
-  ).toThrow();
-  expect(() =>
-    validateRuntimeScope(
-      new Request('http://localhost/api/copilotkit/inspect/threads/foreign'),
-      store,
-      null,
-    ),
-  ).toThrow();
-  expect(() =>
-    validateRuntimeScope(
-      new Request(`http://localhost/api/copilotkit/agent/${dot.id}/run`, {
-        method: 'POST',
-      }),
-      store,
-      { threadId: 'thread-a' },
-    ),
-  ).not.toThrow();
+  await expect(
+    (async () =>
+      await validateRuntimeScope(
+        new Request(`http://localhost/api/copilotkit/agent/${dot.id}/run`, {
+          method: 'POST',
+        }),
+        store,
+        { threadId: 'other-owner' },
+      ))(),
+  ).rejects.toThrow();
+  await expect(
+    (async () =>
+      await validateRuntimeScope(
+        new Request('http://localhost/api/copilotkit/inspect/threads/foreign'),
+        store,
+        null,
+      ))(),
+  ).rejects.toThrow();
+  await expect(
+    (async () =>
+      await validateRuntimeScope(
+        new Request(`http://localhost/api/copilotkit/agent/${dot.id}/run`, {
+          method: 'POST',
+        }),
+        store,
+        { threadId: 'thread-a' },
+      ))(),
+  ).resolves.toBeUndefined();
   store.close();
 });
 it('reports setup honestly without a standalone agent fallback', () => {
@@ -48,7 +51,7 @@ it('reports setup honestly without a standalone agent fallback', () => {
   expect(status.slack).toBe('not_configured');
   expect(status.missing).toContain(INTELLIGENCE_KEY_MISSING_LABEL);
 });
-it('rejects stop scope bypasses and misleading prefixes while allowing canonical owned routes', () => {
+it('rejects stop scope bypasses and misleading prefixes while allowing canonical owned routes', async () => {
   const store = new WorkspaceStore(':memory:', 'owner');
   const dot = store.dots()[0];
   store.bindThread('bound', dot.id, 'Bound');
@@ -60,32 +63,35 @@ it('rejects stop scope bypasses and misleading prefixes while allowing canonical
     '/threads//bound/messages',
     '/threads/bound%2Fthreads%2Fforeign/messages',
   ]) {
-    expect(() =>
-      validateRuntimeScope(
-        new Request(`http://localhost/api/copilotkit${path}`, {
-          method: 'POST',
-        }),
-        store,
-        { threadId: 'bound' },
-      ),
-    ).toThrow();
+    await expect(
+      (async () =>
+        await validateRuntimeScope(
+          new Request(`http://localhost/api/copilotkit${path}`, {
+            method: 'POST',
+          }),
+          store,
+          { threadId: 'bound' },
+        ))(),
+    ).rejects.toThrow();
   }
-  expect(() =>
-    validateRuntimeScope(
-      new Request(
-        `http://localhost/api/copilotkit/agent/${dot.id}/stop/bound`,
-        { method: 'POST' },
-      ),
-      store,
-      {},
-    ),
-  ).not.toThrow();
-  expect(() =>
-    validateRuntimeScope(
-      new Request('http://localhost/api/copilotkit/threads/bound/messages'),
-      store,
-      null,
-    ),
-  ).not.toThrow();
+  await expect(
+    (async () =>
+      await validateRuntimeScope(
+        new Request(
+          `http://localhost/api/copilotkit/agent/${dot.id}/stop/bound`,
+          { method: 'POST' },
+        ),
+        store,
+        {},
+      ))(),
+  ).resolves.toBeUndefined();
+  await expect(
+    (async () =>
+      await validateRuntimeScope(
+        new Request('http://localhost/api/copilotkit/threads/bound/messages'),
+        store,
+        null,
+      ))(),
+  ).resolves.toBeUndefined();
   store.close();
 });

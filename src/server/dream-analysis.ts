@@ -4,7 +4,7 @@ import {
   type DreamProposal,
   type DreamChange,
 } from '../shared/memory.js';
-import type { MemoryRecall } from './memory-recall.js';
+import type { RecallRepository } from './storage/runtime-repositories.js';
 import type { MemoryInference } from './memory-inference.js';
 import type { MemoryJob } from './memory-jobs.js';
 import type { SourceRecord } from './conversation-memory.js';
@@ -81,17 +81,17 @@ export function hasWorkflowSupport(sources: SourceRecord[]): boolean {
 }
 export class DreamAnalysis {
   constructor(
-    readonly recall: MemoryRecall,
+    readonly recall: RecallRepository,
     readonly inference: MemoryInference,
   ) {}
   async analyze(job: MemoryJob, signal: AbortSignal): Promise<DreamProposal> {
-    const principal = this.recall.access.forDot(job.dotId);
+    const principal = await this.recall.access.forDot(job.dotId);
     if (job.kind !== 'dream' || job.sourceIds.length > 20)
       throw new Error('Invalid Dream evidence boundary');
     const evidence = new Map<string, SourceRecord>();
     for (const id of job.sourceIds) {
       const source = await this.recall.episodes.sourceById(id);
-      if (!source || !this.recall.access.canRead(principal, source))
+      if (!source || !(await this.recall.access.canRead(principal, source)))
         throw new Error('Dream evidence access unavailable');
       evidence.set(id, source);
     }
@@ -112,7 +112,7 @@ export class DreamAnalysis {
       calls++
     ) {
       signal.throwIfAborted();
-      this.recall.access.forDot(job.dotId);
+      await this.recall.access.forDot(job.dotId);
       const prompt = JSON.stringify({
         purpose: 'dream',
         rules:
@@ -177,13 +177,17 @@ export class DreamAnalysis {
           throw new Error('Dream proposal cites unknown evidence');
         const valid = sources as SourceRecord[];
         if (
-          valid.some(
-            (s) =>
-              !this.recall.access.canRead(
-                this.recall.access.forDot(job.dotId),
-                s,
+          (
+            await Promise.all(
+              valid.map(
+                async (s) =>
+                  !(await this.recall.access.canRead(
+                    await this.recall.access.forDot(job.dotId),
+                    s,
+                  )),
               ),
-          )
+            )
+          ).some(Boolean)
         )
           throw new Error('Dream evidence access changed');
         if (
@@ -213,11 +217,11 @@ export class DreamAnalysis {
         )
           continue;
         if ('targetId' in change) {
-          const target = this.recall.memory.get(change.targetId);
+          const target = await this.recall.memory.get(change.targetId);
           if (
             !target ||
             target.revision !== change.expectedRevision ||
-            !this.recall.access.canRead(principal, target)
+            !(await this.recall.access.canRead(principal, target))
           )
             throw new Error('Dream target revision or access changed');
         }

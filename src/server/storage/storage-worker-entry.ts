@@ -17,7 +17,7 @@ try {
   if (workerData.database !== ':memory:')
     mkdirSync(dirname(workerData.database), { recursive: true });
   database = new DatabaseSync(workerData.database);
-  serveStorage(parentPort, database, workerData.ownerId);
+  await serveStorage(parentPort, database, workerData.ownerId, workerData);
 } catch (error) {
   database?.close();
   parentPort.postMessage({ kind: 'fatal', error: storageFailure(error) });

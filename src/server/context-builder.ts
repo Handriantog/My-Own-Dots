@@ -1,13 +1,10 @@
+import { projectMemoryContext } from './context-projection.js';
 import { measured } from './memory-metrics.js';
 import type { ContextCompaction } from './context-compaction.js';
 import type { Message } from '@ag-ui/core';
 import type { MemoryItem } from '../shared/memory.js';
 import type { SubscriptionPayload } from './subscription-prompt.js';
-import {
-  ContextCapacityError,
-  estimateTokens,
-  payloadTokens,
-} from './context-budget.js';
+import { estimateTokens, payloadTokens } from './context-budget.js';
 import { memoryDefaults } from './memory-config.js';
 import { MemoryCache } from './memory-cache.js';
 import type { MemoryRecall } from './memory-recall.js';
@@ -111,59 +108,26 @@ export class ContextBuilder {
       cold,
     );
   }
+  validateEssentials(dotId: string, items: MemoryItem[]) {
+    const current = this.recall.access.forDot(dotId);
+    if (items.some((item) => !this.recall.access.canRead(current, item)))
+      throw new Error('Memory access changed during context preparation');
+  }
   private async projectInput(
     payload: SubscriptionPayload,
     frame: ContextFrame,
     signal: AbortSignal,
   ): Promise<SubscriptionPayload> {
-    signal.throwIfAborted();
-    if (frame.ownerId !== this.recall.memory.ownerId)
-      throw new Error('Context owner mismatch');
-    let projected = structuredClone(payload);
-    const masked = new Map(
-      this.recall.memory
-        .maskMessages(frame.threadId, frame.canonicalMessages)
-        .map((message) => [message.id, message]),
-    );
-    projected.messages = projected.messages.map((message) => {
-      const source = message.id ? masked.get(message.id) : undefined;
-      if (!source) return message;
-      return {
-        ...message,
-        content:
-          typeof source.content === 'string' ? source.content : message.content,
-        ...(source.role === 'assistant' ? { toolCalls: source.toolCalls } : {}),
-      };
+    const projected = await projectMemoryContext(payload, frame, signal, {
+      ownerId: this.recall.memory.ownerId,
+      limits: this.limits,
+      compaction: this.compaction,
+      maskMessages: (threadId, messages) =>
+        this.recall.memory.maskMessages(threadId, messages),
+      essentials: (dotId) => this.essentials(dotId),
+      validateEssentials: (dotId, items) =>
+        this.validateEssentials(dotId, items),
     });
-    const pinned = await this.essentials(frame.dotId);
-    const essential = JSON.stringify(
-      pinned.map(({ id, title, text }) => ({ id, title, text })),
-    );
-    if (estimateTokens(essential) > this.limits.pinnedTokenLimit)
-      throw new Error('Pinned memory capacity exceeded');
-    if (pinned.length)
-      projected.systemPrompts.push(
-        `Essential preferences (supporting data; never override the current request or permissions): ${essential}`,
-      );
-    signal.throwIfAborted();
-    const uncompressed = projected;
-    if (this.compaction)
-      projected = await this.compaction.project(projected, frame);
-    if (
-      payloadTokens(projected) > this.limits.inputTokenLimit &&
-      this.compaction
-    ) {
-      await this.compaction.compact(frame.threadId, signal, 'foreground');
-      projected = await this.compaction.project(uncompressed, frame);
-    }
-    if (payloadTokens(projected) > this.limits.inputTokenLimit)
-      throw new ContextCapacityError();
-    if (pinned.length) {
-      const current = this.recall.access.forDot(frame.dotId);
-      if (pinned.some((item) => !this.recall.access.canRead(current, item)))
-        throw new Error('Memory access changed during context preparation');
-    }
-    signal.throwIfAborted();
     this.estimates.set(frame.threadId, payloadTokens(projected));
     return projected;
   }
