@@ -44,6 +44,10 @@ function remoteError(failure: StorageFailure) {
 }
 export class StorageClient {
   readonly repositories: AsyncRepositories;
+  private readonly lifecycle = new AbortController();
+  get signal(): AbortSignal {
+    return this.lifecycle.signal;
+  }
   private pending = new Map<number, Pending>();
   private nextId = 0;
   private closing = false;
@@ -206,6 +210,7 @@ export class StorageClient {
   }
   private fail(error: Error) {
     this.closed = true;
+    this.lifecycle.abort(error);
     this.rejectReady(error);
     for (const pending of this.pending.values()) {
       pending.cleanup();

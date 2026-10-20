@@ -18,6 +18,9 @@ db.function('probe_write', () => {
 db.exec(
   'CREATE TEMP TRIGGER probe_write BEFORE INSERT ON memories BEGIN SELECT probe_write(); END;',
 );
+db.exec(
+  "CREATE TEMP TRIGGER probe_event BEFORE INSERT ON conversation_events WHEN NEW.type='TEXT_MESSAGE_CONTENT' BEGIN SELECT probe_write(); END;",
+);
 const crash = setInterval(() => {
   if (existsSync(workerData.database + '.crash')) process.exit(37);
 }, 5);

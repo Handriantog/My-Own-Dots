@@ -1,3 +1,4 @@
+import type { SQLiteConversationRecords } from './sqlite-conversation-records.js';
 import type { Store } from '../store.js';
 import type { WorkspaceStore } from '../workspace.js';
 import type { MemoryStore } from '../memory-store.js';
@@ -22,9 +23,26 @@ interface Repositories {
   computers: ComputerStore;
   connections: ConnectionStore;
   folders: FolderAccessService;
+  conversations: SQLiteConversationRecords;
 }
 // Explicit names are the wire protocol. Never dispatch arbitrary paths/prototype properties.
 export const repositoryMethods = {
+  conversations: [
+    'createThread',
+    'getOrCreateThread',
+    'listThreads',
+    'interruptedThreads',
+    'readSnapshot',
+    'getEvents',
+    'acquire',
+    'renew',
+    'release',
+    'readLeased',
+    'beginRun',
+    'addEvidenceGuard',
+    'appendEvent',
+    'finishRun',
+  ],
   store: [
     'setupTelemetryState',
     'saveSetupTelemetryState',

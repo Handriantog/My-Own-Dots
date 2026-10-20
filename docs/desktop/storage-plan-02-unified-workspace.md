@@ -63,10 +63,10 @@ New workspace resolution and manifests: `src/shared/workspace-manifest.ts`, `src
 
 **Interfaces:** `SQLiteConversations` implements the same asynchronous conversation API as `PostgresConversations`, including `ThreadLease`. Internal worker tables store owner/thread/run/message/event IDs, sequence, payload and lease generation explicitly. `initializeSQLiteSchema(db)` applies numbered transactions; event and message bodies remain canonical JSON with stable IDs. `acquireThread` returns null for an active owner and a generation-fenced lease otherwise.
 
-- [ ] Parameterize the conversation contract tests across real PostgreSQL and SQLite. Assert pending client-tool behavior, append-before-emit, two concurrent independent threads, overlapping same-thread rejection, stale lease expiry, crash interruption, terminal event uniqueness and reconstruction after restart.
-- [ ] Run SQLite cases; expect missing adapter failures.
-- [ ] Implement short fenced transactions and indexed incremental event/message rows. Append does not rewrite the full event history. Keep provider calls/replay outside the worker transaction. A stale release never removes a newer lease; late appends/finalization fail. Preserve owner scoping and client-history validation.
-- [ ] Run conversation/runner/voice persistence tests and worker queue tests; expect identical durable ordering. Commit `feat: store conversations in workspace SQLite`.
+- [x] Parameterize the conversation contract tests across real PostgreSQL and SQLite. Assert pending client-tool behavior, append-before-emit, two concurrent independent threads, overlapping same-thread rejection, stale lease expiry, crash interruption, terminal event uniqueness and reconstruction after restart.
+- [x] Run SQLite cases; expect missing adapter failures.
+- [x] Implement short fenced transactions and indexed incremental event/message rows. Append does not rewrite the full event history. Keep provider calls/replay outside the worker transaction. A stale release never removes a newer lease; late appends/finalization fail. Preserve owner scoping and client-history validation.
+- [x] Run conversation/runner/voice persistence tests and worker queue tests; expect identical durable ordering. Commit `feat: store conversations in workspace SQLite`.
 
 ## Task 4: SQLite evidence, recall and maintenance jobs
 

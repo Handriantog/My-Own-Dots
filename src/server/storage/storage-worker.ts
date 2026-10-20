@@ -1,3 +1,5 @@
+import { initializeSQLiteSchema } from './sqlite-schema.js';
+import { SQLiteConversationRecords } from './sqlite-conversation-records.js';
 import { DatabaseSync } from 'node:sqlite';
 import { type MessagePort } from 'node:worker_threads';
 import { serialize } from 'node:v8';
@@ -41,12 +43,14 @@ export function serveStorage(
   try {
     store = new Store(':memory:', db);
     workspace = new WorkspaceStore(':memory:', ownerId, db);
+    initializeSQLiteSchema(db);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;
   }
   const repositories = {
+    conversations: new SQLiteConversationRecords(db, ownerId),
     store,
     workspace,
     memory: workspace.memory,
