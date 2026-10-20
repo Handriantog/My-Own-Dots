@@ -1,3 +1,4 @@
+import { beginSQLiteTransaction } from './storage/sqlite-transaction.js';
 import { MemoryStore } from './memory-store.js';
 import { ComputerStore } from './computer-store.js';
 import { ConnectionStore } from './connection-store.js';
@@ -17,6 +18,7 @@ import { validateLearningSettings } from '../shared/learning.js';
 import type { CallReceipt, Conversation, Dot, Space } from '../shared/types.js';
 export class WorkspaceStore {
   private db: DatabaseSync;
+  private ownsDatabase: boolean;
   readonly memory: MemoryStore;
   readonly pages: Pages;
   readonly computers: ComputerStore;
@@ -25,10 +27,14 @@ export class WorkspaceStore {
   constructor(
     path: string,
     readonly ownerId: string,
+    database?: DatabaseSync,
   ) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
-    this.db = new DatabaseSync(path);
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
+    this.ownsDatabase = !database;
+    this.db = database ?? new DatabaseSync(path);
+    if (!database)
+      this.db.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;');
+    this.db.exec(`
       CREATE TABLE IF NOT EXISTS spaces(id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL, createdAt INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS dots(id TEXT PRIMARY KEY, spaceId TEXT NOT NULL, name TEXT NOT NULL, instructions TEXT NOT NULL, researchAllowed INTEGER NOT NULL, memoryAllowed INTEGER NOT NULL, createdAt INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS thread_bindings(id TEXT PRIMARY KEY, dotId TEXT NOT NULL, ownerId TEXT NOT NULL, title TEXT NOT NULL, createdAt INTEGER NOT NULL);
@@ -62,10 +68,10 @@ export class WorkspaceStore {
         )
         .get()
     ) {
-      this.db.exec(`BEGIN;
+      this.db.exec(`SAVEPOINT workspace_schema;
         CREATE TABLE dot_spaces(dotId TEXT NOT NULL, spaceId TEXT NOT NULL, PRIMARY KEY(dotId, spaceId));
         INSERT INTO dot_spaces SELECT id, spaceId FROM dots;
-        COMMIT;`);
+        RELEASE workspace_schema;`);
     }
     this.memory = new MemoryStore(this.db, ownerId);
     this.computers = new ComputerStore(this.db);
@@ -102,7 +108,7 @@ export class WorkspaceStore {
   }
   close() {
     this.folders.close();
-    this.db.close();
+    if (this.ownsDatabase) this.db.close();
   }
   spaces(): Space[] {
     return this.db
@@ -192,7 +198,7 @@ export class WorkspaceStore {
       skillDeliveryEnabled,
       createdAt: Date.now(),
     };
-    this.db.exec('BEGIN');
+    const transaction = beginSQLiteTransaction(this.db, false);
     try {
       this.db
         .prepare(
@@ -213,9 +219,9 @@ export class WorkspaceStore {
         );
       for (const id of dot.spaceIds)
         this.db.prepare('INSERT INTO dot_spaces VALUES (?, ?)').run(dot.id, id);
-      this.db.exec('COMMIT');
+      transaction.commit();
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      transaction.rollback();
       throw error;
     }
     return dot;
@@ -261,7 +267,7 @@ export class WorkspaceStore {
     const skillDeliveryEnabled =
       patch.skillDeliveryEnabled ?? current.skillDeliveryEnabled ?? false;
     validateLearningSettings(learningContainerId, skillDeliveryEnabled);
-    this.db.exec('BEGIN');
+    const transaction = beginSQLiteTransaction(this.db, false);
     try {
       this.db
         .prepare(
@@ -284,9 +290,9 @@ export class WorkspaceStore {
       this.db.prepare('DELETE FROM dot_spaces WHERE dotId=?').run(id);
       for (const space of new Set(spaceIds))
         this.db.prepare('INSERT INTO dot_spaces VALUES (?, ?)').run(id, space);
-      this.db.exec('COMMIT');
+      transaction.commit();
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      transaction.rollback();
       throw error;
     }
     return this.dot(id)!;

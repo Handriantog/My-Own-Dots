@@ -41,10 +41,10 @@ New workspace resolution and manifests: `src/shared/workspace-manifest.ts`, `src
 
 **Interfaces:** `WorkspaceManifest = { version: 1; id: string; ownerId: string; storage: 'legacy-postgres' | 'sqlite'; schema: number }`. `resolveWorkspaceLocation({ platform, home, localAppData?, xdgDataHome?, electronData, selected?, portableRoot?, executable }): { workspace, profile, portable }`. `readWorkspaceManifest(directory)` never initializes data; `createWorkspaceManifest(directory,input)` exclusively creates and fsyncs a validated file. IDs survive path changes; runtime exclusion still keys canonical database path.
 
-- [ ] Write tests for macOS Application Support, Windows LOCALAPPDATA, Linux XDG/fallback and explicit portable roots. Assert normal Windows data is not roaming, portable paths are outside `.app`/AppImage mounts, and an explicit selection always wins. Test missing/read-only selected roots, malformed/absolute/escaping portable marker paths and moving the whole portable root with unchanged manifest ID.
-- [ ] Run the location/identity/backend tests; expect missing resolver/manifest failures.
-- [ ] Implement versioned manifests and canonical location resolution. Preserve old path-based identity for a legacy workspace until its explicit manifest transition; do not mutate existing stores on read. Never derive a portable root from cwd.
-- [ ] Run focused tests and typecheck; expect pass with no changes to existing data. Commit `feat: persist workspace identity and locations`.
+- [x] Write tests for macOS Application Support, Windows LOCALAPPDATA, Linux XDG/fallback and explicit portable roots. Assert normal Windows data is not roaming, portable paths are outside `.app`/AppImage mounts, and an explicit selection always wins. Test missing/read-only selected roots, malformed/absolute/escaping portable marker paths and moving the whole portable root with unchanged manifest ID.
+- [x] Run the location/identity/backend tests; expect missing resolver/manifest failures.
+- [x] Implement versioned manifests and canonical location resolution. Preserve old path-based identity for a legacy workspace until its explicit manifest transition; do not mutate existing stores on read. Never derive a portable root from cwd.
+- [x] Run focused tests and typecheck; expect pass with no changes to existing data. Commit `feat: persist workspace identity and locations`.
 
 ## Task 2: Worker-owned repository coordinator
 
@@ -52,10 +52,10 @@ New workspace resolution and manifests: `src/shared/workspace-manifest.ts`, `src
 
 **Interfaces:** `StoragePriority = 'foreground' | 'background'`; `StorageClient.open({ database, ownerId }): Promise<StorageClient>`; `client.call<K extends RepositoryMethod>(method: K, args: RepositoryArguments<K>, { signal?, priority? }): Promise<RepositoryResult<K>>`; `client.close(): Promise<void>`. `RepositoryMethod` is an explicit allowlist of typed repository operations, never SQL or arbitrary property traversal. `client.repositories` provides typed async facades for Store, WorkspaceStore and their memory/history/pages/computers/connections/folder repositories. Owner ID is immutable metadata, not an RPC.
 
-- [ ] Write worker tests asserting cancelled queued requests never mutate, aborted in-flight writes acknowledge only after commit/rollback, a foreground request precedes queued background batches, worker death rejects all pending calls, and the caller's event loop remains responsive under a held external database lock. Reject unknown methods and oversized payloads before enqueueing.
-- [ ] Run focused tests; expect missing worker failures.
-- [ ] Implement a bounded queue (1,024 requests, 16 MiB/request), explicit method dispatch and async clients. Keep existing repository classes and all SQLite handles within the worker. Set foreign keys/FULL on each handle, avoid a multi-second busy wait, and retry a busy background transaction through the queue rather than blocking foreground. Never serialize callbacks or AbortSignals. Exclude callback-taking transaction helpers such as `MemoryStore.atomic` from RPC; task 4 exposes compound transactional operations instead. Close/drain before terminating.
-- [ ] Run worker, existing repository and packaged-worker tests plus typecheck; expect no database calls on the parent thread. Commit `feat: coordinate core storage in a worker`.
+- [x] Write worker tests asserting cancelled queued requests never mutate, aborted in-flight writes acknowledge only after commit/rollback, a foreground request precedes queued background batches, worker death rejects all pending calls, and the caller's event loop remains responsive under a held external database lock. Reject unknown methods and oversized payloads before enqueueing.
+- [x] Run focused tests; expect missing worker failures.
+- [x] Implement a bounded queue (1,024 requests, 16 MiB/request), explicit method dispatch and async clients. Keep existing repository classes and all SQLite handles within the worker. Set foreign keys/FULL on each handle, avoid a multi-second busy wait, and retry a busy background transaction through the queue rather than blocking foreground. Never serialize callbacks or AbortSignals. Exclude callback-taking transaction helpers such as `MemoryStore.atomic` from RPC; task 4 exposes compound transactional operations instead. Close/drain before terminating.
+- [x] Run worker, existing repository and packaged-worker tests plus typecheck; expect no database calls on the parent thread. Commit `feat: coordinate core storage in a worker`.
 
 ## Task 3: Incremental SQLite conversations and fenced leases
 

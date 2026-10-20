@@ -1,3 +1,4 @@
+import { beginSQLiteTransaction } from './storage/sqlite-transaction.js';
 import { memoryDefaults } from './memory-config.js';
 import {
   memorySettingsSchema,
@@ -189,14 +190,14 @@ export class MemoryStore {
   }
   atomic<T>(fn: () => T): T {
     if (this.depth) return fn();
-    this.db.exec('BEGIN IMMEDIATE');
+    const transaction = beginSQLiteTransaction(this.db);
     this.depth++;
     try {
       const result = fn();
-      this.db.exec('COMMIT');
+      transaction.commit();
       return result;
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      transaction.rollback();
       throw error;
     } finally {
       this.depth--;

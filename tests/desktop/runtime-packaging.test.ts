@@ -92,6 +92,49 @@ it('stages production dependency closure with Python sources and without develop
       readFile(path.join(root, 'out/node_modules/engine', name)),
     ).rejects.toThrow();
 });
+it('runs repository workers from the compiled runtime without a source loader', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'dots-worker-package-'));
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  const runtime = path.join(root, 'app');
+  const helper = await import(
+    pathToFileURL(path.join(process.cwd(), 'scripts/desktop-runtime.mjs')).href
+  );
+  await helper.compileDesktopRuntime(process.cwd(), runtime);
+  await helper.stageProductionDependencies(process.cwd(), runtime, ['zod']);
+  await mkdir(path.join(runtime, 'scripts'));
+  await cp(
+    path.join(process.cwd(), 'scripts/folder-access.py'),
+    path.join(runtime, 'scripts/folder-access.py'),
+  );
+  await writeFile(
+    path.join(root, 'exercise.mjs'),
+    `
+    import { StorageClient } from './app/server/storage/storage-client.js';
+    const client = await StorageClient.open({ database: './workspace.sqlite', ownerId: 'packaged-owner' });
+    try {
+      const workspace = client.repositories.workspace;
+      const dot = (await workspace.dots())[0];
+      const binding = await workspace.bindThread('folder-thread', dot.id, 'Folder');
+      const request = await workspace.folders.request(dot.id, binding.id, { reason: 'Review notes', folderHint: 'Notes', access: 'read' });
+      const selection = await workspace.folders.select(binding.id, request.id, process.cwd());
+      const memory = await client.repositories.store.saveMemory('Packaged persistence', 'packaged-memory');
+      console.log(JSON.stringify({ memory, selection: !!selection.id }));
+    } finally { await client.close(); }
+  `,
+  );
+  const result = await promisify(execFile)(
+    process.execPath,
+    [path.join(root, 'exercise.mjs')],
+    {
+      cwd: root,
+      env: { ...process.env, NODE_OPTIONS: '', DOTS_RUNTIME_ROOT: runtime },
+    },
+  );
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    memory: { id: 'packaged-memory', text: 'Packaged persistence' },
+    selection: true,
+  });
+});
 
 it.skipIf(process.platform !== 'darwin')(
   'runs the shipped integration setup with a native PATH and preserves an explicit uv override',

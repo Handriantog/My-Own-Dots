@@ -107,7 +107,7 @@ function sourceFiles(directory) {
         : [],
   );
 }
-export async function buildDesktopRuntime(root, output) {
+export async function compileDesktopRuntime(root, output) {
   rmSync(output, { recursive: true, force: true });
   mkdirSync(output, { recursive: true });
   const compilation = await build({
@@ -136,6 +136,10 @@ export async function buildDesktopRuntime(root, output) {
       2,
     ),
   );
+  return compilation;
+}
+export async function buildDesktopRuntime(root, output) {
+  const compilation = await compileDesktopRuntime(root, output);
   const manifest = JSON.parse(
     readFileSync(path.join(root, 'package.json'), 'utf8'),
   );
