@@ -1,9 +1,14 @@
-import { copyFile, open, rm, chmod } from 'node:fs/promises';
+import { copyFile, open, rm, chmod, mkdtemp } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../store.js';
 import { WorkspaceStore } from '../workspace.js';
+import {
+  initializeSQLiteSchema,
+  sqliteStorageSchema,
+} from './sqlite-schema.js';
+import { validateUnifiedGraph } from './unified-validation.js';
 
 const inventory = (db: DatabaseSync) =>
   db
@@ -13,27 +18,56 @@ const inventory = (db: DatabaseSync) =>
     .all();
 
 /** Reject unknown schemas before executing any statement that could invoke archived triggers. */
-export async function restoreSQLite(
+export async function copyValidatedSQLite(
   source: string,
   destination: string,
   ownerId: string,
   signal: AbortSignal,
+  engine: 'legacy-postgres' | 'sqlite' = 'legacy-postgres',
 ) {
-  const baselinePath = destination + '.schema';
-  const store = new Store(baselinePath);
-  store.close();
-  const workspace = new WorkspaceStore(baselinePath, ownerId);
-  workspace.close();
-  const baseline = new DatabaseSync(baselinePath, { readOnly: true });
-  const expected = inventory(baseline);
-  baseline.close();
-  for (const suffix of ['', '-wal', '-shm'])
-    await rm(baselinePath + suffix, { force: true });
+  const baselineDirectory = await mkdtemp(
+    join(dirname(destination), '.schema-'),
+  );
+  let expected: ReturnType<typeof inventory>;
+  try {
+    const baselinePath = join(baselineDirectory, 'baseline.sqlite');
+    const store = new Store(baselinePath);
+    store.close();
+    const workspace = new WorkspaceStore(baselinePath, ownerId);
+    workspace.close();
+    if (engine === 'sqlite') {
+      const schema = new DatabaseSync(baselinePath);
+      try {
+        initializeSQLiteSchema(schema);
+      } finally {
+        schema.close();
+      }
+    }
+    const baseline = new DatabaseSync(baselinePath, { readOnly: true });
+    try {
+      expected = inventory(baseline);
+    } finally {
+      baseline.close();
+    }
+  } finally {
+    await rm(baselineDirectory, { recursive: true, force: true });
+  }
   const original = new DatabaseSync(source, { readOnly: true });
   try {
     original.exec('PRAGMA trusted_schema=OFF');
     if (JSON.stringify(inventory(original)) !== JSON.stringify(expected))
       throw new Error('Unsupported SQLite restore schema');
+    if (
+      engine === 'sqlite' &&
+      Number(
+        original
+          .prepare(
+            'SELECT max(version) AS version FROM workspace_storage_schema',
+          )
+          .get()!.version,
+      ) !== sqliteStorageSchema
+    )
+      throw new Error('Unsupported SQLite storage version');
     const check = original.prepare('PRAGMA integrity_check').all();
     if (check.length !== 1 || check[0].integrity_check !== 'ok')
       throw new Error('SQLite integrity check failed');
@@ -41,17 +75,21 @@ export async function restoreSQLite(
       throw new Error('SQLite reference check failed');
     for (const item of expected.filter((row) => row.type === 'table')) {
       const table = String(item.name).replaceAll('"', '""');
-      if (
-        original
-          .prepare(`PRAGMA table_info("${table}")`)
-          .all()
-          .some((row) => row.name === 'ownerId') &&
-        original
-          .prepare(`SELECT 1 FROM "${table}" WHERE ownerId<>? LIMIT 1`)
-          .get(ownerId)
-      )
-        throw new Error('Invalid SQLite owner');
+      for (const column of original
+        .prepare(`PRAGMA table_info("${table}")`)
+        .all())
+        if (
+          (column.name === 'ownerId' || column.name === 'owner_id') &&
+          original
+            .prepare(
+              `SELECT 1 FROM "${table}" WHERE "${column.name}"<>? LIMIT 1`,
+            )
+            .get(ownerId)
+        )
+          throw new Error('Invalid SQLite owner');
     }
+    if (engine === 'sqlite')
+      await validateUnifiedGraph(original, ownerId, signal);
   } finally {
     original.close();
     // These sidecars belong to the private extracted snapshot, not the source workspace.
@@ -61,6 +99,15 @@ export async function restoreSQLite(
   signal.throwIfAborted();
   await copyFile(source, destination, 1); // COPYFILE_EXCL; the directory is privately owned.
   await chmod(destination, 0o600);
+}
+export async function restoreSQLite(
+  source: string,
+  destination: string,
+  ownerId: string,
+  signal: AbortSignal,
+  engine: 'legacy-postgres' | 'sqlite' = 'legacy-postgres',
+) {
+  await copyValidatedSQLite(source, destination, ownerId, signal, engine);
   const db = new DatabaseSync(destination);
   const counts: Record<string, number> = {};
   try {
@@ -77,6 +124,17 @@ export async function restoreSQLite(
       'memory_suppressions',
       'tasks',
       'calls',
+      ...(engine === 'sqlite'
+        ? [
+            'conversation_threads',
+            'conversation_runs',
+            'conversation_events',
+            'memory_episode_chunks',
+            'memory_jobs',
+            'memory_evidence',
+            'memory_checkpoints',
+          ]
+        : []),
     ])
       counts[table] = Number(
         db.prepare(`SELECT count(*) AS n FROM "${table}"`).get()!.n,
@@ -103,6 +161,7 @@ export async function restoreSQLite(
         'memory_restore_previews',
         'memory_settings',
         'setup_telemetry',
+        ...(engine === 'sqlite' ? ['memory_jobs'] : []),
       ])
         for (const row of db.prepare(`SELECT * FROM "${table}"`).iterate()) {
           signal.throwIfAborted();
@@ -147,6 +206,13 @@ export async function restoreSQLite(
           'Interrupted by workspace recovery; approve a fresh action to retry.',
       }),
     );
+    if (engine === 'sqlite')
+      db.exec(`
+      UPDATE conversation_threads SET lease_token=NULL,lease_until=0;
+      UPDATE memory_evidence SET workflow_complete=0 WHERE EXISTS(SELECT 1 FROM conversation_runs r WHERE r.owner_id=memory_evidence.owner_id AND r.thread_id=memory_evidence.thread_id AND r.run_id=memory_evidence.run_id AND r.status='running');
+      UPDATE conversation_runs SET status='interrupted' WHERE status='running';
+      UPDATE memory_jobs SET state='cancelled',error='Interrupted by workspace recovery',lease_token=NULL,lease_until=NULL,call_started_at=NULL WHERE state IN ('queued','running');
+    `);
     for (const row of db
       .prepare('SELECT ownerId,dotId,value FROM memory_settings')
       .all()) {

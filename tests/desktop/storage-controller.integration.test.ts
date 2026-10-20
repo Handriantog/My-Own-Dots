@@ -101,6 +101,7 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       chooseDirectory: async () => destination,
       chooseArchive: async () => archive,
       confirmRestore: async () => true,
+      confirmMigration: async () => true,
     };
     const phases: string[] = [];
     controller.subscribe((status) => {

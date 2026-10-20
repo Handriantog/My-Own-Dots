@@ -4,6 +4,26 @@ import { lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { DatabaseSync } from 'node:sqlite';
+export const migrationProofSchema = z
+  .object({
+    source: z
+      .object({
+        directory: z.string(),
+        sqlitePath: z.string(),
+        configurationPath: z.string(),
+        postgresUrl: z.string(),
+        ownerId: z.string(),
+        workspaceId: z.string(),
+      })
+      .strict(),
+    backup: z
+      .object({ path: z.string(), sha256: z.string().regex(/^[a-f0-9]{64}$/) })
+      .strict(),
+    configurationSeal: z.string().regex(/^[a-f0-9]{64}$/),
+    targetWorkspaceId: z.uuid(),
+  })
+  .strict();
+export type MigrationProof = z.infer<typeof migrationProofSchema>;
 
 export const restoreJournalSchema = z
   .object({
@@ -13,6 +33,8 @@ export const restoreJournalSchema = z
     createdAt: z.number(),
     verifiedAt: z.number().optional(),
     postgresTarget: z.string().optional(),
+    storage: z.enum(['legacy-postgres', 'sqlite']).optional(),
+    migration: migrationProofSchema.optional(),
     postgresOid: z.string().optional(),
     cleanupPending: z.boolean().optional(),
     databaseRemoved: z.boolean().optional(),

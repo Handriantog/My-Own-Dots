@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import { open, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
+export const sqliteStorageSchema = 2;
 
 export const workspaceManifestSchema = z
   .object({

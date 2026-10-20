@@ -6,12 +6,14 @@ export const storageMethods = [
   'setAutomatic',
   'previewRestore',
   'restore',
+  'previewMigration',
+  'migrate',
   'cancel',
 ] as const;
 
 export interface StorageOperationStatus {
   id: string;
-  kind: 'backup' | 'restore';
+  kind: 'backup' | 'restore' | 'migration';
   phase:
     | 'queued'
     | 'snapshot'
@@ -23,6 +25,9 @@ export interface StorageOperationStatus {
   error?: string;
 }
 export interface StorageRestorePreview {
+  migration?: boolean;
+  destination?: string;
+  backupPath?: string;
   operationId: string;
   expiresAt?: number;
   workspaceId: string;
@@ -31,6 +36,9 @@ export interface StorageRestorePreview {
   warnings: string[];
 }
 export interface StorageStatus {
+  workspaceDirectory?: string;
+  storageEngine?: 'legacy-postgres' | 'sqlite';
+  migrationAvailable?: boolean;
   secureStorage: boolean;
   recoveryWarnings?: string[];
   destination?: string;
@@ -48,6 +56,8 @@ export interface DesktopStorageBridge {
   backupNow(input: { passphrase: string; remember: boolean }): Promise<void>;
   setAutomatic(input: { enabled: boolean }): Promise<void>;
   previewRestore(input: { passphrase: string }): Promise<void>;
+  previewMigration(input: { passphrase: string }): Promise<void>;
+  migrate(input: { operationId: string }): Promise<void>;
   restore(input: {
     operationId: string;
     mode: 'new' | 'replace';

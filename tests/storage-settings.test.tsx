@@ -23,6 +23,8 @@ it('distinguishes snapshotting from a verified backup', async () => {
     backupNow: vi.fn(),
     setAutomatic: vi.fn(),
     previewRestore: vi.fn(),
+    previewMigration: vi.fn(),
+    migrate: vi.fn(),
     restore: vi.fn(),
     cancel: vi.fn(),
     onStatus: (callback) => {

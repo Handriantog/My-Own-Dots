@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { sqliteStorageSchema } from './workspace-manifest.js';
 
 export const ARCHIVE_LIMITS = Object.freeze({
   maxManifestBytes: 4 * 1024 * 1024,
@@ -30,7 +31,7 @@ const coverageSchema = z
   .refine((item) => item.state === 'included' || !!item.reason, {
     message: 'Excluded or unavailable components require a reason',
   });
-const manifestSchema = z
+const legacyManifestSchema = z
   .object({
     version: z.literal(1),
     minimumReader: z.literal(1),
@@ -43,6 +44,19 @@ const manifestSchema = z
     coverage: z.array(coverageSchema),
   })
   .strict();
+const manifestSchema = z.discriminatedUnion('version', [
+  legacyManifestSchema,
+  legacyManifestSchema.extend({
+    version: z.literal(2),
+    minimumReader: z.literal(2),
+    storage: z
+      .object({
+        engine: z.literal('sqlite'),
+        schema: z.literal(sqliteStorageSchema),
+      })
+      .strict(),
+  }),
+]);
 export type ArchiveManifest = z.infer<typeof manifestSchema>;
 
 /** Caller quotas may tighten, never relax, the shared format's hard limits. */

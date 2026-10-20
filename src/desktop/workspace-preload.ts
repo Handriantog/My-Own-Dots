@@ -84,6 +84,8 @@ if (
     backupNow: (value) => userAction('backupNow', value),
     setAutomatic: (value) => userAction('setAutomatic', value),
     previewRestore: (value) => userAction('previewRestore', value),
+    previewMigration: (value) => userAction('previewMigration', value),
+    migrate: (value) => userAction('migrate', value),
     restore: (value) => userAction('restore', value),
     cancel: (id) => userAction('cancel', id),
     onStatus(callback) {

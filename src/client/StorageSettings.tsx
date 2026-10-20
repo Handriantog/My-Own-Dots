@@ -15,6 +15,7 @@ export function StorageSettings({
   const [remember, setRemember] = useState(false);
   const recoveryPassword = useRef<HTMLInputElement>(null);
   const restorePassword = useRef<HTMLInputElement>(null);
+  const migrationPassword = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!bridge) return;
     let mounted = true;
@@ -85,11 +86,26 @@ export function StorageSettings({
               : operation?.phase === 'ready' && operation.kind === 'backup'
                 ? 'Backup verified.'
                 : operation?.phase === 'ready' && status?.preview
-                  ? 'Restore preview ready.'
+                  ? status.preview.migration
+                    ? 'Migration preview ready.'
+                    : 'Restore preview ready.'
                   : '';
   return (
     <section className="storage-settings">
       <h3>Storage & recovery</h3>
+      {status?.workspaceDirectory && (
+        <p>
+          <strong>Workspace folder:</strong> {status.workspaceDirectory}
+        </p>
+      )}
+      {status?.storageEngine && (
+        <p>
+          Core storage:{' '}
+          {status.storageEngine === 'sqlite'
+            ? 'Local SQLite — independent of Docker'
+            : 'Legacy PostgreSQL'}
+        </p>
+      )}
       <p>
         Backups include conversations, voice transcripts, memories, pages and
         settings. Computer files, browser profiles and provider logins need
@@ -189,6 +205,37 @@ export function StorageSettings({
           : 'None'}
       </p>
       <hr />
+      {status?.migrationAvailable && (
+        <>
+          <h3>Move core data out of Docker</h3>
+          <p>
+            Dot will close chat, verify an encrypted backup and prepare a
+            separate workspace. Your original data stays in place. Review the
+            results before switching.
+          </p>
+          <label>
+            Pre-migration backup password
+            <input
+              ref={migrationPassword}
+              type="password"
+              autoComplete="new-password"
+              aria-label="Migration recovery password"
+              disabled={busy}
+            />
+          </label>
+          <button
+            type="button"
+            disabled={busy || !status.destination}
+            onClick={() => {
+              const passphrase = readPassword(migrationPassword.current);
+              void action(() => bridge.previewMigration({ passphrase }));
+            }}
+          >
+            Back up and prepare migration
+          </button>
+          <hr />
+        </>
+      )}
       <h3>Restore a workspace</h3>
       <p>
         Recovery creates a separate workspace. Schedules remain paused and
@@ -216,7 +263,17 @@ export function StorageSettings({
       </button>
       {status?.preview && (
         <div>
-          <h4>Recovery preview</h4>
+          <h4>
+            {status.preview.migration
+              ? 'Migration preview'
+              : 'Recovery preview'}
+          </h4>
+          {status.preview.destination && (
+            <p>Prepared workspace: {status.preview.destination}</p>
+          )}
+          {status.preview.backupPath && (
+            <p>Verified backup: {status.preview.backupPath}</p>
+          )}
           <button
             type="button"
             disabled={busy}
@@ -224,44 +281,62 @@ export function StorageSettings({
               void action(() => bridge.cancel(status.preview!.operationId))
             }
           >
-            Discard restore preview
+            Discard preview
           </button>
           <p>
-            {status.preview.counts.local_ai_threads ?? 0} conversations ·{' '}
-            {status.preview.counts.memory_items ?? 0} memories ·{' '}
+            {status.preview.counts.local_ai_threads ??
+              status.preview.counts.conversation_threads ??
+              0}{' '}
+            conversations · {status.preview.counts.memory_items ?? 0} memories ·{' '}
             {status.preview.counts.pages ?? 0} pages
           </p>
           {status.preview.warnings.map((warning) => (
             <p key={warning}>{warning}</p>
           ))}
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() =>
-              void action(() =>
-                bridge.restore({
-                  operationId: status.preview!.operationId,
-                  mode: 'new',
-                }),
-              )
-            }
-          >
-            Open restored workspace
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() =>
-              void action(() =>
-                bridge.restore({
-                  operationId: status.preview!.operationId,
-                  mode: 'replace',
-                }),
-              )
-            }
-          >
-            Back up current workspace and replace selection
-          </button>
+          {status.preview.migration ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                void action(() =>
+                  bridge.migrate({ operationId: status.preview!.operationId }),
+                )
+              }
+            >
+              Switch to verified workspace
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void action(() =>
+                    bridge.restore({
+                      operationId: status.preview!.operationId,
+                      mode: 'new',
+                    }),
+                  )
+                }
+              >
+                Open restored workspace
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void action(() =>
+                    bridge.restore({
+                      operationId: status.preview!.operationId,
+                      mode: 'replace',
+                    }),
+                  )
+                }
+              >
+                Back up current workspace and replace selection
+              </button>
+            </>
+          )}
         </div>
       )}
       {progress && <p role="status">{progress}</p>}

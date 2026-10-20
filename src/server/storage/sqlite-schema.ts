@@ -1,6 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { beginSQLiteTransaction } from './sqlite-transaction.js';
-export const sqliteStorageSchema = 2;
+import { sqliteStorageSchema } from '../../shared/workspace-manifest.js';
+export { sqliteStorageSchema } from '../../shared/workspace-manifest.js';
 export function initializeSQLiteSchema(db: DatabaseSync) {
   const transaction = beginSQLiteTransaction(db);
   try {

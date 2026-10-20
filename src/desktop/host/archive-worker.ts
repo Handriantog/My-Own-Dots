@@ -1,7 +1,9 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { readArchive, writeArchive } from '../../server/storage/archive.js';
 import { RestoreService } from '../../server/storage/restore.js';
+import { MigrationService } from '../../server/storage/migration-service.js';
 import type {
   ArchiveWorkerCommand,
   ArchiveWorkerResult,
@@ -36,7 +38,7 @@ async function execute(
         passphrase: command.passphrase,
         signal,
       });
-      if (JSON.stringify(manifest) !== JSON.stringify(command.manifest))
+      if (!isDeepStrictEqual(manifest, command.manifest))
         throw new Error('Verification mismatch');
       signal.throwIfAborted();
       verified = true;
@@ -53,19 +55,33 @@ async function execute(
         await rm(command.destination, { force: true });
     }
   }
+  const stopWorkspace = () =>
+    new Promise<void>((resolve, reject) => {
+      signal.throwIfAborted();
+      const abort = () => reject(new Error('Cancelled'));
+      signal.addEventListener('abort', abort, { once: true });
+      quiesced = () => {
+        signal.removeEventListener('abort', abort);
+        resolve();
+      };
+      process.send?.({ type: 'quiesce' });
+    });
+  if (
+    command.kind === 'migration-preview' ||
+    command.kind === 'migration-activate'
+  ) {
+    phase('verify');
+    const migration = new MigrationService({
+      profile: command.profile,
+      stopWorkspace,
+    });
+    return command.kind === 'migration-preview'
+      ? migration.prepare({ ...command, signal })
+      : migration.activate(command.operationId, signal);
+  }
   const service = new RestoreService({
     profile: command.profile,
-    stopWorkspace: () =>
-      new Promise<void>((resolve, reject) => {
-        signal.throwIfAborted();
-        const abort = () => reject(new Error('Cancelled'));
-        signal.addEventListener('abort', abort, { once: true });
-        quiesced = () => {
-          signal.removeEventListener('abort', abort);
-          resolve();
-        };
-        process.send?.({ type: 'quiesce' });
-      }),
+    stopWorkspace,
     preRestoreBackup:
       command.kind === 'activate' && command.verifiedBackupDirectory
         ? async () => ({

@@ -1,11 +1,21 @@
 import { fork } from 'node:child_process';
 import { dirname } from 'node:path';
 import type { ArchiveManifest } from '../../shared/storage-archive.js';
+import type { MigrationSource } from '../../server/storage/migration-service.js';
 import type {
   StorageOperationStatus,
   StorageRestorePreview,
 } from '../shared/storage-contract.js';
 export type ArchiveWorkerCommand =
+  | {
+      kind: 'migration-preview';
+      profile: string;
+      source: MigrationSource;
+      destination: string;
+      backupDestination: string;
+      passphrase: string;
+    }
+  | { kind: 'migration-activate'; profile: string; operationId: string }
   | {
       kind: 'backup';
       sourceDirectory: string;
@@ -19,7 +29,7 @@ export type ArchiveWorkerCommand =
       archive: string;
       passphrase: string;
       destination: string;
-      postgresTarget: string;
+      postgresTarget?: string;
     }
   | {
       kind: 'activate';

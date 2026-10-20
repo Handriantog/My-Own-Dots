@@ -12,6 +12,11 @@ import { isAbsolute, join } from 'node:path';
 import { parseEnv } from 'node:util';
 import type { ArchiveManifest } from '../../shared/storage-archive.js';
 import {
+  createWorkspaceManifest,
+  readWorkspaceManifest,
+  sqliteStorageSchema,
+} from '../../shared/workspace-manifest.js';
+import {
   claimWorkspaceDatabase,
   workspaceIdentity,
 } from '../workspace-identity.js';
@@ -27,6 +32,8 @@ import {
   restorePostgres,
 } from './restore-postgres.js';
 import { restoreSQLite } from './restore-sqlite.js';
+import { migrateLegacySnapshot } from './migrate-workspace.js';
+import { recoverMigrationScratch } from './migration-scratch.js';
 import {
   atomicStorageWrite,
   fileSeal,
@@ -37,9 +44,12 @@ import {
   withRestoreLock,
   type RestoreJournal,
   journalPath,
+  type MigrationProof,
 } from './restore-journal.js';
 
 export interface RestorePreview {
+  destination?: string;
+  backupPath?: string;
   operationId: string;
   expiresAt?: number;
   workspaceId: string;
@@ -51,6 +61,9 @@ interface RestoreOptions {
   profile: string;
   stopWorkspace: () => Promise<void>;
   now?: () => number;
+  /** Host-only migration configuration; archived environment files are never applied. */
+  migration?: { proof: MigrationProof; configuration: string };
+  migrationAuthorized?: boolean;
   /** Host verifies a fresh backup of the selected workspace before replacement. */
   preRestoreBackup?: (
     signal: AbortSignal,
@@ -92,8 +105,6 @@ export class RestoreService {
     const { destination, signal } = input;
     if (!isAbsolute(destination))
       throw new Error('Choose an absolute restore destination');
-    if (!input.postgresTarget)
-      throw new Error('Choose a PostgreSQL server for this legacy backup');
     signal.throwIfAborted();
     const operationId = randomUUID();
     // Exclusive creation is the ownership boundary. Existing directories are never cleaned.
@@ -107,6 +118,9 @@ export class RestoreService {
       previousSelection: await readSelection(this.options.profile),
       files: [],
       postgresTarget: input.postgresTarget,
+      ...(this.options.migration
+        ? { migration: this.options.migration.proof }
+        : {}),
     };
     try {
       await writeFile(join(destination, '.restore-owner'), operationId, {
@@ -121,12 +135,27 @@ export class RestoreService {
         passphrase: input.passphrase,
         signal,
       });
+      const migration = this.options.migration;
+      if (
+        migration &&
+        (manifest.version !== 1 ||
+          manifest.ownerId !== migration.proof.source.ownerId ||
+          manifest.workspaceId !== migration.proof.source.workspaceId)
+      )
+        throw new Error('Migration capture identity changed');
+      const unified = manifest.version === 2 || !!migration;
+      journal.storage = unified ? 'sqlite' : 'legacy-postgres';
+      if (!unified && !input.postgresTarget)
+        throw new Error('Choose a PostgreSQL server for this legacy backup');
+      await this.phase(journal, 'staging');
       const expected = [
         'core/workspace.sqlite',
         'recovery/configuration.json',
-        ...Object.keys(POSTGRES_RECORDS).map(
-          (table) => `postgres/${table}.jsonl`,
-        ),
+        ...(manifest.version === 2
+          ? []
+          : Object.keys(POSTGRES_RECORDS).map(
+              (table) => `postgres/${table}.jsonl`,
+            )),
       ];
       if (
         manifest.kind !== 'workspace-backup' ||
@@ -145,41 +174,85 @@ export class RestoreService {
         throw new Error('Incomplete workspace backup');
       await mkdir(join(destination, 'data'), { mode: 0o700 });
       await mkdir(join(destination, 'recovery'), { mode: 0o700 });
-      const sqlite = await restoreSQLite(
-        join(snapshot, 'core/workspace.sqlite'),
-        join(destination, 'data/opendots.sqlite'),
-        manifest.ownerId,
-        signal,
-      );
-      const postgres = await restorePostgres({
-        server: input.postgresTarget,
-        operationId,
-        directory: snapshot,
-        ownerId: manifest.ownerId,
-        dotIds: sqlite.dotIds,
-        threads: sqlite.threads,
-        signal,
-        onCreated: async (oid) => {
-          journal.postgresOid = oid;
-          await this.phase(journal, 'staging');
-        },
-      });
-      journal.postgresSeal = postgres.seal;
+      const converted = migration
+        ? await migrateLegacySnapshot({
+            directory: snapshot,
+            destination: join(destination, 'data/opendots.sqlite'),
+            ownerId: manifest.ownerId,
+            signal,
+          })
+        : undefined;
+      const sqlite = converted
+        ? { counts: converted.counts, dotIds: [], threads: [] }
+        : await restoreSQLite(
+            join(snapshot, 'core/workspace.sqlite'),
+            join(destination, 'data/opendots.sqlite'),
+            manifest.ownerId,
+            signal,
+            unified ? 'sqlite' : 'legacy-postgres',
+          );
+      const postgres = unified
+        ? undefined
+        : await restorePostgres({
+            server: input.postgresTarget!,
+            operationId,
+            directory: snapshot,
+            ownerId: manifest.ownerId,
+            dotIds: sqlite.dotIds,
+            threads: sqlite.threads,
+            signal,
+            onCreated: async (oid) => {
+              journal.postgresOid = oid;
+              await this.phase(journal, 'staging');
+            },
+          });
+      journal.postgresSeal = postgres?.seal;
+      if (unified)
+        await createWorkspaceManifest(destination, {
+          version: 1,
+          id: migration?.proof.targetWorkspaceId ?? randomUUID(),
+          ownerId: manifest.ownerId,
+          storage: 'sqlite',
+          schema: sqliteStorageSchema,
+        });
       // Only app-generated safe defaults and the explicitly selected target server.
       const quote = (value: string) => {
         if (/[\r\n\0']/.test(value))
           throw new Error('Unsupported restored configuration value');
         return `'${value}'`;
       };
+      const migratedEnvironment = migration
+        ? Object.entries(parseEnv(migration.configuration))
+            .filter(
+              (entry): entry is [string, string] =>
+                typeof entry[1] === 'string' &&
+                ![
+                  'HOST',
+                  'PORT',
+                  'DATABASE_PATH',
+                  'OWNER_ID',
+                  'OWNER_TOKEN',
+                  'CONVERSATION_BACKEND',
+                  'LOCAL_DATABASE_URL',
+                  'DOTS_WORKSPACE_ENV',
+                  'APP_ORIGIN',
+                ].includes(entry[0]),
+            )
+            .map(([key, value]) => `${key}=${quote(value)}\n`)
+            .join('')
+        : '';
       await atomicStorageWrite(
         join(destination, '.env'),
-        `HOST=127.0.0.1\nPORT=4310\nDATABASE_PATH=data/opendots.sqlite\nOWNER_ID=${quote(manifest.ownerId)}\nOWNER_TOKEN=${randomBytes(32).toString('hex')}\nCONVERSATION_BACKEND=local\nLOCAL_DATABASE_URL=${quote(postgres.url)}\nLLM_BACKEND=subscription\nLLM_PROVIDER=codex\nDO_NOT_TRACK=1\n`,
+        `HOST=127.0.0.1\nPORT=4310\nDATABASE_PATH=data/opendots.sqlite\nOWNER_ID=${quote(manifest.ownerId)}\nOWNER_TOKEN=${randomBytes(32).toString('hex')}\nCONVERSATION_BACKEND=local\n${postgres ? `LOCAL_DATABASE_URL=${quote(postgres.url)}\n` : ''}LLM_BACKEND=subscription\nLLM_PROVIDER=codex\nDO_NOT_TRACK=1\n${migratedEnvironment}`,
       );
       for (const path of [
         '.restore-owner',
         '.env',
+        ...(unified ? ['workspace.json'] : []),
         'data/opendots.sqlite',
-        'recovery/access-audit.jsonl',
+        migration
+          ? 'recovery/migration-verification.json'
+          : 'recovery/access-audit.jsonl',
         ...manifest.entries.map((entry) => 'snapshot/' + entry.path),
       ])
         journal.files.push({
@@ -189,15 +262,19 @@ export class RestoreService {
       journal.verifiedAt = this.now();
       await this.phase(journal, 'verified');
       return {
+        destination,
+        ...(migration ? { backupPath: migration.proof.backup.path } : {}),
         operationId,
         expiresAt: journal.verifiedAt + 15 * 60_000,
-        workspaceId: workspaceIdentity(
-          join(destination, 'data/opendots.sqlite'),
-        ),
-        counts: { ...sqlite.counts, ...postgres.counts },
+        workspaceId:
+          (await readWorkspaceManifest(destination))?.id ??
+          workspaceIdentity(join(destination, 'data/opendots.sqlite')),
+        counts: { ...sqlite.counts, ...postgres?.counts },
         coverage: manifest.coverage,
         warnings: [
-          'Schedules and learning are paused. External access must be approved again.',
+          migration
+            ? 'Automation is paused. Same-machine connection and permission definitions are retained; interrupted actions will not replay.'
+            : 'Schedules and learning are paused. External access must be approved again.',
           'Computer files and browser profiles are not included.',
         ],
       };
@@ -241,6 +318,15 @@ export class RestoreService {
       throw new Error('Restore target was opened or changed');
     }
     if (filesOnly) return;
+    if (journal.storage === 'sqlite') {
+      const manifest = await readWorkspaceManifest(journal.directory);
+      if (
+        manifest?.storage !== 'sqlite' ||
+        manifest.schema !== sqliteStorageSchema
+      )
+        throw new Error('Restored workspace identity changed');
+      return;
+    }
     const env = parseEnv(
       await readFile(join(journal.directory, '.env'), 'utf8'),
     );
@@ -296,8 +382,10 @@ export class RestoreService {
     const allowed = new Set([
       '.restore-owner',
       '.env',
+      'workspace.json',
       'data/opendots.sqlite',
       'recovery/access-audit.jsonl',
+      'recovery/migration-verification.json',
       'snapshot/core/workspace.sqlite',
       'snapshot/recovery/configuration.json',
       ...Object.keys(POSTGRES_RECORDS).map(
@@ -332,7 +420,11 @@ export class RestoreService {
       signal.throwIfAborted();
       journal.cleanupPending = true;
       await saveJournal(this.options.profile, journal);
-      if (!journal.databaseRemoved) {
+      if (
+        !journal.databaseRemoved &&
+        journal.storage !== 'sqlite' &&
+        (journal.postgresTarget || journal.postgresOid || journal.postgresSeal)
+      ) {
         if (!journal.postgresTarget)
           throw new Error(
             'Restore database ownership is unavailable; retained for manual cleanup',
@@ -404,6 +496,10 @@ export class RestoreService {
   ) {
     return withRestoreLock(this.options.profile, async () => {
       const journal = await loadJournal(this.options.profile, operationId);
+      if (journal.migration && !this.options.migrationAuthorized)
+        throw new Error(
+          'Migration requires fresh source and backup verification',
+        );
       if (journal.phase !== 'verified')
         throw new Error('Restore preview is not ready');
       if (this.now() - (journal.verifiedAt ?? journal.createdAt) > 15 * 60_000)
@@ -478,13 +574,13 @@ export class RestoreService {
     return withRestoreLock(this.options.profile, () => this.recoverLocked());
   }
   private async recoverLocked() {
-    const warnings: string[] = [];
+    const warnings = await recoverMigrationScratch(this.options.profile);
     let entries: string[];
     try {
       entries = await readdir(join(this.options.profile, 'restore-journals'));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      entries = [];
     }
     for (const entry of entries.filter((name) =>
       /^[a-f0-9-]{36}\.json$/.test(name),

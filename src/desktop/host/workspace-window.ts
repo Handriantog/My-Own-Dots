@@ -163,6 +163,33 @@ export class WorkspaceWindow {
             });
             return result.response === 1;
           },
+          confirmMigration: async (mode) => {
+            if (
+              process.env.DOTS_WORKSPACE_DIR ||
+              process.env.DOTS_WORKSPACE_URL
+            )
+              throw new Error(
+                'The launcher fixes your workspace location. Remove its workspace override before migrating.',
+              );
+            const result = await dialog.showMessageBox(window, {
+              type: 'warning',
+              message:
+                mode === 'prepare'
+                  ? 'Back up and prepare a Docker-free workspace?'
+                  : 'Switch to the verified SQLite workspace?',
+              detail:
+                mode === 'prepare'
+                  ? 'Chat will close during migration. Save page drafts first. Dot will verify an encrypted backup and show a preview before switching. The original workspace and Docker storage are kept.'
+                  : 'Dot will check that the original data and backup have not changed. Automation will stay paused until you resume it. The original workspace and Docker storage are kept.',
+              buttons: [
+                'Cancel',
+                mode === 'prepare' ? 'Back Up and Prepare' : 'Switch Workspace',
+              ],
+              defaultId: 0,
+              cancelId: 0,
+            });
+            return result.response === 1;
+          },
         });
       });
     }

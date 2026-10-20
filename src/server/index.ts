@@ -3,6 +3,7 @@ import { readWorkspaceManifest } from '../shared/workspace-manifest.js';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { LegacySnapshotSource } from './storage/legacy-snapshot.js';
+import { UnifiedSnapshotSource } from './storage/unified-snapshot.js';
 import { SnapshotOperations } from './storage/snapshot-routes.js';
 import {
   claimWorkspaceDatabase,
@@ -107,23 +108,26 @@ const config: PlatformConfig = {
 };
 const platform = await Platform.create(store, workspace, config, { storage });
 const configurationPath = resolve(process.env.DOTS_WORKSPACE_ENV || '.env');
+const snapshotOptions = {
+  sqlitePath: database,
+  ownerId: workspace.ownerId,
+  workspaceId,
+  gate: platform.maintenance,
+  configurationPath: existsSync(configurationPath)
+    ? configurationPath
+    : undefined,
+};
 const snapshots =
-  ownerToken &&
-  config.conversationBackend === 'local' &&
-  storage.engine === 'legacy-postgres'
+  ownerToken && config.conversationBackend === 'local'
     ? new SnapshotOperations(
-        new LegacySnapshotSource({
-          sqlitePath: database,
-          postgresUrl: config.localDatabaseUrl,
-          ownerId: workspace.ownerId,
-          workspaceId,
-          gate: platform.maintenance,
-          owned: true,
-          conversationBackend: config.conversationBackend,
-          configurationPath: existsSync(configurationPath)
-            ? configurationPath
-            : undefined,
-        }),
+        storage.engine === 'sqlite'
+          ? new UnifiedSnapshotSource({ ...snapshotOptions, storage })
+          : new LegacySnapshotSource({
+              ...snapshotOptions,
+              postgresUrl: config.localDatabaseUrl,
+              owned: true,
+              conversationBackend: config.conversationBackend,
+            }),
         join(dirname(resolve(database)), '.storage-snapshots'),
       )
     : undefined;

@@ -13,6 +13,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { parseEnv } from 'node:util';
 import { z } from 'zod';
 import { parseArchiveManifest } from '../../shared/storage-archive.js';
+import { readWorkspaceManifest } from '../../shared/workspace-manifest.js';
+import { workspaceIdentity } from '../../server/workspace-identity.js';
 import { atomicStorageWrite } from '../../server/storage/restore-journal.js';
 import type {
   DesktopStorageBridge,
@@ -36,6 +38,7 @@ export interface StorageInvocation {
   chooseDirectory(kind: 'backup' | 'restore'): Promise<string | undefined>;
   chooseArchive(): Promise<string | undefined>;
   confirmRestore(mode: 'new' | 'replace'): Promise<boolean>;
+  confirmMigration(mode: 'prepare' | 'activate'): Promise<boolean>;
 }
 const metadataSchema = z
   .object({
@@ -88,6 +91,7 @@ export class StorageController {
   private running?: { controller: AbortController; done: Promise<void> };
   private listeners = new Set<(status: StorageStatus) => void>();
   private disposed = false;
+  private migrationStopped = false;
   private choosing = false;
   private ticking?: Promise<void>;
   private cancelling = false;
@@ -243,6 +247,15 @@ export class StorageController {
   }
   async status(): Promise<StorageStatus> {
     const metadata = await this.metadata();
+    const configuration = this.configuration();
+    const manifest = await readWorkspaceManifest(configuration.workspace);
+    const engine = manifest?.storage ?? 'legacy-postgres';
+    const env = parseEnv(
+      await readFile(configuration.envFile, 'utf8').catch((error) => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+        throw error;
+      }),
+    );
     const recoveryWarnings = await readFile(
       join(this.options.profile, 'restore-cleanup-warnings.json'),
       'utf8',
@@ -250,6 +263,13 @@ export class StorageController {
       .then((value) => z.array(z.string()).parse(JSON.parse(value)))
       .catch(() => []);
     return {
+      workspaceDirectory: configuration.workspace,
+      storageEngine: engine,
+      migrationAvailable:
+        engine === 'legacy-postgres' &&
+        this.options.connection()?.owned === true &&
+        !!env.LOCAL_DATABASE_URL &&
+        (env.CONVERSATION_BACKEND ?? 'local') === 'local',
       recoveryWarnings,
       secureStorage: this.keys().available(),
       destination: metadata.destination,
@@ -284,6 +304,8 @@ export class StorageController {
       'setAutomatic',
       'previewRestore',
       'restore',
+      'previewMigration',
+      'migrate',
     ].includes(method);
     if (chooser) this.choosing = true;
     try {
@@ -377,10 +399,6 @@ export class StorageController {
       const env = parseEnv(
         await readFile(this.configuration().envFile, 'utf8'),
       );
-      if (!env.LOCAL_DATABASE_URL)
-        throw new Error(
-          'Configure a destination PostgreSQL server before restoring this legacy backup',
-        );
       return this.run('restore', async (signal) => {
         this.guard(context, true);
         await this.discardPreview(signal);
@@ -390,7 +408,7 @@ export class StorageController {
             profile: this.options.profile,
             archive,
             destination,
-            postgresTarget: env.LOCAL_DATABASE_URL!,
+            postgresTarget: env.LOCAL_DATABASE_URL,
             passphrase: value.passphrase,
           },
           { signal, phase: (phase) => this.phase(phase) },
@@ -405,7 +423,123 @@ export class StorageController {
         };
       });
     }
+    if (method === 'previewMigration') {
+      const value = z.object({ passphrase: password }).strict().parse(input);
+      if (!(await this.status()).migrationAvailable)
+        throw new Error('Migration requires a locally owned legacy workspace');
+      const configuration = this.configuration();
+      const metadata = await this.metadata();
+      if (!metadata.destination)
+        throw new Error('Choose a backup folder first');
+      const backupDirectory = await this.checkDestination(metadata.destination);
+      const parent = await context.chooseDirectory('restore');
+      this.guard(context, true);
+      if (!parent) return;
+      if (!(await context.confirmMigration('prepare'))) return;
+      this.guard(context, true);
+      const manifest = await readWorkspaceManifest(configuration.workspace);
+      const env = parseEnv(await readFile(configuration.envFile, 'utf8'));
+      const workspaceId =
+        manifest?.id ??
+        configuration.workspaceId ??
+        workspaceIdentity(configuration.database);
+      const identity = await this.json(
+        this.options.connection()!,
+        '/desktop/identity',
+      );
+      if (identity.workspaceId !== workspaceId)
+        throw new Error('Migration workspace identity changed');
+      this.guard(context, true);
+      const source = {
+        directory: configuration.workspace,
+        sqlitePath: resolve(configuration.database),
+        configurationPath: resolve(configuration.envFile),
+        ownerId: manifest?.ownerId ?? env.OWNER_ID ?? 'opendots-owner',
+        workspaceId,
+        postgresUrl: env.LOCAL_DATABASE_URL!,
+      };
+      return this.run('migration', async (signal) => {
+        await this.discardPreview(signal);
+        const result = await this.options.worker.run(
+          {
+            kind: 'migration-preview',
+            profile: this.options.profile,
+            source,
+            destination: join(
+              await realpath(parent),
+              `Dots-migrated-${randomUUID()}`,
+            ),
+            backupDestination: join(
+              backupDirectory,
+              `pre-migration-${randomUUID()}.dotbackup`,
+            ),
+            passphrase: value.passphrase,
+          },
+          {
+            signal,
+            phase: (phase) => this.phase(phase),
+            stopWorkspace: () => {
+              this.guard(context);
+              this.migrationStopped = true;
+              return this.options.stopWorkspace();
+            },
+          },
+        );
+        if (!('operationId' in result))
+          throw new Error('Invalid migration preview');
+        this.preview = { ...result, migration: true };
+        this.operation = {
+          id: result.operationId,
+          kind: 'migration',
+          phase: 'ready',
+        };
+      });
+    }
+    if (method === 'migrate') {
+      const value = z.object({ operationId: z.uuid() }).strict().parse(input);
+      if (
+        !this.preview?.migration ||
+        this.preview.operationId !== value.operationId
+      )
+        throw new Error('Create a fresh migration preview');
+      if (!(await context.confirmMigration('activate'))) return;
+      this.guard(context, true);
+      if (
+        !this.preview?.migration ||
+        this.preview.operationId !== value.operationId
+      )
+        throw new Error('Migration preview changed');
+      return this.run(
+        'migration',
+        async (signal) => {
+          const result = await this.options.worker.run(
+            {
+              kind: 'migration-activate',
+              profile: this.options.profile,
+              operationId: value.operationId,
+            },
+            {
+              signal,
+              phase: (phase) => this.phase(phase),
+              stopWorkspace: () => {
+                this.guard(context);
+                this.migrationStopped = true;
+                return this.options.stopWorkspace();
+              },
+            },
+          );
+          if (!('workspaceDirectory' in result))
+            throw new Error('Migration activation did not complete');
+          this.preview = undefined;
+          this.migrationStopped = false;
+          await this.options.afterRestore();
+        },
+        value.operationId,
+      );
+    }
     if (method === 'restore') {
+      if (this.preview?.migration)
+        throw new Error('Use the migration activation control');
       const value = z
         .object({ operationId: z.uuid(), mode: z.enum(['new', 'replace']) })
         .strict()
@@ -457,7 +591,7 @@ export class StorageController {
     throw new Error('Unsupported storage command');
   }
   private run(
-    kind: 'backup' | 'restore',
+    kind: StorageOperationStatus['kind'],
     action: (signal: AbortSignal) => Promise<void>,
     id: string = randomUUID(),
   ) {
@@ -485,6 +619,8 @@ export class StorageController {
       )
       .finally(async () => {
         this.running = undefined;
+        if (kind === 'migration' && !this.preview)
+          await this.resumeMigrationSource();
         await this.emit().catch(() => {});
       });
     this.running = { controller, done };
@@ -678,7 +814,13 @@ export class StorageController {
       await atomicStorageWrite(file, JSON.stringify(warnings));
     }
     if (this.preview === preview) this.preview = undefined;
+    if (preview.migration) await this.resumeMigrationSource();
     await this.emit().catch(() => {});
+  }
+  private async resumeMigrationSource() {
+    if (!this.migrationStopped || this.disposed) return;
+    this.migrationStopped = false;
+    await this.options.afterRestore();
   }
   async cancelActive() {
     this.cancelling = true;

@@ -31,7 +31,7 @@ export function restorePool(url: string) {
   pool.on('error', () => {});
   return pool;
 }
-async function* records(
+export async function* records(
   path: string,
   signal: AbortSignal,
 ): AsyncGenerator<unknown> {

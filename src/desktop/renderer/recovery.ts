@@ -18,6 +18,17 @@ const storageRoot = createRoot(element('storage-root'));
 storagePanel.addEventListener('toggle', () => {
   storageRoot.render(storagePanel.open ? createElement(StorageSettings) : null);
 });
+// Migration closes the workspace document before copying. Keep its progress and
+// preview controls visible on the recovery screen that replaces that document.
+window.dotStorage?.onStatus((value) => {
+  if (value.operation?.kind === 'migration') storagePanel.open = true;
+});
+void window.dotStorage
+  ?.status()
+  .then((value) => {
+    if (value.operation?.kind === 'migration') storagePanel.open = true;
+  })
+  .catch(() => {});
 const scene = element('scene');
 const mascot = element<HTMLButtonElement>('mascot');
 const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')];

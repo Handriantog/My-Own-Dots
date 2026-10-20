@@ -17,6 +17,7 @@ import {
   type StorageInvocation,
 } from '../../src/desktop/host/storage-controller.js';
 import { BackupKeys } from '../../src/desktop/host/backup-keys.js';
+import { createWorkspaceManifest } from '../../src/shared/workspace-manifest.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -41,6 +42,7 @@ async function fixture(backend = 'gnome_libsecret') {
   });
   const worker = { run: vi.fn() };
   const request = vi.fn();
+  const afterRestore = vi.fn();
   const controller = new StorageController({
     profile: root,
     keys,
@@ -57,7 +59,7 @@ async function fixture(backend = 'gnome_libsecret') {
     }),
     request,
     stopWorkspace: vi.fn(),
-    afterRestore: vi.fn(),
+    afterRestore,
   });
   const context: StorageInvocation = {
     trusted: () => true,
@@ -65,6 +67,7 @@ async function fixture(backend = 'gnome_libsecret') {
     chooseDirectory: vi.fn(),
     chooseArchive: vi.fn(),
     confirmRestore: vi.fn(async () => true),
+    confirmMigration: vi.fn(async () => true),
   };
   return {
     root,
@@ -72,6 +75,7 @@ async function fixture(backend = 'gnome_libsecret') {
     keys,
     worker,
     request,
+    afterRestore,
     encryptString,
     controller,
     context,
@@ -97,6 +101,64 @@ it('rejects untrusted or navigated IPC sender', async () => {
   expect(f.worker.run).not.toHaveBeenCalled();
   expect(await readdir(f.root)).toEqual(['workspace']);
 });
+it('uses native destinations for migration and requires its matching preview before activation', async () => {
+  const f = await fixture();
+  const workspaceId = randomUUID(),
+    operationId = randomUUID(),
+    ownerId = randomUUID();
+  await createWorkspaceManifest(f.workspace, {
+    version: 1,
+    id: workspaceId,
+    ownerId,
+    storage: 'legacy-postgres',
+    schema: 1,
+  });
+  await writeFile(
+    join(f.workspace, '.env'),
+    'LOCAL_DATABASE_URL=postgres://fixture/source\nCONVERSATION_BACKEND=local\n',
+  );
+  vi.mocked(f.context.chooseDirectory).mockResolvedValue(f.root);
+  await f.controller.invoke('chooseBackupDirectory', undefined, f.context);
+  f.request.mockResolvedValue(
+    Response.json({ workspaceId, capabilities: ['workspace-snapshot-v1'] }),
+  );
+  f.worker.run.mockImplementation(async (command) =>
+    command.kind === 'migration-preview'
+      ? {
+          operationId,
+          workspaceId,
+          counts: { local_ai_threads: 2 },
+          coverage: [],
+          warnings: [],
+        }
+      : { workspaceDirectory: join(f.root, 'migrated') },
+  );
+  await f.controller.invoke(
+    'previewMigration',
+    { passphrase: 'fixture password' },
+    f.context,
+  );
+  expect(f.worker.run.mock.calls[0][0]).toMatchObject({
+    kind: 'migration-preview',
+    source: { directory: f.workspace, ownerId, workspaceId },
+    passphrase: 'fixture password',
+  });
+  expect((await f.controller.status()).preview).toMatchObject({
+    operationId,
+    migration: true,
+  });
+  await expect(
+    f.controller.invoke('restore', { operationId, mode: 'new' }, f.context),
+  ).rejects.toThrow(/migration/i);
+  await f.controller.invoke('migrate', { operationId }, f.context);
+  expect(f.worker.run.mock.calls.at(-1)![0]).toMatchObject({
+    kind: 'migration-activate',
+    operationId,
+  });
+  expect(f.context.confirmMigration).toHaveBeenCalledWith('activate');
+  expect((await f.controller.status()).preview).toBeUndefined();
+  await f.controller.close();
+});
 it('cancelled chooser creates nothing', async () => {
   const f = await fixture();
   vi.mocked(f.context.chooseDirectory).mockResolvedValueOnce(undefined);
@@ -106,6 +168,56 @@ it('cancelled chooser creates nothing', async () => {
   expect(await readdir(f.root)).toEqual(['workspace']);
   expect(f.request).not.toHaveBeenCalled();
 });
+it.each(['discard', 'failure'])(
+  'reopens the original workspace after migration %s',
+  async (scenario) => {
+    const f = await fixture();
+    const workspaceId = randomUUID(),
+      operationId = randomUUID();
+    await createWorkspaceManifest(f.workspace, {
+      version: 1,
+      id: workspaceId,
+      ownerId: randomUUID(),
+      storage: 'legacy-postgres',
+      schema: 1,
+    });
+    await writeFile(
+      join(f.workspace, '.env'),
+      'LOCAL_DATABASE_URL=postgres://fixture/source\n',
+    );
+    vi.mocked(f.context.chooseDirectory).mockResolvedValue(f.root);
+    await f.controller.invoke('chooseBackupDirectory', undefined, f.context);
+    f.request.mockResolvedValue(Response.json({ workspaceId }));
+    f.worker.run.mockImplementation(async (command, options) => {
+      if (command.kind === 'migration-preview') {
+        await options.stopWorkspace();
+        if (scenario === 'failure') throw new Error('Failed conversion');
+        return {
+          operationId,
+          workspaceId,
+          counts: {},
+          coverage: [],
+          warnings: [],
+        };
+      }
+      return { discarded: true };
+    });
+    const preview = f.controller.invoke(
+      'previewMigration',
+      { passphrase: 'fixture password' },
+      f.context,
+    );
+    if (scenario === 'failure')
+      await expect(preview).rejects.toThrow('Failed conversion');
+    else {
+      await preview;
+      expect(f.afterRestore).not.toHaveBeenCalled();
+      await f.controller.invoke('cancel', operationId, f.context);
+    }
+    expect(f.afterRestore).toHaveBeenCalledTimes(1);
+    await f.controller.close();
+  },
+);
 it('Linux basic_text never remembers password', async () => {
   const f = await fixture('basic_text');
   await expect(

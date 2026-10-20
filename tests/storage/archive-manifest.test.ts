@@ -24,6 +24,23 @@ describe('archive manifest', () => {
   it('accepts the versioned recovery identity and explicit omissions', () => {
     expect(parseArchiveManifest(JSON.stringify(manifest))).toEqual(manifest);
   });
+  it('accepts a unified SQLite descriptor while retaining legacy readers', () => {
+    const unified = {
+      ...manifest,
+      version: 2,
+      minimumReader: 2,
+      storage: { engine: 'sqlite', schema: 2 },
+    };
+    expect(parseArchiveManifest(JSON.stringify(unified))).toEqual(unified);
+    for (const storage of [
+      undefined,
+      { engine: 'postgres', schema: 2 },
+      { engine: 'sqlite', schema: 999 },
+    ])
+      expect(() =>
+        parseArchiveManifest(JSON.stringify({ ...unified, storage })),
+      ).toThrow();
+  });
   it.each([
     { version: 2 },
     { minimumReader: 2 },

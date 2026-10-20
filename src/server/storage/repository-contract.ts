@@ -1,5 +1,6 @@
 import type { RuntimePolicy } from './runtime-policy.js';
 import type { MemoryJobRepository } from '../memory-jobs.js';
+import type { SQLiteSnapshot } from './sqlite-snapshot.js';
 import type { MemoryAccess } from '../memory-access.js';
 import type { DreamPublication } from '../dream-publication.js';
 import type { ContextBuilder } from '../context-builder.js';
@@ -23,6 +24,7 @@ export const storageLimits = {
   bytes: 16 * 1024 * 1024,
 } as const;
 interface Repositories {
+  snapshot: SQLiteSnapshot;
   store: Store;
   workspace: WorkspaceStore;
   memory: MemoryStore;
@@ -42,6 +44,7 @@ interface Repositories {
 }
 // Explicit names are the wire protocol. Never dispatch arbitrary paths/prototype properties.
 export const repositoryMethods = {
+  snapshot: ['capture'],
   policy: [
     'turnState',
     'pageContext',
@@ -250,22 +253,24 @@ export type RepositoryMethod = {
   [G in Group]: `${G}.${Name<G> & string}`;
 }[Group];
 // AbortSignals stay in the calling process. Folder I/O receives a worker-local signal.
-type WireArgs<M extends RepositoryMethod> = M extends 'folders.listDirectory'
-  ? [dotId: string, grantId: string, relativePath?: string]
-  : M extends 'folders.readFile'
-    ? [dotId: string, grantId: string, relativePath: string]
-    : M extends 'folders.writeFile'
-      ? [
-          dotId: string,
-          grantId: string,
-          relativePath: string,
-          input: Parameters<FolderAccessService['writeFile']>[3],
-        ]
-      : M extends `${infer G extends Group}.${infer N}`
-        ? N extends Name<G>
-          ? Parameters<Method<G, N>>
-          : never
-        : never;
+type WireArgs<M extends RepositoryMethod> = M extends 'snapshot.capture'
+  ? [destination: string]
+  : M extends 'folders.listDirectory'
+    ? [dotId: string, grantId: string, relativePath?: string]
+    : M extends 'folders.readFile'
+      ? [dotId: string, grantId: string, relativePath: string]
+      : M extends 'folders.writeFile'
+        ? [
+            dotId: string,
+            grantId: string,
+            relativePath: string,
+            input: Parameters<FolderAccessService['writeFile']>[3],
+          ]
+        : M extends `${infer G extends Group}.${infer N}`
+          ? N extends Name<G>
+            ? Parameters<Method<G, N>>
+            : never
+          : never;
 export type RepositoryArguments<M extends RepositoryMethod> = WireArgs<M>;
 export type RepositoryResult<M extends RepositoryMethod> =
   M extends `${infer G extends Group}.${infer N}`

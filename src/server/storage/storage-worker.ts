@@ -1,4 +1,5 @@
 import { RuntimePolicy } from './runtime-policy.js';
+import { SQLiteSnapshot } from './sqlite-snapshot.js';
 import { MemoryJobs } from '../memory-jobs.js';
 import { LegacyEvidence, type StorageOptions } from './legacy-evidence.js';
 import { ContextBuilder } from '../context-builder.js';
@@ -26,6 +27,7 @@ import {
 } from './repository-contract.js';
 
 const asynchronous = new Set([
+  'snapshot.capture',
   'jobs.publishDream',
   'publication.review',
   'publication.share',
@@ -109,6 +111,7 @@ export async function serveStorage(
     new MemoryAccess(workspace, store),
   );
   const repositories = {
+    snapshot: new SQLiteSnapshot(db, ownerId),
     policy: new RuntimePolicy(store, workspace),
     evidence,
     jobs: pg
@@ -228,6 +231,8 @@ export async function serveStorage(
     const handler = handlers.get(request.method)!;
     if (asyncMethods.has(request.method)) {
       const args = [...request.args];
+      if (request.method === 'snapshot.capture')
+        args[1] = item.controller.signal;
       if (
         request.method === 'folders.readFile' ||
         request.method === 'folders.listDirectory'
