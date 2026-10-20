@@ -5,6 +5,7 @@ import './style.css';
 import './editor.css';
 import './desktop-chat.css';
 import './workspace.css';
+import './settings-page.css';
 import { surfaceFromSearch } from './workspace-navigation';
 import { watchSystemTheme } from './theme';
 watchSystemTheme();
