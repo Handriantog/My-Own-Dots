@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:net';
@@ -559,4 +566,79 @@ it('retries failed Docker preparation after stop and clears the degraded status 
   expect((await backend.start()).warning).toBeUndefined();
   expect(backend.status).not.toHaveProperty('warning');
   expect((await readFile(log, 'utf8')).trim().split('\n')).toHaveLength(2);
+});
+it('does not recreate a missing explicitly selected workspace', async () => {
+  const f = await fixture();
+  const selected = path.join(f.root, 'missing-drive', 'workspace');
+  await mkdir(path.join(f.root, 'data'));
+  await writeFile(
+    path.join(f.root, 'data/workspace-location.json'),
+    JSON.stringify({ directory: selected }),
+  );
+  await expect(f.backend.start()).rejects.toThrow(
+    /missing|unavailable|restore/i,
+  );
+  await expect(readFile(path.join(selected, '.env'))).rejects.toMatchObject({
+    code: 'ENOENT',
+  });
+  expect(
+    JSON.parse(
+      await readFile(path.join(f.root, 'data/workspace-location.json'), 'utf8'),
+    ).directory,
+  ).toBe(selected);
+});
+it('uses a persisted manifest identity without changing a legacy workspace backend', async () => {
+  const f = await fixture();
+  const id = randomUUID();
+  await writeFile(
+    path.join(f.workspace, 'workspace.json'),
+    JSON.stringify({
+      version: 1,
+      id,
+      ownerId: 'opendots-owner',
+      storage: 'legacy-postgres',
+      schema: 1,
+    }),
+  );
+  const state = await f.backend.start();
+  expect(
+    (await (await fetch(state.url + '/api/desktop/identity')).json())
+      .workspaceId,
+  ).toBe(id);
+});
+it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  'reports a read-only selected workspace without changing its configuration',
+  async () => {
+    const f = await fixture();
+    const original = await readFile(path.join(f.workspace, '.env'), 'utf8');
+    await chmod(f.workspace, 0o500);
+    try {
+      await expect(f.backend.start()).rejects.toThrow(/not writable/);
+      expect(await readFile(path.join(f.workspace, '.env'), 'utf8')).toBe(
+        original,
+      );
+      expect(f.backend.status.phase).toBe('error');
+    } finally {
+      await chmod(f.workspace, 0o700);
+    }
+  },
+);
+it('rejects a mismatched manifest owner before starting a backend', async () => {
+  const f = await fixture();
+  await writeFile(
+    path.join(f.workspace, 'workspace.json'),
+    JSON.stringify({
+      version: 1,
+      id: randomUUID(),
+      ownerId: 'different-owner',
+      storage: 'legacy-postgres',
+      schema: 1,
+    }),
+  );
+  const config =
+    (await readFile(path.join(f.workspace, '.env'), 'utf8')) +
+    'OWNER_ID=config-owner\n';
+  await writeFile(path.join(f.workspace, '.env'), config);
+  await expect(f.backend.start()).rejects.toThrow(/owner does not match/);
+  expect(await readFile(path.join(f.workspace, '.env'), 'utf8')).toBe(config);
 });

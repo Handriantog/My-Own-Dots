@@ -1,6 +1,15 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, writeFile, chmod, stat } from 'node:fs/promises';
+import { randomBytes, randomUUID } from 'node:crypto';
+import {
+  mkdir,
+  readFile,
+  writeFile,
+  chmod,
+  stat,
+  open,
+  rm,
+} from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { connect } from 'node:net';
 import path from 'node:path';
 import { parseEnv } from 'node:util';
@@ -12,6 +21,8 @@ import {
   withRestoreLock,
 } from '../../server/storage/restore-journal.js';
 import type { WorkspaceStatus } from '../shared/workspace-contract.js';
+import { resolveWorkspaceLocation } from './workspace-location.js';
+import { readWorkspaceManifest } from '../../shared/workspace-manifest.js';
 
 export interface WorkspaceBackendOptions {
   bundle: string;
@@ -36,6 +47,7 @@ export interface WorkspaceBackendConfiguration {
   workspace: string;
   envFile: string;
   database: string;
+  workspaceId?: string;
 }
 const editable = new Set([
   'HOST',
@@ -201,14 +213,18 @@ export class WorkspaceBackend {
     const inherited = this.options.environment ?? process.env;
     let selected: string | undefined;
     try {
-      selected = (
-        JSON.parse(
-          await readFile(
-            path.join(this.options.data, 'workspace-location.json'),
-            'utf8',
-          ),
-        ) as { directory?: string }
-      ).directory;
+      const selection = JSON.parse(
+        await readFile(
+          path.join(this.options.data, 'workspace-location.json'),
+          'utf8',
+        ),
+      ) as { directory?: unknown };
+      if (
+        typeof selection.directory !== 'string' ||
+        !path.isAbsolute(selection.directory)
+      )
+        throw new Error('Saved workspace path is invalid');
+      selected = selection.directory;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
         throw new Error(
@@ -216,13 +232,50 @@ export class WorkspaceBackend {
           { cause: error },
         );
     }
-    const workspace = path.resolve(
-      inherited.DOTS_WORKSPACE_DIR ||
-        selected ||
-        this.options.sourceRoot ||
-        path.join(this.options.data, 'workspace'),
-    );
-    await mkdir(workspace, { recursive: true });
+    const explicit =
+      inherited.DOTS_WORKSPACE_DIR || selected || this.options.sourceRoot;
+    const { workspace } = resolveWorkspaceLocation({
+      platform: process.platform,
+      home: homedir(),
+      localAppData: inherited.LOCALAPPDATA,
+      xdgDataHome: inherited.XDG_DATA_HOME,
+      electronData: this.options.data,
+      selected: explicit ? path.resolve(explicit) : undefined,
+      executable: this.options.executable ?? process.execPath,
+    });
+    if (explicit) {
+      try {
+        if (!(await stat(workspace)).isDirectory())
+          throw new Error('Not a directory');
+      } catch (error) {
+        throw new Error(
+          `Selected workspace is missing or unavailable: ${workspace}. Reconnect the disk or choose its existing folder.`,
+          { cause: error },
+        );
+      }
+    } else await mkdir(workspace, { recursive: true });
+    const probe = path.join(workspace, `.dots-workspace-check-${randomUUID()}`);
+    try {
+      const handle = await open(probe, 'wx', 0o600);
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+        await rm(probe, { force: true });
+      }
+    } catch (error) {
+      throw new Error(`Workspace is not writable: ${workspace}`, {
+        cause: error,
+      });
+    }
+    const manifest = await readWorkspaceManifest(workspace);
+    if (
+      manifest &&
+      (manifest.storage !== 'legacy-postgres' || manifest.schema !== 1)
+    )
+      throw new Error(
+        'This workspace requires a compatible SQLite storage runtime',
+      );
     const envFile = path.join(workspace, '.env');
     let contents: string;
     try {
@@ -246,11 +299,23 @@ export class WorkspaceBackend {
       );
     }
     const env = nativeExecutableEnvironment({ ...inherited, ...values });
+    if (manifest) {
+      if (env.OWNER_ID && env.OWNER_ID !== manifest.ownerId)
+        throw new Error(
+          'Workspace manifest owner does not match its configuration',
+        );
+      env.OWNER_ID = manifest.ownerId;
+    }
     const database = path.resolve(
       workspace,
       env.DATABASE_PATH || 'data/opendots.sqlite',
     );
-    this.config = { workspace, envFile, database };
+    this.config = {
+      workspace,
+      envFile,
+      database,
+      ...(manifest ? { workspaceId: manifest.id } : {}),
+    };
     return { env, contents };
   }
   /** Host must call this only after an explicit native directory choice. Existing files stay in place. */
@@ -383,7 +448,8 @@ export class WorkspaceBackend {
       throw new Error('PORT must be an integer from 1 to 65535.');
     const url = `http://${host === '::1' ? '[::1]' : host}:${port}`;
     await mkdir(path.dirname(this.config!.database), { recursive: true });
-    const workspaceId = workspaceIdentity(this.config!.database);
+    const workspaceId =
+      this.config!.workspaceId ?? workspaceIdentity(this.config!.database);
     if (await portOpen(host, port)) {
       if ((await this.identity(url, ownerToken))?.workspaceId !== workspaceId)
         throw new Error(

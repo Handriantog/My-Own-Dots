@@ -1,4 +1,5 @@
 import './local-defaults.js';
+import { readWorkspaceManifest } from '../shared/workspace-manifest.js';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { LegacySnapshotSource } from './storage/legacy-snapshot.js';
@@ -37,12 +38,28 @@ if (
     'External binding requires an OWNER_TOKEN of at least 24 characters.',
   );
 const database = process.env.DATABASE_PATH ?? 'data/opendots.sqlite';
+const manifest = await readWorkspaceManifest(
+  dirname(resolve(process.env.DOTS_WORKSPACE_ENV || '.env')),
+);
+if (
+  manifest &&
+  (manifest.storage !== 'legacy-postgres' || manifest.schema !== 1)
+)
+  throw new Error(
+    'This workspace requires a compatible SQLite storage runtime',
+  );
+if (
+  manifest &&
+  process.env.OWNER_ID &&
+  manifest.ownerId !== process.env.OWNER_ID
+)
+  throw new Error('Workspace manifest owner does not match its configuration');
 claimWorkspaceDatabase(database);
-const workspaceId = workspaceIdentity(database);
+const workspaceId = manifest?.id ?? workspaceIdentity(database);
 const store = new Store(database);
 const workspace = new WorkspaceStore(
   database,
-  process.env.OWNER_ID ?? 'opendots-owner',
+  manifest?.ownerId ?? process.env.OWNER_ID ?? 'opendots-owner',
 );
 const config: PlatformConfig = {
   ...localAi,
