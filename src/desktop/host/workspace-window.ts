@@ -118,10 +118,26 @@ export class WorkspaceWindow {
               title:
                 kind === 'backup'
                   ? 'Choose a backup folder outside the workspace'
-                  : 'Choose a parent folder for the restored workspace',
+                  : kind === 'move'
+                    ? 'Choose a parent folder for the moved workspace'
+                    : 'Choose a parent folder for the restored workspace',
               properties: ['openDirectory', 'createDirectory'],
             });
             return chosen.canceled ? undefined : chosen.filePaths[0];
+          },
+          openDirectory: async (directory) => {
+            const error = await shell.openPath(directory);
+            if (error) throw new Error(error);
+          },
+          chooseBackupFile: async (defaultPath) => {
+            const chosen = await dialog.showSaveDialog(window, {
+              title: 'Save a Dot backup',
+              buttonLabel: 'Choose location',
+              defaultPath,
+              filters: [{ name: 'Dot backup', extensions: ['dotbackup'] }],
+              properties: ['createDirectory', 'showOverwriteConfirmation'],
+            });
+            return chosen.canceled ? undefined : chosen.filePath;
           },
           chooseArchive: async () => {
             const chosen = await dialog.showOpenDialog(window, {
@@ -169,21 +185,46 @@ export class WorkspaceWindow {
               process.env.DOTS_WORKSPACE_URL
             )
               throw new Error(
-                'The launcher fixes your workspace location. Remove its workspace override before migrating.',
+                'The launcher fixes your workspace location. Remove its workspace override before upgrading storage.',
               );
             const result = await dialog.showMessageBox(window, {
               type: 'warning',
               message:
                 mode === 'prepare'
-                  ? 'Back up and prepare a Docker-free workspace?'
-                  : 'Switch to the verified SQLite workspace?',
+                  ? 'Upgrade workspace storage?'
+                  : 'Finish storage upgrade?',
               detail:
                 mode === 'prepare'
-                  ? 'Chat will close during migration. Save page drafts first. Dot will verify an encrypted backup and show a preview before switching. The original workspace and Docker storage are kept.'
+                  ? 'Save page drafts first. Dot will close chat, create and verify your backup, then prepare an upgraded copy. Review it before finishing. Your original workspace is kept.'
                   : 'Dot will check that the original data and backup have not changed. Automation will stay paused until you resume it. The original workspace and Docker storage are kept.',
               buttons: [
                 'Cancel',
-                mode === 'prepare' ? 'Back Up and Prepare' : 'Switch Workspace',
+                mode === 'prepare' ? 'Start Upgrade' : 'Finish Upgrade',
+              ],
+              defaultId: 0,
+              cancelId: 0,
+            });
+            return result.response === 1;
+          },
+          confirmMove: async (mode) => {
+            if (
+              process.env.DOTS_WORKSPACE_DIR ||
+              process.env.DOTS_WORKSPACE_URL
+            )
+              throw new Error(
+                'The launcher fixes your workspace location. Remove its workspace override before moving.',
+              );
+            const result = await dialog.showMessageBox(window, {
+              type: 'warning',
+              message:
+                mode === 'prepare'
+                  ? 'Prepare a workspace copy at a new location?'
+                  : 'Switch to the verified workspace copy?',
+              detail:
+                'Open conversations and unsaved drafts will close. Dot verifies the copy before switching and keeps the original folder. Schedules pause and external access needs fresh approval.',
+              buttons: [
+                'Cancel',
+                mode === 'prepare' ? 'Prepare Copy' : 'Switch Workspace',
               ],
               defaultId: 0,
               cancelId: 0,

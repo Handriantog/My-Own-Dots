@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { readArchive, writeArchive } from '../../server/storage/archive.js';
 import { RestoreService } from '../../server/storage/restore.js';
 import { MigrationService } from '../../server/storage/migration-service.js';
+import { WorkspaceMoveService } from '../../server/storage/workspace-move.js';
 import type {
   ArchiveWorkerCommand,
   ArchiveWorkerResult,
@@ -66,6 +67,16 @@ async function execute(
       };
       process.send?.({ type: 'quiesce' });
     });
+  if (command.kind === 'move-preview' || command.kind === 'move-activate') {
+    phase('verify');
+    const movement = new WorkspaceMoveService({
+      profile: command.profile,
+      stopWorkspace,
+    });
+    return command.kind === 'move-preview'
+      ? movement.prepare({ ...command, signal })
+      : movement.activate(command.operationId, signal);
+  }
   if (
     command.kind === 'migration-preview' ||
     command.kind === 'migration-activate'

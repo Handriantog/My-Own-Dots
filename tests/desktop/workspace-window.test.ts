@@ -52,6 +52,7 @@ vi.mock('electron', async () => {
     safeStorage: { isEncryptionAvailable: () => false },
     dialog: {
       showOpenDialog: vi.fn(),
+      showSaveDialog: vi.fn(),
       showMessageBox: vi.fn(async () => ({ response: 1 })),
     },
     shell: { openExternal: host.external },

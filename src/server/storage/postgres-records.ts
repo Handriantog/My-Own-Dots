@@ -77,8 +77,10 @@ export async function validatePostgresGraph(
   );
   if (cross.rowCount)
     throw new Error('Ambiguous cross-workspace memory job reference');
+  // Compact jobs store conversation boundary hashes in source_ids. Only Dream
+  // jobs refer to episode chunks; both kinds still require owned thread links.
   const sources = await client.query(
-    `SELECT id FROM memory_jobs j WHERE owner_id=$1 AND dot_id=ANY($2::text[])
+    `SELECT id FROM memory_jobs j WHERE owner_id=$1 AND dot_id=ANY($2::text[]) AND kind='dream'
      AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(j.source_ids) source(id)
        WHERE source.id NOT IN (${selectedSources})) LIMIT 1`,
     [ownerId, dotIds],

@@ -21,12 +21,17 @@ storagePanel.addEventListener('toggle', () => {
 // Migration closes the workspace document before copying. Keep its progress and
 // preview controls visible on the recovery screen that replaces that document.
 window.dotStorage?.onStatus((value) => {
-  if (value.operation?.kind === 'migration') storagePanel.open = true;
+  if (value.operation?.kind === 'migration' || value.operation?.kind === 'move')
+    storagePanel.open = true;
 });
 void window.dotStorage
   ?.status()
   .then((value) => {
-    if (value.operation?.kind === 'migration') storagePanel.open = true;
+    if (
+      value.operation?.kind === 'migration' ||
+      value.operation?.kind === 'move'
+    )
+      storagePanel.open = true;
   })
   .catch(() => {});
 const scene = element('scene');

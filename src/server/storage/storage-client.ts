@@ -181,6 +181,7 @@ export class StorageClient {
       workerData: {
         database: options.database,
         ownerId: options.ownerId,
+        machineId: options.machineId,
         engine: options.engine,
         postgresUrl: options.postgresUrl,
         pinnedTokenLimit: options.pinnedTokenLimit,

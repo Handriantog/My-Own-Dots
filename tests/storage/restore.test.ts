@@ -13,6 +13,7 @@ import { storageWorkspace } from '../fixtures/storage-workspace.js';
 import { LegacySnapshotSource } from '../../src/server/storage/legacy-snapshot.js';
 import { writeArchive } from '../../src/server/storage/archive.js';
 import { RestoreService } from '../../src/server/storage/restore.js';
+import { MemoryJobs } from '../../src/server/memory-jobs.js';
 import {
   restorePostgres,
   restoredDatabaseName,
@@ -23,9 +24,24 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
-async function fixture() {
+async function fixture(includeCompaction = false) {
   const f = await storageWorkspace();
   cleanups.push(f.dispose);
+  const compact = includeCompaction
+    ? await new MemoryJobs(f.pg, f.ownerId).enqueue({
+        kind: 'compact',
+        dotId: f.dot.id,
+        threadId: f.thread,
+        sourceIds: ['a'.repeat(64)],
+        origin: 'manual',
+        logicalKey: `compact:${f.thread}:${'a'.repeat(64)}`,
+      })
+    : undefined;
+  if (compact)
+    await f.pg.query(
+      "UPDATE memory_jobs SET state='succeeded' WHERE owner_id=$1 AND id=$2",
+      [f.ownerId, compact.id],
+    );
   f.store.createTask('Do not run after restoration', 60);
   f.workspace.computers.patch(f.dot.id, { enabled: true, files: true });
   const manifest = await new LegacySnapshotSource({
@@ -61,6 +77,7 @@ async function fixture() {
   });
   return {
     ...f,
+    compact,
     manifest,
     archive,
     passphrase,
@@ -82,6 +99,36 @@ async function fixture() {
 describe.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
   'workspace restore',
   () => {
+    it('backs up and restores compaction fingerprints alongside Dream source references', async () => {
+      const f = await fixture(true);
+      await f.service.prepareRestore(f.input);
+      const env = parseEnv(await readFile(join(f.destination, '.env'), 'utf8'));
+      const restored = new Pool({ connectionString: env.LOCAL_DATABASE_URL });
+      try {
+        const result = await restored.query(
+          'SELECT kind,state,thread_id,source_ids FROM memory_jobs WHERE owner_id=$1 AND id=$2',
+          [f.ownerId, f.compact!.id],
+        );
+        expect(result.rows).toEqual([
+          {
+            kind: 'compact',
+            state: 'succeeded',
+            thread_id: f.thread,
+            source_ids: ['a'.repeat(64)],
+          },
+        ]);
+        expect(
+          (
+            await restored.query(
+              'SELECT source_ids FROM memory_jobs WHERE owner_id=$1 AND id=$2',
+              [f.ownerId, f.job.id],
+            )
+          ).rows[0].source_ids,
+        ).toEqual(f.job.sourceIds);
+      } finally {
+        await restored.end();
+      }
+    });
     it('never populates or deletes a pre-existing PostgreSQL target', async () => {
       const f = await fixture();
       const operationId = randomUUID();

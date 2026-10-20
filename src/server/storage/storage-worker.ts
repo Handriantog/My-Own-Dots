@@ -1,5 +1,6 @@
 import { RuntimePolicy } from './runtime-policy.js';
 import { SQLiteSnapshot } from './sqlite-snapshot.js';
+import { bindPortableWorkspace } from './portable-binding.js';
 import { MemoryJobs } from '../memory-jobs.js';
 import { LegacyEvidence, type StorageOptions } from './legacy-evidence.js';
 import { ContextBuilder } from '../context-builder.js';
@@ -64,6 +65,8 @@ export async function serveStorage(
     store = new Store(':memory:', db);
     workspace = new WorkspaceStore(':memory:', ownerId, db);
     if (options.engine !== 'legacy-postgres') initializeSQLiteSchema(db);
+    if (options.machineId && options.engine !== 'legacy-postgres')
+      bindPortableWorkspace(db, options.machineId);
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');

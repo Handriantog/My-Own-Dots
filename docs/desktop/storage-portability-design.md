@@ -4,6 +4,12 @@ Date: 2026-10-19
 
 Approved design, 2026-10-19. Core Dot data will live in an app-managed workspace, survive Docker cleanup, and support verified workspace recovery and individual Dot transfer. Typed and voice chat must retain their current persistence guarantees and pass measured latency checks before the storage migration becomes the default.
 
+## Owner amendment: simpler backup and restore (2026-10-20)
+
+The owner replaced mandatory manual-backup encryption with optional password protection, off by default. The primary UI has only Backup and Restore: Backup starts with a native save dialog; Restore starts with a file picker and requests a password only for encrypted archives. Unencrypted backups retain format, integrity, ownership, path and size validation. Existing encrypted archives remain supported. Automatic backups continue to require explicit OS-protected password setup under advanced options.
+
+A one-time storage upgrade includes its backup and verification in one guided flow under advanced options. Restore and upgrade prepare a sibling workspace automatically, keep the original and request confirmation before switching. The upgrade control disappears once the SQLite workspace is active. These amendments supersede conflicting manual-password and separate-picker requirements below and in the original stage-one plan. Performance/default and native-platform acceptance gates are unchanged.
+
 ## Requirements and scope
 
 The owner approved consolidating core storage in SQLite, automatic workspace backups, and Dot export/import. The owner additionally requires macOS, Windows, and Linux support, asks for workspace placement alongside the installation, and wants to preserve chat and voice performance.

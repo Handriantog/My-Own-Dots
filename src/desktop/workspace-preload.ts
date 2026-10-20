@@ -81,11 +81,16 @@ if (
   const storage: DesktopStorageBridge = {
     status: () => ipcRenderer.invoke('dot:storage:status'),
     chooseBackupDirectory: () => userAction('chooseBackupDirectory'),
+    chooseBackupFile: () => userAction('chooseBackupFile'),
+    chooseRestoreArchive: () => userAction('chooseRestoreArchive'),
     backupNow: (value) => userAction('backupNow', value),
     setAutomatic: (value) => userAction('setAutomatic', value),
     previewRestore: (value) => userAction('previewRestore', value),
     previewMigration: (value) => userAction('previewMigration', value),
     migrate: (value) => userAction('migrate', value),
+    openWorkspaceFolder: () => userAction('openWorkspaceFolder'),
+    chooseWorkspaceMove: () => userAction('chooseWorkspaceMove'),
+    moveWorkspace: (value) => userAction('moveWorkspace', value),
     restore: (value) => userAction('restore', value),
     cancel: (id) => userAction('cancel', id),
     onStatus(callback) {

@@ -64,6 +64,7 @@ const storage = await StorageClient.open({
   database,
   ownerId: manifest?.ownerId ?? process.env.OWNER_ID ?? 'opendots-owner',
   engine: manifest?.storage ?? 'legacy-postgres',
+  machineId: process.env.DOTS_PORTABLE_MACHINE_ID,
   postgresUrl: localAi.localDatabaseUrl,
   pinnedTokenLimit: localAi.memoryPinnedTokenLimit,
 });

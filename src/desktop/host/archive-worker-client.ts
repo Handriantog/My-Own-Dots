@@ -2,11 +2,19 @@ import { fork } from 'node:child_process';
 import { dirname } from 'node:path';
 import type { ArchiveManifest } from '../../shared/storage-archive.js';
 import type { MigrationSource } from '../../server/storage/migration-service.js';
+import type { WorkspaceMoveSource } from '../../server/storage/workspace-move.js';
 import type {
   StorageOperationStatus,
   StorageRestorePreview,
 } from '../shared/storage-contract.js';
 export type ArchiveWorkerCommand =
+  | {
+      kind: 'move-preview';
+      profile: string;
+      source: WorkspaceMoveSource;
+      destination: string;
+    }
+  | { kind: 'move-activate'; profile: string; operationId: string }
   | {
       kind: 'migration-preview';
       profile: string;

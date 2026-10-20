@@ -97,8 +97,6 @@ export async function writeArchive(
   const limits = archiveLimits(options.limits);
   const json = JSON.stringify(options.manifest);
   const manifest = validate(json, limits);
-  if (manifest.kind === 'workspace-backup' && !options.passphrase)
-    throw new Error('A recovery passphrase is required');
   options.signal.throwIfAborted();
   const temporary = await mkdtemp(
     join(dirname(options.destination), `.${basename(options.destination)}-`),
@@ -223,7 +221,7 @@ export async function readArchive(
       options.passphrase,
       signal,
     );
-    const { encrypted, stream: compressed } = source;
+    const { stream: compressed } = source;
     let expanded = 0;
     let expandedLimit = limits.maxManifestBytes + 4 * 1024 * 1024;
     const bounded = new Transform({
@@ -278,8 +276,6 @@ export async function readArchive(
               ),
               limits,
             );
-            if (manifest.kind === 'workspace-backup' && !encrypted)
-              throw new Error('Workspace backups must be encrypted');
             for (const entry of manifest.entries)
               entries.set(entry.path, entry);
             expandedLimit =

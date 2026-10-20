@@ -1,9 +1,10 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { DatabaseSync } from 'node:sqlite';
+import { readWorkspaceManifest } from '../../shared/workspace-manifest.js';
 export const migrationProofSchema = z
   .object({
     source: z
@@ -24,6 +25,22 @@ export const migrationProofSchema = z
   })
   .strict();
 export type MigrationProof = z.infer<typeof migrationProofSchema>;
+export const movementProofSchema = z
+  .object({
+    directory: z.string(),
+    sqlitePath: z.string(),
+    workspaceId: z.uuid(),
+    files: z.array(
+      z
+        .object({
+          path: z.string(),
+          sha256: z.string().regex(/^[a-f0-9]{64}$/),
+        })
+        .strict(),
+    ),
+    targetPaths: z.array(z.string()),
+  })
+  .strict();
 
 export const restoreJournalSchema = z
   .object({
@@ -35,6 +52,7 @@ export const restoreJournalSchema = z
     postgresTarget: z.string().optional(),
     storage: z.enum(['legacy-postgres', 'sqlite']).optional(),
     migration: migrationProofSchema.optional(),
+    movement: movementProofSchema.optional(),
     postgresOid: z.string().optional(),
     cleanupPending: z.boolean().optional(),
     databaseRemoved: z.boolean().optional(),
@@ -78,13 +96,107 @@ export async function atomicStorageWrite(path: string, value: string) {
     await rm(temporary, { force: true });
   }
 }
-export async function readSelection(profile: string): Promise<string | null> {
+const portableProfileSchema = z
+  .object({
+    version: z.literal(1),
+    rootFromProfile: z.string().min(1).max(4096),
+  })
+  .strict();
+const portableSelectionSchema = z
+  .object({
+    version: z.literal(2),
+    relativeToProfile: z.string().min(1).max(4096),
+    workspaceId: z.uuid(),
+  })
+  .strict();
+function relativePath(value: string) {
+  if (
+    isAbsolute(value) ||
+    value.includes('\\') ||
+    value.includes(':') ||
+    value.includes('\0')
+  )
+    throw new Error('Invalid portable selection path');
+  return value.split('/');
+}
+function contains(root: string, directory: string) {
+  const part = relative(root, directory);
+  return !isAbsolute(part) && part !== '..' && !part.startsWith('..' + sep);
+}
+async function portableProfileRoot(profile: string) {
+  let contents: string;
   try {
-    return await readFile(join(profile, 'workspace-location.json'), 'utf8');
+    contents = await readFile(join(profile, 'portable-profile.json'), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  const value = portableProfileSchema.parse(JSON.parse(contents));
+  return resolve(profile, ...relativePath(value.rootFromProfile));
+}
+export async function configurePortableProfile(profile: string, root: string) {
+  if (!isAbsolute(profile) || !isAbsolute(root))
+    throw new Error('Portable profile paths must be absolute');
+  await mkdir(profile, { recursive: true, mode: 0o700 });
+  await atomicStorageWrite(
+    join(profile, 'portable-profile.json'),
+    JSON.stringify({
+      version: 1,
+      rootFromProfile: relative(profile, root).split(sep).join('/') || '.',
+    }),
+  );
+}
+export async function writeSelection(profile: string, directory: string) {
+  if (!isAbsolute(directory))
+    throw new Error('Workspace selection must be absolute');
+  const root = await portableProfileRoot(profile);
+  const manifest =
+    root && contains(root, directory)
+      ? await readWorkspaceManifest(directory)
+      : undefined;
+  await atomicStorageWrite(
+    join(profile, 'workspace-location.json'),
+    JSON.stringify(
+      manifest
+        ? {
+            version: 2,
+            relativeToProfile:
+              relative(profile, directory).split(sep).join('/') || '.',
+            workspaceId: manifest.id,
+          }
+        : { directory },
+    ),
+  );
+}
+export async function readSelection(
+  profile: string,
+  checkIdentity = true,
+): Promise<string | null> {
+  let contents: string;
+  try {
+    contents = await readFile(join(profile, 'workspace-location.json'), 'utf8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
   }
+  const value = JSON.parse(contents);
+  if (value.version !== 2) return contents;
+  const selection = portableSelectionSchema.parse(value),
+    root = await portableProfileRoot(profile);
+  const directory = resolve(
+    profile,
+    ...relativePath(selection.relativeToProfile),
+  );
+  if (!root || !contains(root, directory))
+    throw new Error('Portable workspace selection escapes its root');
+  if (
+    checkIdentity &&
+    (await readWorkspaceManifest(directory))?.id !== selection.workspaceId
+  )
+    throw new Error(
+      'Selected portable workspace is missing or its identity changed',
+    );
+  return JSON.stringify({ directory });
 }
 export function journalPath(profile: string, id: string) {
   z.uuid().parse(id);

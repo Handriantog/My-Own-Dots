@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LegacySnapshotSource } from '../../src/server/storage/legacy-snapshot.js';
 import { storageWorkspace } from '../fixtures/storage-workspace.js';
+import { MemoryJobs } from '../../src/server/memory-jobs.js';
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map((close) => close()));
@@ -77,6 +78,26 @@ describe.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       await expect(
         source.capture(f.directory, new AbortController().signal),
       ).rejects.toThrow(/reference/i);
+      await expect(stat(f.directory)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+    it('still rejects compaction jobs pointing outside the workspace', async () => {
+      const f = await fixture();
+      await new MemoryJobs(f.pg, f.ownerId).enqueue({
+        kind: 'compact',
+        dotId: f.dot.id,
+        threadId: 'unowned-thread',
+        sourceIds: ['a'.repeat(64)],
+        origin: 'manual',
+        logicalKey: 'compact:unowned-thread',
+      });
+      const source = new LegacySnapshotSource({
+        ...f,
+        conversationBackend: 'local',
+        owned: true,
+      });
+      await expect(
+        source.capture(f.directory, new AbortController().signal),
+      ).rejects.toThrow(/memory job reference/i);
       await expect(stat(f.directory)).rejects.toMatchObject({ code: 'ENOENT' });
     });
     it.each(['evidence', 'processed source'])(

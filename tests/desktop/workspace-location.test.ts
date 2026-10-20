@@ -13,11 +13,17 @@ import { afterEach, expect, it } from 'vitest';
 import {
   resolveWorkspaceLocation,
   readPortableLayout,
+  portableConfiguration,
 } from '../../src/desktop/host/workspace-location.js';
 import {
   createWorkspaceManifest,
   readWorkspaceManifest,
 } from '../../src/shared/workspace-manifest.js';
+import {
+  configurePortableProfile,
+  readSelection,
+  writeSelection,
+} from '../../src/server/storage/restore-journal.js';
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0))
@@ -160,4 +166,76 @@ it('reading absent or invalid manifests never creates a workspace', async () => 
   await expect(readWorkspaceManifest(root)).rejects.toThrow(
     /manifest|version|invalid/i,
   );
+});
+it('finds portable roots beside applications and never derives them from cwd', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dots-portable-launch-'));
+  roots.push(root);
+  const executable = join(root, 'Dots.app/Contents/MacOS/Dots');
+  expect(
+    portableConfiguration({ platform: 'darwin', executable }),
+  ).toBeUndefined();
+  await writeFile(
+    join(root, 'portable.json'),
+    JSON.stringify({
+      version: 1,
+      workspace: 'workspace',
+      profile: 'desktop-profile',
+    }),
+  );
+  expect(
+    portableConfiguration({ platform: 'darwin', executable }),
+  ).toMatchObject({ root, paths: { workspace: 'workspace' } });
+  expect(
+    portableConfiguration({
+      platform: 'linux',
+      executable: '/tmp/.mount_test/Dots',
+      appImage: join(root, 'Dots.AppImage'),
+    }),
+  ).toMatchObject({ root });
+  expect(() =>
+    portableConfiguration({
+      platform: 'linux',
+      executable: '/app/Dots',
+      root: 'relative',
+    }),
+  ).toThrow(/absolute/);
+});
+it('keeps a selected portable workspace relative to the profile after moving the whole folder', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dots-portable-selection-'));
+  roots.push(root, root + '-moved');
+  const profile = join(root, 'desktop-profile'),
+    workspace = join(root, 'chosen');
+  await mkdir(profile);
+  await mkdir(workspace);
+  const manifest = {
+    version: 1 as const,
+    id: randomUUID(),
+    ownerId: 'owner',
+    storage: 'sqlite' as const,
+    schema: 2,
+  };
+  await createWorkspaceManifest(workspace, manifest);
+  await configurePortableProfile(profile, root);
+  await writeSelection(profile, workspace);
+  expect(
+    JSON.parse(
+      await readFile(join(profile, 'workspace-location.json'), 'utf8'),
+    ),
+  ).toMatchObject({
+    version: 2,
+    relativeToProfile: '../chosen',
+    workspaceId: manifest.id,
+  });
+  await rename(root, root + '-moved');
+  expect(
+    JSON.parse((await readSelection(join(root + '-moved', 'desktop-profile')))!)
+      .directory,
+  ).toBe(join(root + '-moved', 'chosen'));
+  await rename(
+    join(root + '-moved', 'chosen'),
+    join(root + '-moved', 'unplugged'),
+  );
+  await expect(
+    readSelection(join(root + '-moved', 'desktop-profile')),
+  ).rejects.toThrow(/missing|identity/i);
 });

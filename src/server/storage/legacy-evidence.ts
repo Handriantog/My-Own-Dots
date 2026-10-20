@@ -7,6 +7,7 @@ export class LegacyEvidence extends ConversationMemory {
   }
 }
 export interface StorageOptions {
+  machineId?: string;
   engine?: 'legacy-postgres' | 'sqlite';
   postgresUrl?: string;
   pinnedTokenLimit?: number;

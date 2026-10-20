@@ -25,9 +25,11 @@ import {
 } from '../../src/server/storage/snapshot-routes.js';
 import { storageWorkspace } from '../fixtures/storage-workspace.js';
 
-it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
-  'backs up and previews/restores through the native controller and real archive worker',
-  async () => {
+it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL).each([false, true])(
+  'backs up and restores through native file selection and the real archive worker (password=%s)',
+  async (encrypted) => {
+    const passphrase = encrypted ? 'private fixture password' : '';
+    const prepared: string[] = [];
     const f = await storageWorkspace();
     const destination = await mkdtemp(join(tmpdir(), 'dot-native-backups-'));
     const profile = join(f.root, 'profile');
@@ -99,9 +101,12 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       trusted: () => true,
       focused: () => true,
       chooseDirectory: async () => destination,
+      chooseBackupFile: async () => join(destination, 'My memories.dotbackup'),
       chooseArchive: async () => archive,
       confirmRestore: async () => true,
       confirmMigration: async () => true,
+      confirmMove: async () => true,
+      openDirectory: async () => {},
     };
     const phases: string[] = [];
     controller.subscribe((status) => {
@@ -109,9 +114,10 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
     });
     try {
       await controller.invoke('chooseBackupDirectory', undefined, context);
+      await controller.invoke('chooseBackupFile', undefined, context);
       await controller.invoke(
         'backupNow',
-        { passphrase: 'private fixture password', remember: true },
+        { passphrase, remember: encrypted },
         context,
       );
       const status = await controller.status();
@@ -129,7 +135,7 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
         await expect(
           controller.invoke(
             'backupNow',
-            { passphrase: 'private fixture password', remember: false },
+            { passphrase, remember: false },
             context,
           ),
         ).rejects.toThrow(/active|busy|turn|voice/i);
@@ -138,21 +144,23 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       }
       expect((await controller.status()).lastSuccess).toBe(status.lastSuccess);
       expect(await readdir(destination)).toEqual(files);
-      await controller.invoke('setAutomatic', { enabled: true }, context);
-      await controller.tick();
-      expect((await controller.status()).operation?.phase).toBe('ready');
-      const automaticFiles = (await readdir(destination)).filter((name) =>
-        name.endsWith('.dotbackup'),
-      );
-      expect(automaticFiles).toHaveLength(1); // Retention keeps the latest point today.
-      expect(automaticFiles).not.toEqual(files);
-      archive = join(destination, automaticFiles[0]);
-      await controller.invoke(
-        'previewRestore',
-        { passphrase: 'private fixture password' },
-        context,
-      );
+      expect(files).toEqual(['My memories.dotbackup']);
+      if (encrypted) {
+        await controller.invoke('setAutomatic', { enabled: true }, context);
+        await controller.tick();
+        expect((await controller.status()).operation?.phase).toBe('ready');
+        const automaticFiles = (await readdir(destination)).filter((name) =>
+          name.endsWith('.dotbackup'),
+        );
+        expect(automaticFiles).toHaveLength(2);
+        expect(automaticFiles).toContain('My memories.dotbackup');
+      }
+      expect(
+        await controller.invoke('chooseRestoreArchive', undefined, context),
+      ).toEqual({ name: 'My memories.dotbackup', encrypted });
+      await controller.invoke('previewRestore', { passphrase }, context);
       const abandoned = (await controller.status()).preview!;
+      prepared.push(abandoned.destination!);
       await controller.invoke('cancel', abandoned.operationId, context);
       expect(
         (await readdir(destination)).filter((name) =>
@@ -166,12 +174,9 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
           ])
         ).rowCount,
       ).toBe(0);
-      await controller.invoke(
-        'previewRestore',
-        { passphrase: 'private fixture password' },
-        context,
-      );
+      await controller.invoke('previewRestore', { passphrase }, context);
       const preview = (await controller.status()).preview!;
+      prepared.push(preview.destination!);
       expect(preview.counts.local_ai_threads).toBe(1);
       expect(preview.counts.memory_items).toBe(2);
       expect(stopWorkspace).not.toHaveBeenCalled();
@@ -191,14 +196,16 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
     } finally {
       await controller.close();
       await snapshots.close();
-      for (const folder of await readdir(destination)) {
-        if (!folder.startsWith('Dots-restored-')) continue;
+      for (const folder of prepared) {
         const env = parseEnv(
-          await readFile(join(destination, folder, '.env'), 'utf8'),
+          await readFile(join(folder, '.env'), 'utf8').catch(() => ''),
         );
-        const name = new URL(env.LOCAL_DATABASE_URL!).pathname.slice(1);
-        if (/^dots_restore_[a-f0-9]{32}$/.test(name))
-          await f.pg.query(`DROP DATABASE "${name}" WITH (FORCE)`);
+        if (env.LOCAL_DATABASE_URL) {
+          const name = new URL(env.LOCAL_DATABASE_URL).pathname.slice(1);
+          if (/^dots_restore_[a-f0-9]{32}$/.test(name))
+            await f.pg.query(`DROP DATABASE "${name}" WITH (FORCE)`);
+        }
+        await rm(folder, { recursive: true, force: true });
       }
       await f.dispose();
       await rm(destination, { recursive: true, force: true });

@@ -43,15 +43,19 @@ async function fixture(backend = 'gnome_libsecret') {
   const worker = { run: vi.fn() };
   const request = vi.fn();
   const afterRestore = vi.fn();
+  let ready = true;
   const controller = new StorageController({
     profile: root,
     keys,
     worker,
-    configuration: () => ({
-      workspace,
-      database: join(workspace, 'data/opendots.sqlite'),
-      envFile: join(workspace, '.env'),
-    }),
+    configuration: () =>
+      ready
+        ? {
+            workspace,
+            database: join(workspace, 'data/opendots.sqlite'),
+            envFile: join(workspace, '.env'),
+          }
+        : undefined,
     connection: () => ({
       url: 'http://127.0.0.1:4310',
       ownerToken: 'owner-token',
@@ -66,8 +70,11 @@ async function fixture(backend = 'gnome_libsecret') {
     focused: () => true,
     chooseDirectory: vi.fn(),
     chooseArchive: vi.fn(),
+    chooseBackupFile: vi.fn(),
     confirmRestore: vi.fn(async () => true),
     confirmMigration: vi.fn(async () => true),
+    confirmMove: vi.fn(async () => true),
+    openDirectory: vi.fn(async () => {}),
   };
   return {
     root,
@@ -79,8 +86,55 @@ async function fixture(backend = 'gnome_libsecret') {
     encryptString,
     controller,
     context,
+    setReady(value: boolean) {
+      ready = value;
+    },
   };
 }
+it('reports a starting workspace without treating its saved backup settings as unreadable', async () => {
+  const f = await fixture();
+  vi.mocked(f.context.chooseDirectory).mockResolvedValue(f.root);
+  await f.controller.invoke('chooseBackupDirectory', undefined, f.context);
+  const [key] = await readdir(join(f.root, 'storage'));
+  const file = join(f.root, 'storage', key, 'settings.json');
+  const original = await readFile(file, 'utf8');
+  f.setReady(false);
+  await expect(f.controller.status()).resolves.toMatchObject({
+    secureStorage: false,
+    automatic: false,
+    error: expect.stringMatching(/workspace.*starting/i),
+  });
+  f.setReady(true);
+  expect((await f.controller.status()).destination).toBe(
+    await realpath(f.root),
+  );
+  expect(await readFile(file, 'utf8')).toBe(original);
+});
+it('rejects remembering an empty recovery password before starting a backup', async () => {
+  const f = await fixture();
+  await expect(
+    f.controller.invoke(
+      'backupNow',
+      { passphrase: '', remember: true },
+      f.context,
+    ),
+  ).rejects.toThrow(/Enter a recovery password/i);
+  expect(f.worker.run).not.toHaveBeenCalled();
+  expect(f.encryptString).not.toHaveBeenCalled();
+  expect(await readdir(f.root)).toEqual(['workspace']);
+});
+it('retains genuinely malformed backup settings instead of silently resetting them', async () => {
+  const f = await fixture();
+  vi.mocked(f.context.chooseDirectory).mockResolvedValue(f.root);
+  await f.controller.invoke('chooseBackupDirectory', undefined, f.context);
+  const [key] = await readdir(join(f.root, 'storage'));
+  const file = join(f.root, 'storage', key, 'settings.json');
+  await writeFile(file, '{malformed');
+  await expect(f.controller.status()).rejects.toThrow(
+    /Backup settings could not be read/,
+  );
+  expect(await readFile(file, 'utf8')).toBe('{malformed');
+});
 it('rejects untrusted or navigated IPC sender', async () => {
   const f = await fixture();
   f.context.trusted = () => false;
@@ -143,6 +197,8 @@ it('uses native destinations for migration and requires its matching preview bef
     source: { directory: f.workspace, ownerId, workspaceId },
     passphrase: 'fixture password',
   });
+  expect(f.context.chooseDirectory).toHaveBeenCalledExactlyOnceWith('backup');
+  expect(f.worker.run.mock.calls[0][0].destination).toMatch(/Dots-upgraded-/);
   expect((await f.controller.status()).preview).toMatchObject({
     operationId,
     migration: true,
@@ -167,6 +223,45 @@ it('cancelled chooser creates nothing', async () => {
   ).toBe(false);
   expect(await readdir(f.root)).toEqual(['workspace']);
   expect(f.request).not.toHaveBeenCalled();
+});
+it('opens the resolved folder and requires a native move preview before switching', async () => {
+  const f = await fixture();
+  const workspaceId = randomUUID(),
+    operationId = randomUUID();
+  await createWorkspaceManifest(f.workspace, {
+    version: 1,
+    id: workspaceId,
+    ownerId: 'owner',
+    storage: 'sqlite',
+    schema: 2,
+  });
+  await f.controller.invoke('openWorkspaceFolder', undefined, f.context);
+  expect(f.context.openDirectory).toHaveBeenCalledWith(
+    await realpath(f.workspace),
+  );
+  vi.mocked(f.context.chooseDirectory).mockResolvedValue(f.root);
+  f.request.mockResolvedValue(Response.json({ workspaceId }));
+  f.worker.run.mockImplementation(async (command, options) => {
+    await options.stopWorkspace?.();
+    return command.kind === 'move-preview'
+      ? { operationId, workspaceId, counts: {}, coverage: [], warnings: [] }
+      : { workspaceDirectory: join(f.root, 'moved') };
+  });
+  await f.controller.invoke('chooseWorkspaceMove', undefined, f.context);
+  expect((await f.controller.status()).preview).toMatchObject({
+    operationId,
+    movement: true,
+  });
+  await expect(
+    f.controller.invoke('restore', { operationId, mode: 'new' }, f.context),
+  ).rejects.toThrow(/move/i);
+  await f.controller.invoke('moveWorkspace', { operationId }, f.context);
+  expect(f.worker.run.mock.calls.at(-1)![0]).toMatchObject({
+    kind: 'move-activate',
+    operationId,
+  });
+  expect(f.afterRestore).toHaveBeenCalledTimes(1);
+  await f.controller.close();
 });
 it.each(['discard', 'failure'])(
   'reopens the original workspace after migration %s',
@@ -532,3 +627,69 @@ it('retains an unremovable preview with a notice without blocking a new recovery
   );
   await expect(f.controller.close()).resolves.toBeUndefined();
 });
+
+it('chooses a manual backup file natively without changing scheduled backup settings', async () => {
+  const f = await fixture();
+  const target = join(f.root, 'My memories.dotbackup');
+  vi.mocked(f.context.chooseBackupFile).mockResolvedValue(target);
+  expect(
+    await f.controller.invoke('chooseBackupFile', undefined, f.context),
+  ).toBe(join(await realpath(f.root), 'My memories.dotbackup'));
+  expect((await f.controller.status()).destination).toBeUndefined();
+  await writeFile(target, 'existing backup');
+  await expect(
+    f.controller.invoke('chooseBackupFile', undefined, f.context),
+  ).rejects.toThrow(/already exists/i);
+  expect(await readFile(target, 'utf8')).toBe('existing backup');
+});
+it('does not accept a renderer-supplied save path or a path inside the workspace', async () => {
+  const f = await fixture();
+  await expect(
+    f.controller.invoke('chooseBackupFile', { path: '/injected' }, f.context),
+  ).rejects.toThrow();
+  vi.mocked(f.context.chooseBackupFile).mockResolvedValue(
+    join(f.workspace, 'backup.dotbackup'),
+  );
+  await expect(
+    f.controller.invoke('chooseBackupFile', undefined, f.context),
+  ).rejects.toThrow(/outside/i);
+  expect(f.worker.run).not.toHaveBeenCalled();
+});
+it.each([false, true])(
+  'detects archive protection without asking for a password: encrypted=%s',
+  async (encrypted) => {
+    const f = await fixture();
+    const archive = join(f.root, 'selected.dotbackup');
+    await writeFile(
+      archive,
+      encrypted
+        ? Buffer.from('age-encryption.org/v1\n')
+        : Buffer.from([0x1f, 0x8b]),
+    );
+    vi.mocked(f.context.chooseArchive).mockResolvedValue(archive);
+    expect(
+      await f.controller.invoke('chooseRestoreArchive', undefined, f.context),
+    ).toEqual({ name: 'selected.dotbackup', encrypted });
+    await writeFile(join(f.workspace, '.env'), '');
+    f.worker.run.mockResolvedValue({
+      operationId: randomUUID(),
+      workspaceId: 'fixture',
+      counts: {},
+      coverage: [],
+      warnings: [],
+    });
+    await f.controller.invoke(
+      'previewRestore',
+      { passphrase: encrypted ? 'password' : '' },
+      f.context,
+    );
+    expect(f.context.chooseArchive).toHaveBeenCalledOnce();
+    expect(f.context.chooseDirectory).not.toHaveBeenCalled();
+    expect(f.worker.run.mock.calls[0][0]).toMatchObject({
+      kind: 'preview',
+      archive,
+      passphrase: encrypted ? 'password' : '',
+    });
+    await f.controller.close();
+  },
+);

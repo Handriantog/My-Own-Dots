@@ -19,6 +19,13 @@ import {
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { WorkspaceBackend } from './host/workspace-backend.js';
+import {
+  portableConfiguration,
+  resolveWorkspaceLocation,
+} from './host/workspace-location.js';
+import { homedir } from 'node:os';
+import { portableMachineBinding } from './host/portable-machine.js';
+import { configurePortableProfile } from '../server/storage/restore-journal.js';
 import { ArchiveWorkerClient } from './host/archive-worker-client.js';
 import { WorkspaceWindow } from './host/workspace-window.js';
 import { installWorkspaceMenu } from './host/workspace-menu.js';
@@ -71,11 +78,25 @@ protocol.registerSchemesAsPrivileged([
   },
 ]);
 app.setName('My Own Dots');
+const portable = portableConfiguration({
+  platform: process.platform,
+  executable: process.execPath,
+  root: process.env.DOTS_PORTABLE_ROOT,
+  appImage: process.env.APPIMAGE,
+});
+const desktopLocation = resolveWorkspaceLocation({
+  platform: process.platform,
+  home: homedir(),
+  electronData: path.join(app.getPath('appData'), 'My Own Dots Desktop'),
+  executable: process.execPath,
+  portableRoot: portable?.root,
+  portablePaths: portable?.paths,
+});
 app.setPath(
   'userData',
   process.env.DOTS_DESKTOP_USER_DATA ||
     process.env.DOTS_DESKTOP_DATA ||
-    path.join(app.getPath('appData'), 'My Own Dots Desktop'),
+    desktopLocation.profile,
 );
 const diagnosticsDirectory = path.join(app.getPath('userData'), 'diagnostics');
 const diagnostics = new DesktopDiagnostics(diagnosticsDirectory);
@@ -100,6 +121,8 @@ if (!app.requestSingleInstanceLock()) {
 async function start(): Promise<void> {
   if (process.platform !== 'darwin')
     throw new Error('This companion build currently supports macOS only.');
+  if (portable)
+    await configurePortableProfile(app.getPath('userData'), portable.root);
   const rendererDirectory = path.join(__dirname, 'renderer');
   let sourceRoot: string | undefined;
   if (!app.isPackaged) {
@@ -117,6 +140,14 @@ async function start(): Promise<void> {
     bundle: path.join(__dirname, 'app'),
     data: app.getPath('userData'),
     sourceRoot,
+    portableRoot: portable?.root,
+    portablePaths: portable?.paths,
+    portableMachineId: portable
+      ? portableMachineBinding(
+          path.join(app.getPath('appData'), 'My Own Dots Desktop'),
+          portable.root,
+        )
+      : undefined,
     recoverStorage: async () => {
       await new ArchiveWorkerClient({
         entry: path.join(__dirname, 'archive-worker.cjs'),

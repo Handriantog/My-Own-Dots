@@ -40,6 +40,7 @@ import {
   loadJournal,
   ownedRestoreDirectory,
   readSelection,
+  writeSelection,
   saveJournal,
   withRestoreLock,
   type RestoreJournal,
@@ -64,6 +65,7 @@ interface RestoreOptions {
   /** Host-only migration configuration; archived environment files are never applied. */
   migration?: { proof: MigrationProof; configuration: string };
   migrationAuthorized?: boolean;
+  movementAuthorized?: boolean;
   /** Host verifies a fresh backup of the selected workspace before replacement. */
   preRestoreBackup?: (
     signal: AbortSignal,
@@ -391,7 +393,9 @@ export class RestoreService {
       ...Object.keys(POSTGRES_RECORDS).map(
         (table) => `snapshot/postgres/${table}.jsonl`,
       ),
+      ...(journal.movement?.targetPaths ?? []),
     ]);
+    validateArchivePaths([...allowed]);
     const inspect = async (prefix = '') => {
       for (const item of await readdir(join(journal.directory, prefix), {
         withFileTypes: true,
@@ -399,7 +403,8 @@ export class RestoreService {
         const path = prefix ? `${prefix}/${item.name}` : item.name;
         if (
           item.isDirectory() &&
-          [...allowed].some((name) => name.startsWith(path + '/'))
+          ([...allowed].some((name) => name.startsWith(path + '/')) ||
+            (journal.movement && path === 'files'))
         )
           await inspect(path);
         else if (!item.isFile() || !allowed.has(path))
@@ -500,6 +505,8 @@ export class RestoreService {
         throw new Error(
           'Migration requires fresh source and backup verification',
         );
+      if (journal.movement && !this.options.movementAuthorized)
+        throw new Error('Workspace move requires fresh source verification');
       if (journal.phase !== 'verified')
         throw new Error('Restore preview is not ready');
       if (this.now() - (journal.verifiedAt ?? journal.createdAt) > 15 * 60_000)
@@ -538,15 +545,12 @@ export class RestoreService {
           throw new Error('Selected workspace changed while closing');
         switchingStarted = true;
         await this.phase(journal, 'switching');
-        await atomicStorageWrite(
-          join(this.options.profile, 'workspace-location.json'),
-          JSON.stringify({ directory: journal.directory }),
-        );
+        await writeSelection(this.options.profile, journal.directory);
         await this.phase(journal, 'active');
         return { workspaceDirectory: journal.directory };
       } catch (error) {
         if (switchingStarted) {
-          const selected = await readSelection(this.options.profile);
+          const selected = await readSelection(this.options.profile, false);
           if (
             selected &&
             JSON.parse(selected).directory === journal.directory
@@ -556,9 +560,9 @@ export class RestoreService {
                 force: true,
               });
             else
-              await atomicStorageWrite(
-                join(this.options.profile, 'workspace-location.json'),
-                journal.previousSelection,
+              await writeSelection(
+                this.options.profile,
+                JSON.parse(journal.previousSelection).directory,
               );
           }
           await this.phase(journal, 'verified');
@@ -600,7 +604,7 @@ export class RestoreService {
         continue;
       }
       if (journal.phase !== 'switching') continue;
-      const current = await readSelection(this.options.profile);
+      const current = await readSelection(this.options.profile, false);
       if (current && JSON.parse(current).directory === journal.directory) {
         try {
           await this.verify(journal, new AbortController().signal);
@@ -611,9 +615,9 @@ export class RestoreService {
               force: true,
             });
           else
-            await atomicStorageWrite(
-              join(this.options.profile, 'workspace-location.json'),
-              journal.previousSelection,
+            await writeSelection(
+              this.options.profile,
+              JSON.parse(journal.previousSelection).directory,
             );
           await this.phase(journal, 'verified');
         }

@@ -85,12 +85,15 @@ describe('verified archives', () => {
       clearInterval(sample);
     }
   });
-  it('requires encryption for workspace backups', async () => {
-    const f = await fixture();
-    await expect(writeArchive({ ...f, passphrase: undefined })).rejects.toThrow(
-      /passphrase/i,
-    );
-    await absent(f.destination);
+  it('round trips workspace backups without an optional password', async () => {
+    const f = await fixture({ 'memory.json': 'remember my nickname' });
+    await writeArchive({ ...f, passphrase: '' });
+    expect(
+      await readArchive({ ...f, source: f.destination, passphrase: '' }),
+    ).toEqual(f.manifest);
+    expect(
+      await readFile(join(f.stagingDirectory, 'memory.json'), 'utf8'),
+    ).toBe('remember my nickname');
   });
   it('round trips encrypted Unicode files and rejects wrong passwords', async () => {
     const f = await fixture({ '记忆/café.txt': 'private memory' });
@@ -244,13 +247,8 @@ it.each(
     await absent(f.stagingDirectory);
   },
 );
-it('rejects a plaintext workspace backup and quota violations before publishing', async () => {
+it('rejects quota violations before publishing', async () => {
   const f = await fixture({ one: 'hello' });
-  await crafted(f, [{ name: 'one', content: 'hello' }], f.manifest);
-  await expect(readArchive({ ...f, source: f.destination })).rejects.toThrow(
-    /encrypted/,
-  );
-  await absent(f.stagingDirectory);
   await crafted(f, [{ name: 'one', content: 'hello' }]);
   for (const limits of [
     { maxEntries: 0 },

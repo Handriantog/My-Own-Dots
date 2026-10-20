@@ -2,18 +2,23 @@ import type { ArchiveManifest } from '../../shared/storage-archive.js';
 export const storageMethods = [
   'status',
   'chooseBackupDirectory',
+  'chooseBackupFile',
+  'chooseRestoreArchive',
   'backupNow',
   'setAutomatic',
   'previewRestore',
   'restore',
   'previewMigration',
   'migrate',
+  'openWorkspaceFolder',
+  'chooseWorkspaceMove',
+  'moveWorkspace',
   'cancel',
 ] as const;
 
 export interface StorageOperationStatus {
   id: string;
-  kind: 'backup' | 'restore' | 'migration';
+  kind: 'backup' | 'restore' | 'migration' | 'move';
   phase:
     | 'queued'
     | 'snapshot'
@@ -26,6 +31,7 @@ export interface StorageOperationStatus {
 }
 export interface StorageRestorePreview {
   migration?: boolean;
+  movement?: boolean;
   destination?: string;
   backupPath?: string;
   operationId: string;
@@ -39,6 +45,7 @@ export interface StorageStatus {
   workspaceDirectory?: string;
   storageEngine?: 'legacy-postgres' | 'sqlite';
   migrationAvailable?: boolean;
+  moveAvailable?: boolean;
   secureStorage: boolean;
   recoveryWarnings?: string[];
   destination?: string;
@@ -53,11 +60,18 @@ export interface StorageStatus {
 export interface DesktopStorageBridge {
   status(): Promise<StorageStatus>;
   chooseBackupDirectory(): Promise<boolean>;
+  chooseBackupFile(): Promise<string | undefined>;
+  chooseRestoreArchive(): Promise<
+    { name: string; encrypted: boolean } | undefined
+  >;
   backupNow(input: { passphrase: string; remember: boolean }): Promise<void>;
   setAutomatic(input: { enabled: boolean }): Promise<void>;
   previewRestore(input: { passphrase: string }): Promise<void>;
   previewMigration(input: { passphrase: string }): Promise<void>;
   migrate(input: { operationId: string }): Promise<void>;
+  openWorkspaceFolder(): Promise<void>;
+  chooseWorkspaceMove(): Promise<void>;
+  moveWorkspace(input: { operationId: string }): Promise<void>;
   restore(input: {
     operationId: string;
     mode: 'new' | 'replace';

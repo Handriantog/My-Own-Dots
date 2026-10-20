@@ -1,4 +1,10 @@
-import { constants } from 'node:fs';
+import {
+  constants,
+  closeSync,
+  fstatSync,
+  openSync,
+  readFileSync,
+} from 'node:fs';
 import { open } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
@@ -35,6 +41,53 @@ export async function readPortableLayout(
     return validateLayout(JSON.parse(await file.readFile('utf8')));
   } finally {
     await file.close();
+  }
+}
+/** Small startup configuration only; called before Electron opens its profile. */
+export function portableConfiguration(input: {
+  platform: NodeJS.Platform;
+  executable: string;
+  root?: string;
+  appImage?: string;
+}) {
+  const fsPath = input.platform === 'win32' ? path.win32 : path.posix;
+  let root = input.root;
+  if (root && !fsPath.isAbsolute(root))
+    throw new Error('Portable root must be absolute');
+  if (!root) {
+    if (input.platform === 'darwin') {
+      const bundle = input.executable.match(/^(.*)\/[^/]+\.app\/Contents\//);
+      root = bundle?.[1] ?? fsPath.dirname(input.executable);
+    } else
+      root = fsPath.dirname(
+        input.platform === 'linux' && input.appImage
+          ? input.appImage
+          : input.executable,
+      );
+  }
+  if (!fsPath.isAbsolute(root))
+    throw new Error('Portable root must be absolute');
+  let file;
+  try {
+    file = openSync(
+      fsPath.join(root, 'portable.json'),
+      constants.O_RDONLY | constants.O_NOFOLLOW,
+    );
+  } catch (error) {
+    if (!input.root && (error as NodeJS.ErrnoException).code === 'ENOENT')
+      return;
+    throw error;
+  }
+  try {
+    const info = fstatSync(file);
+    if (!info.isFile() || info.size > 16 * 1024)
+      throw new Error('Invalid portable marker');
+    return {
+      root,
+      paths: validateLayout(JSON.parse(readFileSync(file, 'utf8'))),
+    };
+  } finally {
+    closeSync(file);
   }
 }
 interface LocationInput {
