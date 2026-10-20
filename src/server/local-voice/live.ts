@@ -140,8 +140,8 @@ export interface VoiceCallPort {
     text: string;
     timing?: VoiceTurnTiming;
   }): void;
-  requireThread(): { dotId: string };
-  paused(): boolean;
+  requireThread(): { dotId: string } | Promise<{ dotId: string }>;
+  paused(): boolean | Promise<boolean>;
   foreground(signal: AbortSignal): Promise<() => void>;
   snapshot(): Promise<ConversationSnapshot>;
   stop(messageId: string): Promise<void>;
@@ -149,8 +149,9 @@ export interface VoiceCallPort {
     status: 'active' | 'ended' | 'failed',
     transcript: string,
     error?: string,
-  ): void;
-  delivery(rows: VoiceDelivery[]): void;
+  ): void | Promise<void>;
+  delivery(rows: VoiceDelivery[]): void | Promise<void>;
+  closed?(): void;
 }
 export class LiveVoiceCall {
   private readonly controller = new AbortController();
@@ -224,16 +225,16 @@ export class LiveVoiceCall {
   get connected() {
     return Boolean(this.listener);
   }
-  private check() {
+  private async check() {
     this.controller.signal.throwIfAborted();
     if (
-      this.port.paused() ||
-      this.port.requireThread().dotId !== this.scope.dotId
+      (await this.port.paused()) ||
+      (await this.port.requireThread()).dotId !== this.scope.dotId
     )
       throw Error('Call scope is unavailable');
   }
-  touch() {
-    this.check();
+  async touch() {
+    await this.check();
     this.lastSeen = Date.now();
   }
   listen(listener: (event: LocalVoiceEvent) => Promise<void>) {
@@ -269,7 +270,7 @@ export class LiveVoiceCall {
     }, 120000);
     timeout.unref?.();
     try {
-      this.check();
+      await this.check();
       const foreground = this.port
         .foreground(this.controller.signal)
         .then((release) => {
@@ -277,7 +278,7 @@ export class LiveVoiceCall {
           else this.release = release;
         });
       await waitForVoiceOperation(foreground, this.controller.signal);
-      this.check();
+      await this.check();
       await waitForVoiceOperation(
         Promise.all([
           this.workers.recognition.warm(this.controller.signal),
@@ -287,14 +288,14 @@ export class LiveVoiceCall {
         ]),
         this.controller.signal,
       );
-      this.check();
+      await this.check();
       this.ready = true;
       this.lastSeen = Date.now();
-      this.port.receipt('active', '');
+      await this.port.receipt('active', '');
       this.emit({ type: 'phase', phase: 'listening' });
-      this.timer = setInterval(() => {
+      this.timer = setInterval(async () => {
         try {
-          this.check();
+          await this.check();
           if (
             Date.now() - this.lastSeen > 10000 ||
             Date.now() - this.startedAt > 15 * 60_000
@@ -315,7 +316,7 @@ export class LiveVoiceCall {
     }
   }
   async frame(sequence: number, pcm: Buffer) {
-    this.touch();
+    await this.touch();
     if (!this.ready || this.inputBusy || this.inputReset)
       throw Error('Audio input is busy');
     if (sequence !== this.inputSequence) throw Error('Invalid input sequence');
@@ -422,7 +423,7 @@ export class LiveVoiceCall {
           generation: this.generation,
         };
         this.port.voiceTurn?.(this.utterance);
-        this.checkpoint(`You: ${text}`);
+        await this.checkpoint(`You: ${text}`);
         timing.mark('transcript_ready');
         this.emit({
           type: 'transcript',
@@ -554,13 +555,13 @@ export class LiveVoiceCall {
     this.positives = 0;
     this.silence = 0;
   }
-  private checkpoint(line: string) {
+  private async checkpoint(line: string) {
     this.transcript =
       `${this.transcript}${this.transcript ? '\n' : ''}${line}`.slice(-20000);
-    this.port.receipt('active', this.transcript);
+    await this.port.receipt('active', this.transcript);
   }
   async mute(value: boolean) {
-    this.touch();
+    await this.touch();
     this.muted = value;
     this.inputEpoch++;
     this.resetInput();
@@ -578,7 +579,7 @@ export class LiveVoiceCall {
     }
   }
   async speaker(value: boolean) {
-    this.touch();
+    await this.touch();
     this.speakerMuted = value;
     if (value) await this.interrupt(false, 'speaker_muted');
   }
@@ -665,7 +666,7 @@ export class LiveVoiceCall {
     void warming.catch(() => {});
   }
   /** Server-only: called after a validated text event has been durably saved. */
-  commitText(
+  async commitText(
     messageId: string,
     assistantId: string,
     sequence: number,
@@ -679,7 +680,7 @@ export class LiveVoiceCall {
       utterance.answered
     )
       return;
-    this.check();
+    await this.check();
     if (!utterance.output) {
       if (sequence !== 0) throw Error('Invalid committed speech sequence');
       utterance.output = {
@@ -708,7 +709,7 @@ export class LiveVoiceCall {
     utterance.timing.mark('text_saved');
     output.caption = (output.caption + text).slice(-6000);
     this.emit({ type: 'caption', text: output.caption });
-    this.checkpoint(`Dot (generated): ${text}`);
+    await this.checkpoint(`Dot (generated): ${text}`);
     // A code fence may span records. Once one appears, leave the rest in chat.
     if (/```|<(?:think|analysis|tool_call)\b/i.test(text))
       output.suppressed = true;
@@ -796,7 +797,7 @@ export class LiveVoiceCall {
       });
   }
   async answer(messageId: string) {
-    this.touch();
+    await this.touch();
     const utterance = this.utterance;
     if (!utterance || utterance.messageId !== messageId || utterance.answered)
       return;
@@ -826,7 +827,7 @@ export class LiveVoiceCall {
         : result.text!;
     this.emit({ type: 'caption', text });
     utterance.timing.mark('canonical_answer_ready');
-    this.checkpoint(`Dot (generated): ${text}`);
+    await this.checkpoint(`Dot (generated): ${text}`);
     if (this.speakerMuted) {
       utterance.timing.mark('speaker_muted');
       this.emit({ type: 'phase', phase: 'listening' });
@@ -933,7 +934,7 @@ export class LiveVoiceCall {
         chunkSignal.throwIfAborted();
       },
     });
-    this.port.delivery(this.deliveries);
+    await this.port.delivery(this.deliveries);
     if (!span || (utterance.output?.complete && !utterance.output.queue.length))
       this.markPlaybackFinished(utterance);
     if (!span) this.emit({ type: 'phase', phase: 'listening' });
@@ -953,8 +954,8 @@ export class LiveVoiceCall {
     )
       utterance.timing.mark('playback_finished');
   }
-  played(generation: number, sequence: number, samples: number) {
-    this.touch();
+  async played(generation: number, sequence: number, samples: number) {
+    await this.touch();
     if (generation !== this.generation) return;
     const item = this.pending.get(sequence);
     if (!item) return;
@@ -986,8 +987,16 @@ export class LiveVoiceCall {
           ),
         ]);
       } finally {
-        this.port.delivery(this.deliveries);
-        this.port.receipt(error ? 'failed' : 'ended', this.transcript, error);
+        try {
+          await this.port.delivery(this.deliveries);
+          await this.port.receipt(
+            error ? 'failed' : 'ended',
+            this.transcript,
+            error,
+          );
+        } finally {
+          this.port.closed?.();
+        }
       }
     });
     this.controller.abort(new DOMException('Call ended', 'AbortError'));

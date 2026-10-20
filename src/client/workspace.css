@@ -1,30 +1,31 @@
+/* Shared by every workspace view, including Settings. */
 /* Desktop tokens deliberately remain explicit: no inferred color inversion. */
 :root {
   --ws-canvas: #ffffff;
-  --ws-sidebar: #f2f5fa;
-  --ws-rail: #e7edf7;
-  --ws-title: #e8eef8;
-  --ws-border: #dce3ed;
-  --ws-text: #202c40;
-  --ws-muted: #63738a;
-  --ws-accent: #315fd1;
-  --ws-selected: #dde7ff;
-  --ws-hover: #e9eef6;
-  --ws-soft: #f7f9fc;
-  --ws-shadow: 0 18px 70px #172a5033;
+  --ws-sidebar: #f7f7f8;
+  --ws-rail: #f7f7f8;
+  --ws-title: #fafafa;
+  --ws-border: #e5e5e7;
+  --ws-text: #222225;
+  --ws-muted: #6c6c73;
+  --ws-accent: #252528;
+  --ws-selected: #ededf0;
+  --ws-hover: #f0f0f2;
+  --ws-soft: #fafafa;
+  --ws-shadow: 0 18px 70px #0003;
 }
 :root[data-theme='dark'] {
-  --ws-canvas: #171e2a;
-  --ws-sidebar: #1d2635;
-  --ws-rail: #141d2c;
-  --ws-title: #111a28;
-  --ws-border: #323e51;
-  --ws-text: #e4eaf5;
-  --ws-muted: #a3b1c8;
-  --ws-accent: #8baeff;
-  --ws-selected: #2b426b;
-  --ws-hover: #293548;
-  --ws-soft: #1d2737;
+  --ws-canvas: #1c1c1e;
+  --ws-sidebar: #202022;
+  --ws-rail: #171719;
+  --ws-title: #171719;
+  --ws-border: #38383c;
+  --ws-text: #eeeef0;
+  --ws-muted: #a1a1a8;
+  --ws-accent: #eeeef0;
+  --ws-selected: #303034;
+  --ws-hover: #29292d;
+  --ws-soft: #242427;
   --ws-shadow: 0 18px 70px #0008;
 }
 :root .desktop-workspace {

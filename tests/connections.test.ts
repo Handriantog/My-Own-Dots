@@ -163,13 +163,13 @@ it('derives unique, provider-safe tool names', () => {
   ]);
   for (const name of names) expect(name).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
 });
-const tools = (
+const tools = async (
   connections: ConnectionService,
   dotId: string,
   approvals = true,
   threadId = 'thread',
 ) =>
-  connectionTools(
+  await connectionTools(
     connections,
     dotId,
     threadId,
@@ -183,7 +183,9 @@ const requestApproval = async (
   name: string,
   args: Record<string, unknown>,
 ) => {
-  const tool = tools(connections, dotId).find((item) => item.name === name)!;
+  const tool = (await tools(connections, dotId)).find(
+    (item) => item.name === name,
+  )!;
   const result = (await tool.execute!(args, toolCtx)) as {
     status: string;
     approvalId: string;
@@ -197,7 +199,7 @@ it('runs read-only tools directly and holds write tools for owner approval', asy
     name: 'Mail',
     url: 'https://mail.example.com/mcp',
   });
-  const search = tools(connections, dot.id).find(
+  const search = (await tools(connections, dot.id)).find(
     (tool) => tool.name === 'mail__search_mail',
   )!;
   expect(await search.execute!({ query: 'invoices' }, toolCtx)).toEqual({
@@ -209,7 +211,7 @@ it('runs read-only tools directly and holds write tools for owner approval', asy
     body: 'Hi',
   });
   expect(sent).not.toHaveBeenCalled();
-  const headless = tools(connections, dot.id, false).find(
+  const headless = (await tools(connections, dot.id, false)).find(
     (tool) => tool.name === 'mail__send_mail',
   )!;
   expect(
@@ -223,15 +225,17 @@ it('honors owner changes to a tool, including during a turn', async () => {
     name: 'Mail',
     url: 'https://mail.example.com/mcp',
   });
-  const [search] = tools(connections, dot.id);
+  const [search] = await tools(connections, dot.id);
   const before = workspace.connections.fingerprint(dot.id);
-  connections.setTool(connection.id, 'search_mail', { requiresApproval: true });
+  await connections.setTool(connection.id, 'search_mail', {
+    requiresApproval: true,
+  });
   expect(workspace.connections.fingerprint(dot.id)).not.toBe(before);
   expect(await search.execute!({ query: 'x' }, toolCtx)).toMatchObject({
     status: 'approval_required',
   });
-  connections.setTool(connection.id, 'search_mail', { enabled: false });
-  expect(connections.tools(dot.id).map((tool) => tool.name)).toEqual([
+  await connections.setTool(connection.id, 'search_mail', { enabled: false });
+  expect((await connections.tools(dot.id)).map((tool) => tool.name)).toEqual([
     'mail__send_mail',
   ]);
   await expect(search.execute!({ query: 'x' }, toolCtx)).rejects.toThrow(
@@ -298,11 +302,14 @@ it('binds approvals to the exact tool, even when look-alike names collide', asyn
     name: 'Mail',
     url: 'https://mail.example.com/mcp',
   });
-  const names = () =>
+  const names = async () =>
     Object.fromEntries(
-      connections.tools(dot.id).map((item) => [item.tool.name, item.name]),
+      (await connections.tools(dot.id)).map((item) => [
+        item.tool.name,
+        item.name,
+      ]),
     );
-  expect(names()).toMatchObject({
+  expect(await names()).toMatchObject({
     'send mail!': 'mail__send_mail',
     'send mail?': 'mail__send_mail_2',
   });
@@ -313,8 +320,8 @@ it('binds approvals to the exact tool, even when look-alike names collide', asyn
     { to: 'a@example.com', body: 'Hi' },
   );
   // Disabling the requested tool must not hand its name or approval to the twin.
-  connections.setTool(connection.id, 'send mail!', { enabled: false });
-  expect(names()).toEqual({
+  await connections.setTool(connection.id, 'send mail!', { enabled: false });
+  expect(await names()).toEqual({
     search_mail: 'mail__search_mail',
     'send mail?': 'mail__send_mail_2',
   });
@@ -386,8 +393,10 @@ it('keeps owner changes made while a refresh is discovering tools', async () => 
   const refreshing = connections.refresh(connection.id);
   await new Promise((resolve) => setTimeout(resolve, 20));
   // Revoke and gate while discovery is still pending.
-  connections.setTool(connection.id, 'send mail!', { enabled: false });
-  connections.setTool(connection.id, 'search_mail', { requiresApproval: true });
+  await connections.setTool(connection.id, 'send mail!', { enabled: false });
+  await connections.setTool(connection.id, 'search_mail', {
+    requiresApproval: true,
+  });
   gate.wait = undefined;
   release();
   const refreshed = await refreshing;
@@ -408,7 +417,7 @@ it('keeps owner choices on refresh and reports unreachable services', async () =
     name: 'Mail',
     url: 'https://mail.example.com/mcp',
   });
-  connections.setTool(connection.id, 'send mail!', { enabled: false });
+  await connections.setTool(connection.id, 'send mail!', { enabled: false });
   const refreshed = await connections.refresh(connection.id);
   expect(
     refreshed.tools.find((tool) => tool.name === 'send mail!'),

@@ -1,0 +1,252 @@
+/* Settings share the workspace palette defined in workspace.css. */
+/* theme: fixed .settings-panel */
+:root .desktop-workspace.app:has(.settings-page) {
+  grid-template-columns: 72px 0 minmax(0, 1fr);
+}
+:root .desktop-workspace.app:has(.settings-page) .workspace-sidebar,
+:root .desktop-workspace:has(.settings-page) .titlebar-leading > button,
+:root .desktop-workspace:has(.settings-page) .topbar .breadcrumbs,
+:root .desktop-workspace:has(.settings-page) .topbar .mode-badge {
+  display: none;
+}
+:root .desktop-workspace:has(.settings-page) .topbar {
+  height: 44px;
+  min-height: 44px;
+  justify-content: flex-end;
+  border-bottom: 0;
+}
+:root .desktop-workspace:has(.settings-page) .topbar .pause-button {
+  display: inline-flex;
+}
+:root .desktop-workspace .settings-page {
+  padding: 20px 48px 48px;
+}
+:root .desktop-workspace .settings-page .settings-content {
+  max-width: 800px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+:root .app .settings-panel {
+  color: var(--ws-text);
+  background: var(--ws-canvas);
+  border-color: var(--ws-border);
+}
+:root .app .settings-panel h2 {
+  font-size: 28px;
+  font-weight: 650;
+  letter-spacing: -0.7px;
+  margin: 0 0 24px;
+}
+:root .app .settings-panel .settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 30px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--ws-border);
+}
+:root .app .settings-panel button,
+:root .app .settings-panel select,
+:root .app .settings-panel input[type='password'] {
+  color: var(--ws-text);
+  background: var(--ws-canvas);
+  border: 1px solid var(--ws-border);
+  border-radius: 7px;
+  box-shadow: none;
+  font-size: 13px;
+  line-height: 1.4;
+}
+:root .app .settings-panel button {
+  padding: 8px 12px;
+  min-height: 36px;
+  font-weight: 500;
+}
+:root .app .settings-panel button:hover:not(:disabled) {
+  background: var(--ws-hover);
+}
+:root .app .settings-panel button:disabled {
+  opacity: 0.55;
+}
+:root .app .settings-panel .settings-tabs button {
+  gap: 7px;
+  padding: 8px 11px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--ws-muted);
+  white-space: nowrap;
+}
+:root .app .settings-panel .settings-tabs button.active {
+  background: var(--ws-selected);
+  color: var(--ws-text);
+}
+:root .app .settings-panel :is(button, select, input, summary):focus-visible {
+  outline: 2px solid var(--ws-text);
+  outline-offset: 3px;
+  box-shadow: none;
+}
+:root .app .settings-panel .settings-row,
+:root .app .settings-panel .native-settings,
+:root .app .settings-panel .settings-service-list > div,
+:root .app .settings-panel .permission-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 76px;
+  padding: 18px 0;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--ws-border);
+}
+:root .app .settings-panel .settings-row {
+  padding-top: 0;
+  min-height: 60px;
+}
+:root .app .settings-panel .settings-row > label,
+:root .app .settings-panel .native-settings h3,
+:root .app .settings-panel .permission-row strong,
+:root .app .settings-panel .settings-service-list dt {
+  font-size: 14px;
+  font-weight: 500;
+}
+:root .app .settings-panel .settings-row select {
+  width: 160px;
+  padding: 8px 10px;
+}
+:root .app .settings-panel .native-settings h3 {
+  margin: 0 0 5px;
+}
+:root .app .settings-panel .native-settings p,
+:root .app .settings-panel .permission-row small {
+  color: var(--ws-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+:root .app .settings-panel .native-settings button {
+  min-width: 160px;
+}
+:root .app .settings-panel .permission-row {
+  cursor: pointer;
+}
+:root .app .settings-panel .permission-row:first-child {
+  padding-top: 0;
+}
+:root .app .settings-panel .permission-row > span {
+  order: -1;
+}
+:root .app .settings-panel input[type='checkbox'] {
+  accent-color: var(--ws-text);
+}
+:root .app .settings-panel .permission-row input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+}
+:root .app .settings-panel .settings-footnote,
+:root .app .settings-panel .settings-setup-note {
+  margin: 16px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--ws-muted);
+}
+:root .app .settings-panel .settings-service-list {
+  margin: 0 0 20px;
+}
+:root .app .settings-panel .settings-service-list > div {
+  min-height: 58px;
+  padding: 14px 0;
+}
+:root .app .settings-panel .settings-service-list > div:first-child {
+  padding-top: 0;
+}
+:root .app .settings-panel .settings-service-list dd {
+  margin: 0;
+  color: var(--ws-muted);
+  font-size: 13px;
+  text-align: right;
+}
+:root .app .settings-panel .settings-setup-note {
+  margin: 0 0 16px;
+  overflow-wrap: anywhere;
+}
+:root .app .settings-panel .settings-help {
+  margin-top: 24px;
+  border-top: 1px solid var(--ws-border);
+  padding-top: 16px;
+  font-size: 13px;
+  color: var(--ws-muted);
+  line-height: 1.6;
+}
+:root .app .settings-panel summary {
+  cursor: pointer;
+  width: fit-content;
+}
+:root .app .settings-panel .settings-help p {
+  margin: 12px 0 0;
+}
+:root .app .settings-panel .storage-settings {
+  max-width: none;
+  gap: 20px;
+}
+:root .app .settings-panel .storage-heading h3 {
+  font-size: 17px;
+  font-weight: 600;
+}
+:root .app .settings-panel .storage-card,
+:root .app .settings-panel .storage-step {
+  background: var(--ws-soft);
+  border-radius: 10px;
+}
+:root .app .settings-panel .storage-card h4,
+:root .app .settings-panel .storage-step h4 {
+  font-size: 14px;
+  font-weight: 600;
+}
+:root .app .settings-panel .primary,
+:root .app .settings-panel .storage-primary,
+:root .app .settings-panel .primary:hover:not(:disabled),
+:root .app .settings-panel .storage-primary:hover:not(:disabled) {
+  color: var(--ws-canvas);
+  background: var(--ws-text);
+  border-color: transparent;
+}
+:root .app .settings-panel .primary:hover:not(:disabled),
+:root .app .settings-panel .storage-primary:hover:not(:disabled) {
+  opacity: 0.88;
+}
+:root .app .settings-panel .full {
+  width: auto;
+  margin-top: 20px;
+}
+:root[data-theme='dark'] .app .settings-panel [role='alert'] {
+  color: #ff9999;
+}
+@media (max-width: 680px) {
+  :root .desktop-workspace .settings-page {
+    padding: 16px 24px 32px;
+  }
+  :root .app .settings-panel .settings-tabs {
+    gap: 4px;
+    margin-bottom: 24px;
+  }
+  :root .app .settings-panel .settings-tabs button {
+    padding: 8px;
+    font-size: 12px;
+  }
+  :root .app .settings-panel .storage-actions {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 440px) {
+  :root .app .settings-panel .settings-row,
+  :root .app .settings-panel .native-settings {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  :root .app .settings-panel .settings-row select,
+  :root .app .settings-panel .native-settings button {
+    width: 100%;
+  }
+}
+/* theme: end */

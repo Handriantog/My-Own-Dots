@@ -9,10 +9,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { build } from 'esbuild';
-import { buildDesktopRuntime } from './desktop-runtime.mjs';
+import { buildDesktopRuntime, buildStorageWorker } from './desktop-runtime.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const out = path.join(root, 'dist/desktop');
+await buildStorageWorker(root, path.join(out, 'archive-worker.cjs'));
 mkdirSync(path.join(out, 'native'), { recursive: true });
 await buildDesktopRuntime(root, path.join(out, 'app'));
 writeFileSync(
@@ -44,6 +45,10 @@ await build({
   format: 'cjs',
   target: 'node24',
   external: ['electron'],
+  define: { 'import.meta.url': '__dotsBundleUrl' },
+  banner: {
+    js: "const __dotsBundleUrl = require('node:url').pathToFileURL(__filename).href;",
+  },
 });
 await build({
   entryPoints: [path.join(root, 'src/desktop/preload.ts')],

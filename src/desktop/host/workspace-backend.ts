@@ -1,12 +1,35 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, writeFile, chmod, stat } from 'node:fs/promises';
+import { randomBytes, randomUUID } from 'node:crypto';
+import {
+  mkdir,
+  readFile,
+  writeFile,
+  chmod,
+  stat,
+  open,
+  rm,
+} from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { connect } from 'node:net';
 import path from 'node:path';
 import { parseEnv } from 'node:util';
 import { nativeExecutableEnvironment } from '../../../scripts/native-executable-environment.mjs';
 import { workspaceIdentity } from '../../server/workspace-identity.js';
+import { RestoreService } from '../../server/storage/restore.js';
+import {
+  readSelection,
+  writeSelection,
+  withRestoreLock,
+} from '../../server/storage/restore-journal.js';
 import type { WorkspaceStatus } from '../shared/workspace-contract.js';
+import {
+  resolveWorkspaceLocation,
+  type PortableLayout,
+} from './workspace-location.js';
+import {
+  readWorkspaceManifest,
+  sqliteStorageSchema,
+} from '../../shared/workspace-manifest.js';
 
 export interface WorkspaceBackendOptions {
   bundle: string;
@@ -17,6 +40,11 @@ export interface WorkspaceBackendOptions {
   executable?: string;
   startupTimeoutMs?: number;
   shutdownTimeoutMs?: number;
+  /** Native host runs potentially large interrupted-restore verification off its main thread. */
+  recoverStorage?: () => Promise<void>;
+  portableRoot?: string;
+  portablePaths?: PortableLayout;
+  portableMachineId?: string;
 }
 export interface WorkspaceBackendConnection {
   url: string;
@@ -29,6 +57,8 @@ export interface WorkspaceBackendConfiguration {
   workspace: string;
   envFile: string;
   database: string;
+  workspaceId?: string;
+  storageEngine?: 'legacy-postgres' | 'sqlite';
 }
 const editable = new Set([
   'HOST',
@@ -185,17 +215,26 @@ export class WorkspaceBackend {
     for (const listener of this.listeners) listener(this.status);
   }
   private async load() {
+    if (this.options.recoverStorage) await this.options.recoverStorage();
+    else
+      await new RestoreService({
+        profile: this.options.data,
+        stopWorkspace: () => this.stop(),
+      }).recover();
     const inherited = this.options.environment ?? process.env;
     let selected: string | undefined;
     try {
-      selected = (
-        JSON.parse(
-          await readFile(
-            path.join(this.options.data, 'workspace-location.json'),
-            'utf8',
-          ),
-        ) as { directory?: string }
-      ).directory;
+      const saved = await readSelection(this.options.data);
+      const selection = saved
+        ? (JSON.parse(saved) as { directory?: unknown })
+        : undefined;
+      if (
+        selection &&
+        (typeof selection.directory !== 'string' ||
+          !path.isAbsolute(selection.directory))
+      )
+        throw new Error('Saved workspace path is invalid');
+      selected = selection?.directory as string | undefined;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
         throw new Error(
@@ -203,18 +242,66 @@ export class WorkspaceBackend {
           { cause: error },
         );
     }
-    const workspace = path.resolve(
+    const explicit =
       inherited.DOTS_WORKSPACE_DIR ||
-        selected ||
-        this.options.sourceRoot ||
-        path.join(this.options.data, 'workspace'),
-    );
-    await mkdir(workspace, { recursive: true });
+      selected ||
+      (this.options.portableRoot ? undefined : this.options.sourceRoot);
+    const { workspace } = resolveWorkspaceLocation({
+      platform: process.platform,
+      home: homedir(),
+      localAppData: inherited.LOCALAPPDATA,
+      xdgDataHome: inherited.XDG_DATA_HOME,
+      electronData: this.options.data,
+      selected: explicit ? path.resolve(explicit) : undefined,
+      executable: this.options.executable ?? process.execPath,
+      portableRoot: this.options.portableRoot,
+      portablePaths: this.options.portablePaths,
+    });
+    if (explicit) {
+      try {
+        if (!(await stat(workspace)).isDirectory())
+          throw new Error('Not a directory');
+      } catch (error) {
+        throw new Error(
+          `Selected workspace is missing or unavailable: ${workspace}. Reconnect the disk or choose its existing folder.`,
+          { cause: error },
+        );
+      }
+    } else await mkdir(workspace, { recursive: true });
+    const probe = path.join(workspace, `.dots-workspace-check-${randomUUID()}`);
+    try {
+      const handle = await open(probe, 'wx', 0o600);
+      try {
+        await handle.sync();
+      } finally {
+        await handle.close();
+        await rm(probe, { force: true });
+      }
+    } catch (error) {
+      throw new Error(`Workspace is not writable: ${workspace}`, {
+        cause: error,
+      });
+    }
+    const manifest = await readWorkspaceManifest(workspace);
+    if (
+      manifest &&
+      (manifest.storage === 'sqlite'
+        ? manifest.schema > sqliteStorageSchema
+        : manifest.schema !== 1)
+    )
+      throw new Error(
+        'This workspace requires a compatible SQLite storage runtime',
+      );
     const envFile = path.join(workspace, '.env');
     let contents: string;
     try {
       contents = await readFile(envFile, 'utf8');
     } catch (error) {
+      if (manifest)
+        throw new Error(
+          'Selected workspace configuration (.env) is missing or unreadable; restore it before retrying.',
+          { cause: error },
+        );
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT')
         throw new Error(
           'Workspace .env could not be read. Check folder permissions.',
@@ -233,11 +320,38 @@ export class WorkspaceBackend {
       );
     }
     const env = nativeExecutableEnvironment({ ...inherited, ...values });
+    if (manifest) {
+      if (env.OWNER_ID && env.OWNER_ID !== manifest.ownerId)
+        throw new Error(
+          'Workspace manifest owner does not match its configuration',
+        );
+      env.OWNER_ID = manifest.ownerId;
+    }
     const database = path.resolve(
       workspace,
       env.DATABASE_PATH || 'data/opendots.sqlite',
     );
-    this.config = { workspace, envFile, database };
+    if (manifest?.storage === 'sqlite') {
+      if (!(await stat(database).catch(() => undefined))?.isFile())
+        throw new Error(
+          'Selected SQLite workspace database is missing; reconnect its disk or restore a backup.',
+        );
+      if ((env.CONVERSATION_BACKEND || 'local') !== 'local')
+        throw new Error(
+          'A SQLite workspace requires the local conversation backend.',
+        );
+      delete env.LOCAL_DATABASE_URL;
+    }
+    this.config = {
+      workspace,
+      envFile,
+      database,
+      storageEngine: manifest?.storage ?? 'legacy-postgres',
+      ...(manifest ? { workspaceId: manifest.id } : {}),
+    };
+    // Once a default has been opened, a missing disk is a recovery event rather
+    // than permission to silently create another empty workspace.
+    if (!explicit) await writeSelection(this.options.data, workspace);
     return { env, contents };
   }
   /** Host must call this only after an explicit native directory choice. Existing files stay in place. */
@@ -246,10 +360,8 @@ export class WorkspaceBackend {
       throw new Error('Choose an existing workspace folder.');
     await this.stop();
     await mkdir(this.options.data, { recursive: true });
-    await writeFile(
-      path.join(this.options.data, 'workspace-location.json'),
-      JSON.stringify({ directory }),
-      { mode: 0o600 },
+    await withRestoreLock(this.options.data, () =>
+      writeSelection(this.options.data, directory),
     );
     this.config = undefined;
     await this.load();
@@ -324,7 +436,7 @@ export class WorkspaceBackend {
     const { env } = await this.load();
     if (generation !== this.generation)
       throw new Error('Workspace startup was cancelled.');
-    const ownerToken = env.OWNER_TOKEN || undefined;
+    let ownerToken = env.OWNER_TOKEN || undefined;
     if (env.DOTS_WORKSPACE_URL) {
       const url = localUrl(env.DOTS_WORKSPACE_URL);
       let identified = !!(await this.identity(url, ownerToken));
@@ -369,7 +481,8 @@ export class WorkspaceBackend {
       throw new Error('PORT must be an integer from 1 to 65535.');
     const url = `http://${host === '::1' ? '[::1]' : host}:${port}`;
     await mkdir(path.dirname(this.config!.database), { recursive: true });
-    const workspaceId = workspaceIdentity(this.config!.database);
+    const workspaceId =
+      this.config!.workspaceId ?? workspaceIdentity(this.config!.database);
     if (await portOpen(host, port)) {
       if ((await this.identity(url, ownerToken))?.workspaceId !== workspaceId)
         throw new Error(
@@ -381,6 +494,10 @@ export class WorkspaceBackend {
       this.update('ready', 'Connected to your existing workspace.');
       return this.active;
     }
+    // Older local workspaces may not configure a token. Authenticate the child
+    // we launch without changing their .env or credentials for external services.
+    ownerToken ??= randomBytes(32).toString('hex');
+    env.OWNER_TOKEN = ownerToken;
     let warning: string | undefined;
     this.update('starting', 'Checking local services…', undefined, 'services');
     try {
@@ -404,6 +521,15 @@ export class WorkspaceBackend {
       warning,
       'backend',
     );
+    const previousPython = path.join(
+      this.config!.workspace,
+      'integrations/llm/.venv',
+    );
+    const pythonEnvironment =
+      env.UV_PROJECT_ENVIRONMENT ||
+      ((await stat(previousPython).catch(() => undefined))?.isDirectory()
+        ? previousPython
+        : path.join(this.options.data, 'integrations/llm/.venv'));
     const child = spawn(
       this.options.executable || process.execPath,
       [path.join(this.options.bundle, 'server/index.js')],
@@ -412,9 +538,7 @@ export class WorkspaceBackend {
         env: {
           ...env,
           ELECTRON_RUN_AS_NODE: '1',
-          UV_PROJECT_ENVIRONMENT:
-            env.UV_PROJECT_ENVIRONMENT ||
-            path.join(this.config!.workspace, 'integrations/llm/.venv'),
+          UV_PROJECT_ENVIRONMENT: pythonEnvironment,
           NODE_ENV: 'production',
           HOST: host,
           PORT: String(port),
@@ -422,6 +546,8 @@ export class WorkspaceBackend {
           DOTS_DESKTOP_API_ONLY: '1',
           DOTS_RUNTIME_ROOT: path.resolve(this.options.bundle),
           DOTS_WORKSPACE_ID: workspaceId,
+          DOTS_WORKSPACE_ENV: this.config!.envFile,
+          DOTS_PORTABLE_MACHINE_ID: this.options.portableMachineId,
         },
         stdio: 'ignore',
       },
@@ -476,6 +602,7 @@ export class WorkspaceBackend {
   }
   private async prepareDatabase(env: NodeJS.ProcessEnv) {
     if (
+      this.config?.storageEngine === 'sqlite' ||
       (env.CONVERSATION_BACKEND || 'local') !== 'local' ||
       !env.LOCAL_DATABASE_URL
     )

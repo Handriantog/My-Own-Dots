@@ -107,7 +107,7 @@ function sourceFiles(directory) {
         : [],
   );
 }
-export async function buildDesktopRuntime(root, output) {
+export async function compileDesktopRuntime(root, output) {
   rmSync(output, { recursive: true, force: true });
   mkdirSync(output, { recursive: true });
   const compilation = await build({
@@ -136,6 +136,10 @@ export async function buildDesktopRuntime(root, output) {
       2,
     ),
   );
+  return compilation;
+}
+export async function buildDesktopRuntime(root, output) {
+  const compilation = await compileDesktopRuntime(root, output);
   const manifest = JSON.parse(
     readFileSync(path.join(root, 'package.json'), 'utf8'),
   );
@@ -180,4 +184,19 @@ export async function buildDesktopRuntime(root, output) {
   console.log(
     `Bundled backend and ${count} production packages (no development environments or data).`,
   );
+}
+/** Self-contained worker: runtime-selected workspace files are never module search roots. */
+export async function buildStorageWorker(root, output) {
+  await build({
+    entryPoints: [path.join(root, 'src/desktop/host/archive-worker.ts')],
+    outfile: output,
+    bundle: true,
+    platform: 'node',
+    format: 'cjs',
+    target: 'node24',
+    define: { 'import.meta.url': '__dotsBundleUrl' },
+    banner: {
+      js: "const __dotsBundleUrl = require('node:url').pathToFileURL(__filename).href;",
+    },
+  });
 }

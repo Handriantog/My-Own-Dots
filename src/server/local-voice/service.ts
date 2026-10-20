@@ -55,16 +55,16 @@ export class LocalVoiceService {
     private readonly platform: Platform,
     private readonly config: LocalVoiceConfig,
   ) {}
-  settings(dotId: string) {
-    return this.platform.workspace.voiceSettings(dotId);
+  async settings(dotId: string) {
+    return await this.platform.workspace.voiceSettings(dotId);
   }
-  saveSettings(dotId: string, input: unknown) {
+  async saveSettings(dotId: string, input: unknown) {
     if (
       this.starting ||
       (this.call && !this.call.ended && this.call.scope.dotId === dotId)
     )
       throw Error('End the call before changing its voice.');
-    return this.platform.workspace.setVoiceSettings(
+    return await this.platform.workspace.setVoiceSettings(
       dotId,
       voiceSettingsSchema.parse(input),
     );
@@ -89,7 +89,6 @@ export class LocalVoiceService {
   ): Promise<Buffer> {
     if (this.starting || this.previewing || (this.call && !this.call.ended))
       throw Error('End the current audio before previewing a voice.');
-    this.settings(dotId); // Verify the Dot belongs to this workspace.
     const settings = voiceSettingsSchema.parse(input);
     const controller = new AbortController();
     const signal = AbortSignal.any([
@@ -103,14 +102,15 @@ export class LocalVoiceService {
       done: Promise.resolve(Buffer.alloc(0)),
     };
     this.previewing = work;
-    work.done = Promise.resolve().then(async () => {
+    const preview = async () => {
       let worker: LocalSpeechWorker | undefined;
       let release: (() => void) | undefined;
       try {
         signal.throwIfAborted();
+        await this.settings(dotId); // Verify the Dot belongs to this workspace.
         if (
           !(await this.status()).ready ||
-          this.platform.store.settings().paused
+          (await this.platform.store.settings()).paused
         )
           throw Error('Local speech is unavailable.');
         const foreground = this.platform
@@ -137,6 +137,13 @@ export class LocalVoiceService {
           if (this.previewing === work) this.previewing = undefined;
         }
       }
+    };
+    work.done = (
+      this.platform.maintenance
+        ? this.platform.maintenance.runWrite(signal, preview)
+        : Promise.resolve().then(preview)
+    ).finally(() => {
+      if (this.previewing === work) this.previewing = undefined;
     });
     return work.done;
   }
@@ -214,7 +221,9 @@ export class LocalVoiceService {
       120000,
     );
     timeout.unref?.();
+    let release: (() => void) | undefined;
     try {
+      release = await this.platform.maintenance?.enterWrite(signal);
       signal.throwIfAborted();
       if (this.previewing) {
         this.previewing.controller.abort(new Error('Voice preview stopped.'));
@@ -228,8 +237,14 @@ export class LocalVoiceService {
       const status = await waitForVoiceOperation(this.status(), signal);
       if (!status.ready) throw Error(status.reason);
       this.platform.requireReady();
-      const binding = this.platform.workspace.requireThread(threadId, dotId);
-      if (binding.dotId !== dotId || this.platform.store.settings().paused)
+      const binding = await this.platform.workspace.requireThread(
+        threadId,
+        dotId,
+      );
+      if (
+        binding.dotId !== dotId ||
+        (await this.platform.store.settings()).paused
+      )
         throw Error('This conversation is unavailable.');
       const snapshot = await waitForVoiceOperation(
         this.platform.localConversations!.getSnapshot(threadId),
@@ -238,8 +253,8 @@ export class LocalVoiceService {
       if (snapshot.lastRun?.status === 'running')
         throw Error('Wait for the current response before starting a call.');
       signal.throwIfAborted();
-      const receipt = this.platform.workspace.createCall(threadId);
-      const voiceSettings = this.settings(dotId);
+      const receipt = await this.platform.workspace.createCall(threadId);
+      const voiceSettings = await this.settings(dotId);
       const providerSession =
         this.config.providerSession &&
         this.platform.config.llmProvider === 'codex'
@@ -272,13 +287,18 @@ export class LocalVoiceService {
                 ...(providerSession
                   ? {
                       stream: providerSession.runDecision,
-                      commitText: (
+                      commitText: async (
                         messageId: string,
                         assistantId: string,
                         sequence: number,
                         text: string,
                       ) =>
-                        call.commitText(messageId, assistantId, sequence, text),
+                        await call.commitText(
+                          messageId,
+                          assistantId,
+                          sequence,
+                          text,
+                        ),
                       finishText: (messageId: string, failed: boolean) =>
                         call.finishText(messageId, failed),
                     }
@@ -287,18 +307,24 @@ export class LocalVoiceService {
               });
             else clearVoiceTurn(this.platform.workspace, receipt.id);
           },
-          requireThread: () =>
-            this.platform.workspace.requireThread(threadId, dotId),
-          paused: () => this.platform.store.settings().paused,
+          requireThread: async () =>
+            await this.platform.workspace.requireThread(threadId, dotId),
+          paused: async () => (await this.platform.store.settings()).paused,
           foreground: (s) => this.platform.memory!.enterForeground(s, threadId),
           snapshot: () =>
             this.platform.localConversations!.getSnapshot(threadId),
           stop: (messageId) => this.platform.stopVoiceTurn(threadId, messageId),
-          receipt: (state, text, error) => {
-            this.platform.workspace.setCall(receipt.id, state, text, error);
+          receipt: async (state, text, error) => {
+            await this.platform.workspace.setCall(
+              receipt.id,
+              state,
+              text,
+              error,
+            );
           },
-          delivery: (rows) =>
-            this.platform.workspace.saveVoiceDelivery(receipt.id, rows),
+          delivery: async (rows) =>
+            await this.platform.workspace.saveVoiceDelivery(receipt.id, rows),
+          closed: release,
         },
         () => {
           return {
@@ -309,6 +335,8 @@ export class LocalVoiceService {
           };
         },
       );
+      // The call owns admission through worker cleanup and its final receipts.
+      release = undefined;
       this.call = call;
       const abort = () => {
         void call.end('Call startup was cancelled.');
@@ -323,15 +351,16 @@ export class LocalVoiceService {
         signal.removeEventListener('abort', abort);
       }
     } finally {
+      release?.();
       clearTimeout(timeout);
       this.starting = false;
     }
   }
-  require(
+  async require(
     id: string,
     token: string | undefined,
     options: { allowEnded?: boolean } = {},
-  ): LiveVoiceCall {
+  ): Promise<LiveVoiceCall> {
     const call = this.call;
     const supplied = Buffer.from(token ?? '');
     const expected = Buffer.from(call?.scope.token ?? '');
@@ -343,7 +372,7 @@ export class LocalVoiceService {
       !timingSafeEqual(supplied, expected)
     )
       throw Error('Call authorization failed.');
-    this.platform.workspace.requireThread(
+    await this.platform.workspace.requireThread(
       call.scope.threadId,
       call.scope.dotId,
     );

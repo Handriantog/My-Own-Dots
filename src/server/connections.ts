@@ -1,3 +1,4 @@
+import type { ConnectionRepository } from './storage/runtime-repositories.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
@@ -7,7 +8,7 @@ import type {
   ConnectionActionResult,
   ConnectionTool,
 } from '../shared/connection-types.js';
-import type { ConnectionStore } from './connection-store.js';
+
 const MAX_TOOLS = 100;
 const MAX_SCHEMA_BYTES = 16_000;
 const MAX_RESULT_CHARS = 20_000;
@@ -145,7 +146,7 @@ const failure = (error: unknown) => {
 };
 export class ConnectionService {
   constructor(
-    readonly store: ConnectionStore,
+    readonly store: ConnectionRepository,
     private transport: McpTransportFactory = httpTransport,
     private timeoutMs = 60_000,
   ) {}
@@ -211,18 +212,18 @@ export class ConnectionService {
     } catch (error) {
       throw new Error(failure(error), { cause: error });
     }
-    return this.store.create(dotId, value, tools);
+    return await this.store.create(dotId, value, tools);
   }
   async refresh(id: string) {
-    const connection = this.store.get(id);
+    const connection = await this.store.get(id);
     if (!connection) throw new Error('Connection not found.');
     try {
-      const discovered = await this.discover(this.store.credentials(id));
+      const discovered = await this.discover(await this.store.credentials(id));
       // Owner changes made while discovery ran win: merge against the
       // settings as they are now, not as they were when it started.
-      const current = this.store.get(id);
+      const current = await this.store.get(id);
       if (!current) throw new Error('Connection not found.');
-      return this.store.saveTools(
+      return await this.store.saveTools(
         id,
         discovered.map((tool) => {
           const owner = current.tools.find((item) => item.name === tool.name);
@@ -236,19 +237,19 @@ export class ConnectionService {
         }),
       );
     } catch (error) {
-      return this.store.setError(id, failure(error));
+      return await this.store.setError(id, failure(error));
     }
   }
-  setTool(
+  async setTool(
     id: string,
     name: string,
     patch: { enabled?: boolean; requiresApproval?: boolean },
   ) {
-    const connection = this.store.get(id);
+    const connection = await this.store.get(id);
     if (!connection) throw new Error('Connection not found.');
     if (!connection.tools.some((tool) => tool.name === name))
       throw new Error('Connection tool not found.');
-    return this.store.saveTools(
+    return await this.store.saveTools(
       id,
       connection.tools.map((tool) =>
         tool.name === name ? { ...tool, ...patch } : tool,
@@ -256,19 +257,19 @@ export class ConnectionService {
       connection.error,
     );
   }
-  tools(dotId: string) {
-    return exposedTools(this.store.list(dotId));
+  async tools(dotId: string) {
+    return exposedTools(await this.store.list(dotId));
   }
-  resolve(dotId: string, name: string) {
-    const match = this.tools(dotId).find((tool) => tool.name === name);
+  async resolve(dotId: string, name: string) {
+    const match = (await this.tools(dotId)).find((tool) => tool.name === name);
     if (!match)
       throw new Error('Connection tool is not available to this Dot.');
     return match;
   }
   // The tool an approval was created for, by connection and real tool name,
   // if the Dot still has it enabled.
-  bound(dotId: string, connectionId: string, toolName: string) {
-    const match = this.tools(dotId).find(
+  async bound(dotId: string, connectionId: string, toolName: string) {
+    const match = (await this.tools(dotId)).find(
       (item) =>
         item.connection.id === connectionId && item.tool.name === toolName,
     );
@@ -285,7 +286,7 @@ export class ConnectionService {
   ): Promise<ConnectionActionResult> {
     try {
       return await this.session(
-        this.store.credentials(exposed.connection.id),
+        await this.store.credentials(exposed.connection.id),
         signal,
         async (client, bounded) =>
           normalizeResult(

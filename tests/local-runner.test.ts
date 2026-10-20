@@ -559,3 +559,82 @@ it('settles streamed approval continuations with the canonical user context on f
     true,
   );
 });
+
+it('keeps streamed runs and their final receipt inside workspace admission', async () => {
+  const { MaintenanceGate } =
+    await import('../src/server/storage/maintenance.js');
+  const gate = new MaintenanceGate();
+  const store = new MemoryStore();
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  let atFinish = false;
+  const acquire = store.acquireThread.bind(store);
+  vi.spyOn(store, 'acquireThread').mockImplementation(async () => {
+    const lease = await acquire();
+    const savedFinish = lease!.finishRun.bind(lease);
+    lease!.finishRun = async (...args) => {
+      atFinish = true;
+      await pending;
+      await savedFinish(...args);
+    };
+    return lease;
+  });
+  let receipt = false;
+  const agent = Object.assign(new TestAgent(answer), {
+    onRunSettled: () => {
+      expect(gate.status().activeWrites).toBeGreaterThan(0);
+      receipt = true;
+    },
+  });
+  const runner = new LocalAgentRunner(store, undefined, gate);
+  const running = collect(
+    runner.run({ threadId: 'thread', agent, input: input() }),
+  );
+  await vi.waitFor(() => expect(atFinish).toBe(true));
+  let captured = false;
+  const snapshot = gate
+    .acquire({ origin: 'automatic', signal: new AbortController().signal })
+    .then((lease) => {
+      captured = true;
+      return lease;
+    });
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(captured).toBe(false);
+  } finally {
+    finish();
+  }
+  await running;
+  const lease = await snapshot;
+  expect(receipt).toBe(true);
+  expect(store.snapshot.lastRun?.status).toBe('finished');
+  lease.release();
+  await runner.close();
+});
+
+it('does not start providers while manual snapshot admission is held', async () => {
+  const { MaintenanceGate } =
+    await import('../src/server/storage/maintenance.js');
+  const gate = new MaintenanceGate();
+  const lease = await gate.acquire({
+    origin: 'manual',
+    signal: new AbortController().signal,
+  });
+  const agent = new TestAgent(answer);
+  const runner = new LocalAgentRunner(new MemoryStore(), undefined, gate);
+  const running = collect(
+    runner.run({ threadId: 'thread', agent, input: input() }),
+  );
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(agent.calls).toHaveLength(0);
+  } finally {
+    lease.release();
+  }
+  await running;
+  expect(agent.calls).toHaveLength(1);
+  await vi.waitFor(() => expect(gate.status().activeWrites).toBe(0));
+  await runner.close();
+});

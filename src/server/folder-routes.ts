@@ -1,11 +1,9 @@
+import type { FolderRepository } from './storage/runtime-repositories.js';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { isIP } from 'node:net';
 import { z } from 'zod';
-import {
-  FolderAccessError,
-  type FolderAccessService,
-} from './folder-access.js';
+import { FolderAccessError } from './folder-access.js';
 import { folderDecisionSchema } from '../shared/folder-access.js';
 
 const selectionSchema = z
@@ -25,7 +23,7 @@ function loopbackPeer(address: string) {
 }
 
 /** Mounted beneath createApp's owner authentication and origin/host guards. */
-export function folderRoutes(folders: FolderAccessService) {
+export function folderRoutes(folders: FolderRepository) {
   const app = new Hono();
   const requests = '/conversations/:threadId/folder-requests/:requestId';
   for (const path of [
@@ -59,9 +57,12 @@ export function folderRoutes(folders: FolderAccessService) {
     maxSize: 16384,
     onError: (c) => c.json({ error: 'Folder request is too large.' }, 413),
   });
-  app.get(requests, (c) =>
+  app.get(requests, async (c) =>
     c.json(
-      folders.getRequest(c.req.param('threadId'), c.req.param('requestId')),
+      await folders.getRequest(
+        c.req.param('threadId'),
+        c.req.param('requestId'),
+      ),
     ),
   );
   app.post(`${requests}/selection`, limit, async (c) => {
@@ -92,11 +93,11 @@ export function folderRoutes(folders: FolderAccessService) {
       ),
     );
   });
-  app.get('/dots/:dotId/folder-grants', (c) =>
-    c.json(folders.list(c.req.param('dotId'))),
+  app.get('/dots/:dotId/folder-grants', async (c) =>
+    c.json(await folders.list(c.req.param('dotId'))),
   );
-  app.delete('/dots/:dotId/folder-grants/:grantId', (c) =>
-    c.json(folders.revoke(c.req.param('dotId'), c.req.param('grantId'))),
+  app.delete('/dots/:dotId/folder-grants/:grantId', async (c) =>
+    c.json(await folders.revoke(c.req.param('dotId'), c.req.param('grantId'))),
   );
   app.onError((error, c) => {
     if (error instanceof FolderAccessError)

@@ -1,3 +1,4 @@
+import { MaintenanceGate } from '../src/server/storage/maintenance.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -40,6 +41,7 @@ async function fixture() {
   const receipt = vi.fn();
   const release = vi.fn();
   const platform = {
+    maintenance: new MaintenanceGate(),
     config: { conversationBackend: 'local', llmBackend: 'subscription' },
     setup: () => ({ missing: [] }),
     requireReady: () => {},
@@ -305,7 +307,9 @@ describe('local voice HTTP security boundaries', () => {
     ).toBe(400);
     expect(f.detect).toHaveBeenCalledTimes(1);
     expect(f.release).toHaveBeenCalledTimes(1);
-    expect(() => f.service.require(handle.id, handle.token)).toThrow();
+    await expect(
+      (async () => await f.service.require(handle.id, handle.token))(),
+    ).rejects.toThrow();
   });
   it('bounds call payloads and rejects noncanonical PCM before inference', async () => {
     const f = await fixture();
@@ -361,7 +365,7 @@ describe('local voice HTTP security boundaries', () => {
         reaped = resolve;
       }),
     );
-    const ended = f.service.require(handle.id, handle.token).end();
+    const ended = (await f.service.require(handle.id, handle.token)).end();
     const starting = f.service.start(
       threadId,
       'dot',
@@ -374,7 +378,9 @@ describe('local voice HTTP security boundaries', () => {
     await ended;
     await starting;
     expect(LocalSpeechWorker.prototype.warm).toHaveBeenCalledTimes(6);
-    expect(() => f.service.require(handle.id, handle.token)).toThrow();
+    await expect(
+      (async () => await f.service.require(handle.id, handle.token))(),
+    ).rejects.toThrow();
   });
   it('accepts authenticated duplicate ends but rejects other expired-call controls', async () => {
     const f = await fixture();
@@ -444,13 +450,15 @@ describe('local voice HTTP security boundaries', () => {
       await reader.cancel();
     }
     await vi.waitFor(() => expect(f.release).toHaveBeenCalledTimes(1));
-    expect(() => f.service.require(handle.id, handle.token)).toThrow();
+    await expect(
+      (async () => await f.service.require(handle.id, handle.token))(),
+    ).rejects.toThrow();
   });
   it('aborts a stalled SSE writer after a grace period without blocking End', async () => {
     const f = await fixture();
     vi.useFakeTimers();
     const handle = await f.start();
-    const call = f.service.require(handle.id, handle.token);
+    const call = await f.service.require(handle.id, handle.token);
     const headers = { 'x-dot-voice-token': handle.token };
     const response = await f.request(
       `calls/${handle.id}/events`,
@@ -486,7 +494,7 @@ describe('local voice HTTP security boundaries', () => {
     const f = await fixture();
     vi.useFakeTimers();
     const handle = await f.start();
-    const call = f.service.require(handle.id, handle.token);
+    const call = await f.service.require(handle.id, handle.token);
     const headers = { 'x-dot-voice-token': handle.token };
     const request = new Request(
       `${origin}/api/local-voice/calls/${handle.id}/events`,
@@ -512,4 +520,41 @@ describe('local voice HTTP security boundaries', () => {
     expect(getEventListeners(call.endSignal, 'abort')).toHaveLength(0);
     expect(vi.getTimerCount()).toBe(0);
   });
+});
+
+it('refuses manual snapshots until local voice workers and final receipts settle', async () => {
+  const f = await fixture();
+  const handle = await f.start();
+  const gate = f.platform.maintenance;
+  await expect(
+    gate.acquire({ origin: 'manual', signal: new AbortController().signal }),
+  ).rejects.toThrow(/busy/i);
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  f.close.mockReturnValue(pending);
+  const ending = (await f.service.require(handle.id, handle.token)).end();
+  let captured = false;
+  const snapshot = gate
+    .acquire({ origin: 'automatic', signal: new AbortController().signal })
+    .then((lease) => {
+      captured = true;
+      return lease;
+    });
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(captured).toBe(false);
+  } finally {
+    finish();
+  }
+  await ending;
+  const lease = await snapshot;
+  expect(f.receipt).toHaveBeenLastCalledWith(
+    expect.any(String),
+    'ended',
+    expect.any(String),
+    undefined,
+  );
+  lease.release();
 });

@@ -58,7 +58,7 @@ it('reports either accepted name from the same label used by setup status and th
   const store = new Store(':memory:');
   const workspace = new WorkspaceStore(':memory:', 'owner');
   try {
-    const platform = new Platform(store, workspace, configured);
+    const platform = await Platform.create(store, workspace, configured);
     const response = await platform.handle(
       new Request('http://127.0.0.1/api/copilotkit/info'),
     );

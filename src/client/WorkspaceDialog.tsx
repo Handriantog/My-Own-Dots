@@ -1,8 +1,9 @@
 import { LocalLearningSettings } from './LocalLearningSettings';
 import { useEffect, useRef, useState } from 'react';
-import { X } from 'lucide-react';
+import { Archive, Plug, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
 import type { Dot, Memory, State, WorkspaceState } from '../shared/types';
 import { ConnectionsSection } from './ConnectionsSection';
+import { StorageSettings } from './StorageSettings';
 import {
   setThemePreference,
   themePreference,
@@ -91,7 +92,7 @@ export function WorkspaceDialog({
       if (event.key === 'Tab') {
         const items = [
           ...(container.current?.querySelectorAll<HTMLElement>(
-            'button:not([disabled]),input,textarea,select,a[href]',
+            'button:not([disabled]),input,textarea,select,a[href],summary',
           ) ?? []),
         ];
         if (event.shiftKey && document.activeElement === items[0]) {
@@ -138,7 +139,7 @@ export function WorkspaceDialog({
       onClick={embedded ? undefined : onClose}
     >
       <section
-        className={`modal ${embedded ? 'settings-content' : ''}`}
+        className={`modal ${embedded ? 'settings-content' : ''} ${dialog.type === 'settings' ? 'settings-panel' : ''}`}
         role={embedded ? undefined : 'dialog'}
         aria-modal={embedded ? undefined : true}
         aria-labelledby="dialog-title"
@@ -154,24 +155,27 @@ export function WorkspaceDialog({
             <X size={18} />
           </button>
         )}
-        <span className="eyebrow">MY OWN DOTS</span>
+        {dialog.type !== 'settings' && (
+          <span className="eyebrow">MY OWN DOTS</span>
+        )}
         <h2 id="dialog-title">{title}</h2>
         {dialog.type === 'settings' && (
           <>
-            <p className="settings-description">
-              Make the workspace work for you.
-            </p>
             <nav className="settings-tabs" aria-label="Settings categories">
               {[
-                ['general', 'General'],
-                ['permissions', 'Permissions'],
-                ['services', 'Services & connections'],
-              ].map(([id, label]) => (
+                { id: 'general', label: 'General', icon: SlidersHorizontal },
+                { id: 'permissions', label: 'Permissions', icon: ShieldCheck },
+                { id: 'services', label: 'Connections', icon: Plug },
+                { id: 'storage', label: 'Backup & restore', icon: Archive },
+              ].map(({ id, label, icon: Icon }) => (
                 <button
+                  type="button"
                   key={id}
                   className={settingsSection === id ? 'active' : ''}
+                  aria-current={settingsSection === id ? 'page' : undefined}
                   onClick={() => setSettingsSection(id)}
                 >
+                  <Icon size={16} aria-hidden="true" />
                   {label}
                 </button>
               ))}
@@ -327,7 +331,13 @@ export function WorkspaceDialog({
           {(dialog.type === 'dot' ||
             (dialog.type === 'settings' &&
               settingsSection === 'permissions')) && (
-            <>
+            <div
+              className={
+                dialog.type === 'settings'
+                  ? 'settings-permission-group'
+                  : undefined
+              }
+            >
               <label className="permission-row">
                 <input
                   type="checkbox"
@@ -337,8 +347,9 @@ export function WorkspaceDialog({
                 <span>
                   <strong>Public-page research</strong>
                   <small>
-                    Allow the server-side read-only browser tool. Global
-                    settings always take precedence.
+                    {dialog.type === 'settings'
+                      ? 'Read public web pages.'
+                      : 'Allow the server-side read-only browser tool. Global settings always take precedence.'}
                   </small>
                 </span>
               </label>
@@ -351,8 +362,9 @@ export function WorkspaceDialog({
                 <span>
                   <strong>Use saved memories</strong>
                   <small>
-                    Allow essential preferences and on-demand recall. Changing
-                    permission stops active work.
+                    {dialog.type === 'settings'
+                      ? 'Recall saved preferences and context.'
+                      : 'Allow essential preferences and on-demand recall. Changing permission stops active work.'}
                   </small>
                 </span>
               </label>
@@ -365,12 +377,18 @@ export function WorkspaceDialog({
                 <span>
                   <strong>Connected apps</strong>
                   <small>
-                    Allow access to the owner’s apps through Composio. Global
-                    settings always take precedence.
+                    {dialog.type === 'settings'
+                      ? 'Use your connected services.'
+                      : 'Allow access to the owner’s apps through Composio. Global settings always take precedence.'}
                   </small>
                 </span>
               </label>
-            </>
+              {dialog.type === 'settings' && (
+                <p className="settings-footnote">
+                  Applies to all Dots. Changes may stop active work.
+                </p>
+              )}
+            </div>
           )}
           {dialog.type === 'dot' &&
             dialog.dot &&
@@ -478,33 +496,27 @@ export function WorkspaceDialog({
               </p>
             </>
           )}
+          {dialog.type === 'settings' && settingsSection === 'storage' && (
+            <StorageSettings />
+          )}
           {dialog.type === 'settings' && settingsSection === 'general' && (
-            <fieldset className="appearance-fields">
-              <legend>Appearance</legend>
-              <div className="segmented" role="radiogroup">
-                {(['system', 'light', 'dark'] as ThemePreference[]).map(
-                  (option) => (
-                    <label key={option}>
-                      <input
-                        type="radio"
-                        name="theme"
-                        value={option}
-                        checked={theme === option}
-                        onChange={() => {
-                          setTheme(option);
-                          setThemePreference(option);
-                        }}
-                      />
-                      <span>{option[0].toUpperCase() + option.slice(1)}</span>
-                    </label>
-                  ),
-                )}
-              </div>
-              <p className="muted">
-                System follows your device’s appearance. Your preference is
-                saved automatically.
-              </p>
-            </fieldset>
+            <div className="settings-row">
+              <label htmlFor="settings-theme">Appearance</label>
+              <select
+                id="settings-theme"
+                aria-label="Appearance"
+                value={theme}
+                onChange={(event) => {
+                  const next = event.target.value as ThemePreference;
+                  setTheme(next);
+                  setThemePreference(next);
+                }}
+              >
+                <option value="system">System</option>
+                <option value="light">Light</option>
+                <option value="dark">Dark</option>
+              </select>
+            </div>
           )}
           {dialog.type === 'settings' &&
             settingsSection === 'general' &&
@@ -512,9 +524,7 @@ export function WorkspaceDialog({
               <section className="native-settings">
                 <div>
                   <h3>Desktop companion</h3>
-                  <p>
-                    Choose your companion’s appearance and desktop behavior.
-                  </p>
+                  <p>Appearance and behavior</p>
                 </div>
                 <button
                   type="button"
@@ -524,68 +534,51 @@ export function WorkspaceDialog({
                     )
                   }
                 >
-                  Customize companion
+                  Customize
                 </button>
               </section>
             )}
           {dialog.type === 'settings' && settingsSection === 'services' && (
-            <div className="config-note">
-              <strong>Service setup</strong>
-              <p>
-                Conversations:{' '}
-                {workspace.setup.conversationBackend === 'local'
-                  ? 'local PostgreSQL'
-                  : 'CopilotKit Intelligence'}
-                . AI:{' '}
-                {workspace.setup.llmBackend === 'subscription'
-                  ? `your ${workspace.setup.llmProvider ?? 'codex'} subscription`
-                  : 'configured model API'}
-                .
-              </p>
-              {workspace.setup.llmBackend === 'subscription' && (
-                <p>
-                  Log in to the selected CLI on the server. Replies arrive after
-                  each model step finishes.
+            <section className="settings-services">
+              <dl className="settings-service-list">
+                <div>
+                  <dt>AI provider</dt>
+                  <dd>
+                    {workspace.setup.llmBackend === 'subscription'
+                      ? `${workspace.setup.llmProvider ?? 'codex'} · Subscription`
+                      : 'Model API'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Conversations</dt>
+                  <dd>
+                    {workspace.setup.conversationBackend === 'local'
+                      ? 'Local'
+                      : 'Intelligence'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Slack</dt>
+                  <dd>{workspace.setup.slack.replaceAll('_', ' ')}</dd>
+                </div>
+                <div>
+                  <dt>Realtime voice</dt>
+                  <dd>
+                    {workspace.setup.voice ? 'Configured' : 'Not configured'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Connected apps</dt>
+                  <dd>
+                    {workspace.setup.composio ? 'Configured' : 'Not configured'}
+                  </dd>
+                </div>
+              </dl>
+              {workspace.setup.missing.length > 0 && (
+                <p className="settings-setup-note">
+                  Setup needed: {workspace.setup.missing.join(', ')}
                 </p>
               )}
-              {workspace.setup.conversationBackend === 'local' && (
-                <p>
-                  Local learning uses Compact and Dream. Enable it in each Dot’s
-                  settings. Managed Slack still requires Intelligence.
-                </p>
-              )}
-              <p>
-                {workspace.setup.missing.length ? (
-                  <>
-                    Add{' '}
-                    {workspace.setup.missing.map((name, index) => (
-                      <span key={name}>
-                        {index > 0 && ', '}
-                        <code>{name}</code>
-                      </span>
-                    ))}{' '}
-                    to the server environment, then restart.
-                  </>
-                ) : (
-                  'Text configuration is present. A successful conversation confirms connectivity.'
-                )}
-              </p>
-              <p>
-                Slack: {workspace.setup.slack.replaceAll('_', ' ')}. Voice:{' '}
-                {workspace.setup.voice
-                  ? 'configuration present'
-                  : 'needs VOICE_API_KEY and VOICE_MODEL'}
-                .
-              </p>
-              <div className="service-summary">
-                <strong>Optional connections</strong>
-                <p>
-                  Composio:{' '}
-                  {workspace.setup.composio ? 'configured' : 'not configured'}.
-                  Add MCP servers and choose app toolkits in each Dot’s
-                  settings.
-                </p>
-              </div>
               {window.dotWorkspace && (
                 <button
                   type="button"
@@ -598,7 +591,31 @@ export function WorkspaceDialog({
                   Workspace setup
                 </button>
               )}
-            </div>
+              <details className="settings-help">
+                <summary>Setup details</summary>
+                <div>
+                  {workspace.setup.llmBackend === 'subscription' && (
+                    <p>Sign in to your provider’s CLI on this computer.</p>
+                  )}
+                  <p>
+                    Manage MCP servers, app access and learning in each Dot’s
+                    settings.
+                  </p>
+                  {workspace.setup.missing.length > 0 && (
+                    <p>Add the missing environment values, then restart.</p>
+                  )}
+                  {!workspace.setup.voice && (
+                    <p>
+                      Realtime voice requires VOICE_API_KEY and VOICE_MODEL.
+                      Local voice has its own setup.
+                    </p>
+                  )}
+                  <p>
+                    Configured services still need a successful connection test.
+                  </p>
+                </div>
+              </details>
+            </section>
           )}
           {dialog.type === 'memory' && (
             <p className="muted">

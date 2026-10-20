@@ -31,28 +31,28 @@ export function memoryRoutes(platform: Platform): Hono {
     service = platform.memory!;
   const memory = platform.workspace.memory;
   const id = (c: Context) => idSchema.parse(c.req.param('id'));
-  const dot = (c: Context) => {
+  const dot = async (c: Context) => {
     const value = id(c);
-    if (!platform.workspace.dot(value))
+    if (!(await platform.workspace.dot(value)))
       throw new HTTPException(404, { message: 'Dot not found.' });
     return value;
   };
-  const item = (c: Context) => {
-    const value = memory.get(id(c));
+  const item = async (c: Context) => {
+    const value = await memory.get(id(c));
     if (!value) throw new HTTPException(404, { message: 'Memory not found.' });
     return value;
   };
-  const scope = (value: MemoryScope) => {
+  const scope = async (value: MemoryScope) => {
     if (
-      (value.kind === 'dot' && !platform.workspace.dot(value.id)) ||
+      (value.kind === 'dot' && !(await platform.workspace.dot(value.id))) ||
       (value.kind === 'space' &&
-        !platform.workspace.spaces().some((s) => s.id === value.id))
+        !(await platform.workspace.spaces()).some((s) => s.id === value.id))
     )
       throw new HTTPException(404, { message: 'Memory scope not found.' });
     return value;
   };
-  const receipt = (c: Context) => {
-    const value = memory.history.receipt(id(c));
+  const receipt = async (c: Context) => {
+    const value = await memory.history.receipt(id(c));
     if (!value)
       throw new HTTPException(404, { message: 'Memory change set not found.' });
     return value;
@@ -100,7 +100,7 @@ export function memoryRoutes(platform: Platform): Hono {
       503,
     );
   });
-  app.get('/memory-items', (c) => {
+  app.get('/memory-items', async (c) => {
     const q = z
       .object({
         limit: z.coerce.number().int().min(1).max(100).default(50),
@@ -113,7 +113,7 @@ export function memoryRoutes(platform: Platform): Hono {
       .strict()
       .parse(c.req.query());
     const selected = q.scopeKind
-      ? scope(
+      ? await scope(
           memoryScopeSchema.parse(
             q.scopeKind === 'owner'
               ? { kind: 'owner' }
@@ -122,7 +122,7 @@ export function memoryRoutes(platform: Platform): Hono {
         )
       : undefined;
     return c.json(
-      memory.listOwner({
+      await memory.listOwner({
         limit: q.limit,
         cursor: q.cursor,
         kind: q.kind,
@@ -139,10 +139,13 @@ export function memoryRoutes(platform: Platform): Hono {
         .extend({ kind: memoryKindSchema.optional(), scope: memoryScopeSchema })
         .strict(),
     );
-    return c.json(memory.create({ ...input, scope: scope(input.scope) }), 201);
+    return c.json(
+      await memory.create({ ...input, scope: await scope(input.scope) }),
+      201,
+    );
   });
   app.get('/memory-items/:id', async (c) => {
-    const found = item(c);
+    const found = await item(c);
     const sources = await Promise.all(
       found.sources.map(async (ref) => ({
         ref,
@@ -151,20 +154,22 @@ export function memoryRoutes(platform: Platform): Hono {
     );
     return c.json({
       item: found,
-      revisions: memory.revisions(found.id),
+      revisions: await memory.revisions(found.id),
       sources,
     });
   });
   app.patch('/memory-items/:id', async (c) => {
-    const found = item(c),
+    const found = await item(c),
       input = await body(
         c,
         z.object({ expectedRevision: revision, patch: editable }).strict(),
       );
-    return c.json(memory.edit(found.id, input.expectedRevision, input.patch));
+    return c.json(
+      await memory.edit(found.id, input.expectedRevision, input.patch),
+    );
   });
   app.post('/memory-items/:id/review', async (c) => {
-    const found = item(c),
+    const found = await item(c),
       input = await body(
         c,
         z
@@ -183,13 +188,13 @@ export function memoryRoutes(platform: Platform): Hono {
     );
   });
   app.post('/memory-items/:id/forget', async (c) => {
-    const found = item(c),
+    const found = await item(c),
       input = await body(c, z.object({ expectedRevision: revision }).strict());
     service.publication.forget(found.id, input.expectedRevision);
     return c.json({ ok: true });
   });
   app.post('/memory-items/:id/share', async (c) => {
-    const found = item(c),
+    const found = await item(c),
       input = await body(
         c,
         z
@@ -200,13 +205,15 @@ export function memoryRoutes(platform: Platform): Hono {
       await service.publication.share(
         found.id,
         input.expectedRevision,
-        scope(input.scope),
+        await scope(input.scope),
       ),
     );
   });
-  app.get('/dots/:id/memory-settings', (c) => c.json(memory.settings(dot(c))));
+  app.get('/dots/:id/memory-settings', async (c) =>
+    c.json(await memory.settings(await dot(c))),
+  );
   app.put('/dots/:id/memory-settings', async (c) => {
-    const dotId = dot(c),
+    const dotId = await dot(c),
       input = await body(
         c,
         z
@@ -225,7 +232,7 @@ export function memoryRoutes(platform: Platform): Hono {
     return c.json(await service.requestCompact(id(c)), 202);
   });
   app.post('/dots/:id/dream', async (c) => {
-    const dotId = dot(c),
+    const dotId = await dot(c),
       input = await body(
         c,
         z
@@ -240,16 +247,16 @@ export function memoryRoutes(platform: Platform): Hono {
     );
   });
   app.get('/dots/:id/memory-jobs', async (c) => {
-    const dotId = dot(c);
+    const dotId = await dot(c);
     return c.json({
       ...(await service.status(dotId)),
-      changes: memory.history.receipts(dotId),
+      changes: await memory.history.receipts(dotId),
     });
   });
-  app.get('/memory-changes/:id', (c) => c.json(receipt(c)));
+  app.get('/memory-changes/:id', async (c) => c.json(await receipt(c)));
   app.post('/memory-changes/:id/restore-preview', async (c) => {
     await body(c, empty);
-    return c.json(service.publication.previewRestore(receipt(c).id));
+    return c.json(service.publication.previewRestore((await receipt(c)).id));
   });
   app.post('/memory-changes/:id/restore', async (c) => {
     const changeId = id(c),
@@ -262,7 +269,7 @@ export function memoryRoutes(platform: Platform): Hono {
           })
           .strict(),
       );
-    const preview = memory.history.preview(input.previewId);
+    const preview = await memory.history.preview(input.previewId);
     if (!preview || preview.changeSetId !== changeId)
       throw new HTTPException(409, {
         message: 'Restore preview does not match this change set.',

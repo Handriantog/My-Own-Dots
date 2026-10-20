@@ -1,3 +1,9 @@
+import type { StoreRepository } from './storage/runtime-repositories.js';
+import {
+  snapshotRoutes,
+  type SnapshotOperations,
+} from './storage/snapshot-routes.js';
+import type { MaintenanceGate } from './storage/maintenance.js';
 import { memoryRoutes } from './memory-routes.js';
 import { computerRoutes } from './computer-routes.js';
 import { connectionRoutes } from './connection-routes.js';
@@ -6,7 +12,7 @@ import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
-import { Store } from './store.js';
+
 import { Runner } from './runner.js';
 import { configured, type Config } from './research.js';
 import type { Platform } from './platform.js';
@@ -16,13 +22,15 @@ import { localVoiceRoutes } from './local-voice/routes.js';
 import type { LocalVoiceService } from './local-voice/service.js';
 const interval = z.number().int().min(60).max(31_536_000).nullable();
 export interface AppOptions {
-  store: Store;
+  store: StoreRepository;
   runner: Runner;
   config: Config;
   ownerToken?: string;
   origin?: string | string[];
   platform?: Platform;
   localVoice?: LocalVoiceService;
+  maintenance?: MaintenanceGate;
+  snapshots?: SnapshotOperations;
 }
 export function createApp({
   store,
@@ -32,6 +40,8 @@ export function createApp({
   origin,
   platform,
   localVoice,
+  maintenance = platform?.maintenance,
+  snapshots,
 }: AppOptions) {
   const app = new Hono();
   app.use(
@@ -96,6 +106,30 @@ export function createApp({
       return c.json({ error: 'Use application/json.' }, 415);
     await next();
   });
+  app.use('/api/*', async (c, next) => {
+    const path = c.req.path;
+    const read = c.req.method === 'GET' || c.req.method === 'HEAD';
+    // These control/read endpoints do not initialize or mutate workspace data.
+    // Snapshot operations own their separate reader lease; they must never
+    // acquire a writer lease while trying to drain the writers themselves.
+    const independent =
+      (read &&
+        [
+          '/api/state',
+          '/api/desktop/identity',
+          '/api/storage/status',
+          '/api/local-voice/status',
+          '/api/copilotkit/info',
+        ].includes(path)) ||
+      /^\/api\/storage\/snapshots(?:\/[^/]+(?:\/(?:cancel|release))?)?$/.test(
+        path,
+      ) ||
+      /^\/api\/copilotkit\/agent\/[^/]+\/stop$/.test(path) ||
+      /^\/api\/local-voice\/calls\/[^/]+\/control$/.test(path);
+    if (!maintenance || independent) return next();
+    await maintenance.runWrite(c.req.raw.signal, next, { background: read });
+  });
+  if (snapshots && ownerToken) app.route('/api', snapshotRoutes(snapshots));
   if (platform) app.route('/api', computerRoutes(platform.computers));
   app.route('/api', localVoiceRoutes(localVoice));
   if (platform?.workspace?.folders)
@@ -112,17 +146,19 @@ export function createApp({
     text: string;
     createdAt: number;
   }) => ({ id: item.id, text: item.text, createdAt: item.createdAt });
-  const voice = platform ? new VoiceService(platform) : undefined;
+  const voice = platform
+    ? (platform.voice ?? new VoiceService(platform))
+    : undefined;
   if (platform && voice) app.route('/api', workspaceRoutes(platform, voice));
-  app.get('/api/state', (c) =>
+  app.get('/api/state', async (c) =>
     c.json({
-      settings: store.settings(),
-      tasks: store.tasks(),
+      settings: await store.settings(),
+      tasks: await store.tasks(),
       memories: localMemory
-        ? localMemory
-            .listOwner({ status: 'active', limit: 100 })
-            .items.map(legacyMemory)
-        : store.memories(),
+        ? (
+            await localMemory.listOwner({ status: 'active', limit: 100 })
+          ).items.map(legacyMemory)
+        : await store.memories(),
       mode: config.mode,
       configured: configured(config),
     }),
@@ -144,7 +180,7 @@ export function createApp({
         },
         400,
       );
-    if (!store.settings().researchAllowed)
+    if (!(await store.settings()).researchAllowed)
       return c.json({ error: 'Research is disabled in Settings.' }, 403);
     if (platform) {
       if (platform.setup().missing.length)
@@ -158,7 +194,7 @@ export function createApp({
           400,
         );
       try {
-        platform.workspace.requireThread(parsed.data.threadId);
+        await platform.workspace.requireThread(parsed.data.threadId);
       } catch {
         return c.json(
           { error: 'Conversation is not owned by this workspace.' },
@@ -166,16 +202,16 @@ export function createApp({
         );
       }
     }
-    const task = store.createTask(
+    const task = await store.createTask(
       parsed.data.prompt,
       parsed.data.intervalSeconds,
     );
     if (platform && parsed.data.threadId)
-      platform.workspace.bindTask(task.id, parsed.data.threadId);
+      await platform.workspace.bindTask(task.id, parsed.data.threadId);
     return c.json(task, 201);
   });
-  app.get('/api/tasks/:id', (c) => {
-    const detail = store.detail(c.req.param('id'));
+  app.get('/api/tasks/:id', async (c) => {
+    const detail = await store.detail(c.req.param('id'));
     return detail ? c.json(detail) : c.json({ error: 'Task not found.' }, 404);
   });
   app.post('/api/tasks/:id/actions', async (c) => {
@@ -184,9 +220,12 @@ export function createApp({
       .strict()
       .safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: 'Unknown task action.' }, 400);
-    if (parsed.data.action === 'run' && !store.settings().researchAllowed)
+    if (
+      parsed.data.action === 'run' &&
+      !(await store.settings()).researchAllowed
+    )
       return c.json({ error: 'Research is disabled in Settings.' }, 403);
-    const task = store.action(c.req.param('id'), parsed.data.action);
+    const task = await store.action(c.req.param('id'), parsed.data.action);
     if (parsed.data.action !== 'run') runner.abort(c.req.param('id'));
     return task ? c.json(task) : c.json({ error: 'Task not found.' }, 404);
   });
@@ -200,7 +239,10 @@ export function createApp({
         { error: 'Repeat interval must be 60 seconds to one year, or null.' },
         400,
       );
-    const task = store.schedule(c.req.param('id'), parsed.data.intervalSeconds);
+    const task = await store.schedule(
+      c.req.param('id'),
+      parsed.data.intervalSeconds,
+    );
     return task ? c.json(task) : c.json({ error: 'Task not found.' }, 404);
   });
   app.patch('/api/settings', async (c) => {
@@ -215,8 +257,8 @@ export function createApp({
       .strict()
       .safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: 'Invalid settings.' }, 400);
-    const previous = store.settings();
-    const settings = store.updateSettings(parsed.data);
+    const previous = await store.settings();
+    const settings = await store.updateSettings(parsed.data);
     if (
       settings.paused ||
       !settings.researchAllowed ||
@@ -243,13 +285,13 @@ export function createApp({
     return c.json(
       localMemory
         ? legacyMemory(
-            localMemory.create({
+            await localMemory.create({
               scope: { kind: 'owner' },
               title: parsed.data.text.slice(0, 120),
               text: parsed.data.text,
             }),
           )
-        : store.saveMemory(parsed.data.text),
+        : await store.saveMemory(parsed.data.text),
       201,
     );
   });
@@ -264,28 +306,28 @@ export function createApp({
         400,
       );
     if (localMemory) {
-      const found = localMemory.get(c.req.param('id'));
+      const found = await localMemory.get(c.req.param('id'));
       if (!found) return c.json({ error: 'Memory not found.' }, 404);
       return c.json(
         legacyMemory(
-          localMemory.edit(found.id, found.revision, {
+          await localMemory.edit(found.id, found.revision, {
             text: parsed.data.text,
           }),
         ),
       );
     }
-    if (!store.memories().some((m) => m.id === c.req.param('id')))
+    if (!(await store.memories()).some((m) => m.id === c.req.param('id')))
       return c.json({ error: 'Memory not found.' }, 404);
-    return c.json(store.saveMemory(parsed.data.text, c.req.param('id')));
+    return c.json(await store.saveMemory(parsed.data.text, c.req.param('id')));
   });
-  app.delete('/api/memories/:id', (c) => {
+  app.delete('/api/memories/:id', async (c) => {
     if (localMemory) {
-      const found = localMemory.get(c.req.param('id'));
+      const found = await localMemory.get(c.req.param('id'));
       if (!found) return c.json({ error: 'Memory not found.' }, 404);
       platform!.memory!.publication.forget(found.id, found.revision);
       return c.json({ ok: true });
     }
-    return store.deleteMemory(c.req.param('id'))
+    return (await store.deleteMemory(c.req.param('id')))
       ? c.json({ ok: true })
       : c.json({ error: 'Memory not found.' }, 404);
   });

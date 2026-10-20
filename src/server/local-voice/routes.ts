@@ -56,12 +56,12 @@ export function localVoiceRoutes(service?: LocalVoiceService) {
       );
     await next();
   });
-  app.get('/local-voice/dots/:id/settings', (c) =>
-    c.json(service!.settings(c.req.param('id'))),
+  app.get('/local-voice/dots/:id/settings', async (c) =>
+    c.json(await service!.settings(c.req.param('id'))),
   );
   app.put('/local-voice/dots/:id/settings', async (c) =>
     c.json(
-      service!.saveSettings(
+      await service!.saveSettings(
         c.req.param('id'),
         voiceSettingsSchema.parse(await c.req.json()),
       ),
@@ -97,12 +97,12 @@ export function localVoiceRoutes(service?: LocalVoiceService) {
       201,
     );
   });
-  app.get('/local-voice/calls/:id/events', (c) => {
-    const call = service!.require(
+  app.get('/local-voice/calls/:id/events', async (c) => {
+    const call = await service!.require(
       c.req.param('id'),
       c.req.header('x-dot-voice-token'),
     );
-    call.touch();
+    await call.touch();
     if (call.connected) throw Error('Call already has an event stream');
     return streamSSE(c, async (stream) => {
       let finish: () => void = () => {};
@@ -144,7 +144,7 @@ export function localVoiceRoutes(service?: LocalVoiceService) {
     });
   });
   app.post('/local-voice/calls/:id/frame', async (c) => {
-    const call = service!.require(
+    const call = await service!.require(
       c.req.param('id'),
       c.req.header('x-dot-voice-token'),
     );
@@ -168,14 +168,14 @@ export function localVoiceRoutes(service?: LocalVoiceService) {
   });
   app.post('/local-voice/calls/:id/control', async (c) => {
     const input = control.parse(await c.req.json());
-    const call = service!.require(
+    const call = await service!.require(
       c.req.param('id'),
       c.req.header('x-dot-voice-token'),
       { allowEnded: input.action === 'end' },
     );
     switch (input.action) {
       case 'heartbeat':
-        call.touch();
+        await call.touch();
         break;
       case 'end':
         await call.end();
@@ -193,7 +193,7 @@ export function localVoiceRoutes(service?: LocalVoiceService) {
         await call.answer(input.messageId);
         break;
       case 'played':
-        call.played(input.generation, input.sequence, input.samples);
+        await call.played(input.generation, input.sequence, input.samples);
         break;
     }
     return c.json({ ok: true });

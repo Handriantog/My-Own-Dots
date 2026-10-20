@@ -55,7 +55,7 @@ it('exports canonical user/assistant text and rejects failed or oversized histor
   expect(ws.pages.list(dot.spaceId)).toHaveLength(1);
   ws.close();
 });
-it('scopes agent tools to the Dot Space and re-reads current context with CAS and pause enforcement', () => {
+it('scopes agent tools to the Dot Space and re-reads current context with CAS and pause enforcement', async () => {
   const ws = new WorkspaceStore(':memory:', 'owner');
   const dot = ws.dots()[0];
   const other = ws.createSpace('Other', '');
@@ -65,17 +65,20 @@ it('scopes agent tools to the Dot Space and re-reads current context with CAS an
   ws.pages.reserveThread(page.id, dot.id, 'thread');
   ws.pages.finishThread(page.id, dot.id);
   let paused = false;
-  const access = pageAccess(ws, dot.spaceId, 'thread', () => {
+  const access = await pageAccess(ws, dot.spaceId, 'thread', () => {
     if (paused) throw new Error('Paused');
   });
-  expect(() => access.read(foreign.id)).toThrow();
-  access.edit(page.id, { expectedRevision: 1, content: 'Fresh' });
-  expect(access.context()?.content).toBe('Fresh');
-  expect(() =>
-    access.edit(page.id, { expectedRevision: 1, content: 'Stale' }),
-  ).toThrow();
+  await expect((async () => await access.read(foreign.id))()).rejects.toThrow();
+  await access.edit(page.id, { expectedRevision: 1, content: 'Fresh' });
+  expect((await access.context())?.content).toBe('Fresh');
+  await expect(
+    (async () =>
+      await access.edit(page.id, { expectedRevision: 1, content: 'Stale' }))(),
+  ).rejects.toThrow();
   paused = true;
-  expect(() => access.create({ title: 'No write' })).toThrow('Paused');
+  await expect(
+    (async () => await access.create({ title: 'No write' }))(),
+  ).rejects.toThrow('Paused');
   expect(ws.pages.list(dot.spaceId)).toHaveLength(1);
   ws.close();
 });
@@ -154,18 +157,25 @@ it('grants multiple Spaces without changing thread identity and enforces revocat
     }),
   }));
   const thread = await service.conversation(other.id, page.id, dot.id);
-  const access = pageAccess(ws, dot.spaceId, thread.id, () => {});
-  expect(access.context()?.id).toBe(page.id);
-  expect(access.read(page.id).title).toBe('Brief');
-  expect(access.spaces()).toHaveLength(2);
+  const access = await pageAccess(ws, dot.spaceId, thread.id, () => {});
+  expect((await access.context())?.id).toBe(page.id);
+  expect((await access.read(page.id)).title).toBe('Brief');
+  expect(await access.spaces()).toHaveLength(2);
   expect(
     (await service.saveConversation(thread.id, 'Copy', null)).spaceId,
   ).toBe(other.id);
   ws.updateDot(dot.id, { ...dot, spaceIds: [dot.spaceId] });
-  expect(() => access.read(page.id, other.id)).toThrow(/access/);
-  expect(() =>
-    access.edit(page.id, { expectedRevision: 1, content: 'No' }, other.id),
-  ).toThrow(/access/);
+  await expect(
+    (async () => await access.read(page.id, other.id))(),
+  ).rejects.toThrow(/access/);
+  await expect(
+    (async () =>
+      await access.edit(
+        page.id,
+        { expectedRevision: 1, content: 'No' },
+        other.id,
+      ))(),
+  ).rejects.toThrow(/access/);
   await expect(
     service.conversation(other.id, page.id, dot.id),
   ).rejects.toThrow();
@@ -177,4 +187,40 @@ it('grants multiple Spaces without changing thread identity and enforces revocat
     thread.id,
   );
   ws.close();
+});
+
+it('holds database admission after a page creation response times out', async () => {
+  const { MaintenanceGate } =
+    await import('../src/server/storage/maintenance.js');
+  const gate = new MaintenanceGate();
+  const ws = new WorkspaceStore(':memory:', 'owner');
+  const dot = ws.dots()[0];
+  const page = ws.pages.create(dot.spaceId, { title: 'Slow storage' });
+  let finish!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const sdk = {
+    getOrCreateThread: () => pending,
+    getThreadMessages: async () => ({ messages: [] }),
+  };
+  const service = new PageService(ws, () => sdk, gate);
+  vi.useFakeTimers();
+  try {
+    const request = gate.runWrite(new AbortController().signal, () =>
+      service.conversation(dot.spaceId, page.id, dot.id),
+    );
+    const result = expect(request).rejects.toThrow(/timed out/);
+    await vi.advanceTimersByTimeAsync(30001);
+    await result;
+    await expect(
+      gate.acquire({ origin: 'manual', signal: new AbortController().signal }),
+    ).rejects.toThrow(/busy/i);
+    finish();
+    await vi.waitFor(() => expect(gate.status().activeWrites).toBe(0));
+  } finally {
+    finish();
+    vi.useRealTimers();
+    ws.close();
+  }
 });

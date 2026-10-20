@@ -23,9 +23,9 @@ it('persists bounded offline events with stable IDs and CLI identity across rest
   });
   const diagnostics = vi.fn();
   const env = { CPK_TELEMETRY_ID: 'cli-identity' };
-  let telemetry = new SetupTelemetry(store, env, offline, diagnostics);
+  let telemetry = await SetupTelemetry.create(store, env, offline, diagnostics);
   for (let i = 0; i < 260; i++)
-    telemetry.capture({ kind: 'step_viewed', step: 'ready' });
+    await telemetry.capture({ kind: 'step_viewed', step: 'ready' });
   await telemetry.flush();
   const state = JSON.parse(store.setupTelemetryState()!);
   expect(state.queue).toHaveLength(256);
@@ -35,7 +35,7 @@ it('persists bounded offline events with stable IDs and CLI identity across rest
   store.close();
   store = new Store(path);
   const requests: { identity: string; body: unknown }[] = [];
-  telemetry = new SetupTelemetry(
+  telemetry = await SetupTelemetry.create(
     store,
     env,
     async (identity, body) => {
@@ -69,11 +69,11 @@ it.each(['DO_NOT_TRACK', 'COPILOTKIT_TELEMETRY_DISABLED'])(
       const store = new Store(':memory:');
       const env: Record<string, string> = {};
       const send = vi.fn(async () => {});
-      const telemetry = new SetupTelemetry(store, env, send);
-      telemetry.capture({ kind: 'step_viewed', step: 'setup_required' });
+      const telemetry = await SetupTelemetry.create(store, env, send);
+      await telemetry.capture({ kind: 'step_viewed', step: 'setup_required' });
       env[key] = value;
       await telemetry.flush();
-      telemetry.capture({ kind: 'activated' });
+      await telemetry.capture({ kind: 'activated' });
       expect(store.setupTelemetryState()).toBeUndefined();
       expect(send).not.toHaveBeenCalled();
       store.close();
@@ -81,11 +81,11 @@ it.each(['DO_NOT_TRACK', 'COPILOTKIT_TELEMETRY_DISABLED'])(
   },
 );
 
-it('reuses fallback identity and recovers abandonment without treating ready as activated', () => {
+it('reuses fallback identity and recovers abandonment without treating ready as activated', async () => {
   const store = new Store(':memory:');
-  const first = new SetupTelemetry(store, {}, async () => {});
-  first.capture({ kind: 'step_viewed', step: 'ready' });
-  const second = new SetupTelemetry(store, {}, async () => {});
+  const first = await SetupTelemetry.create(store, {}, async () => {});
+  await first.capture({ kind: 'step_viewed', step: 'ready' });
+  const second = await SetupTelemetry.create(store, {}, async () => {});
   expect(second.identity).toBe(first.identity);
   const state = JSON.parse(store.setupTelemetryState()!);
   expect(state.activated).toBe(false);
@@ -93,8 +93,8 @@ it('reuses fallback identity and recovers abandonment without treating ready as 
     kind: 'setup_abandoned',
     step: 'ready',
   });
-  second.capture({ kind: 'activated' });
-  second.capture({ kind: 'activated' });
+  await second.capture({ kind: 'activated' });
+  await second.capture({ kind: 'activated' });
   expect(
     JSON.parse(store.setupTelemetryState()!).queue.filter(
       (q: { event: { kind: string } }) => q.event.kind === 'activated',
@@ -158,7 +158,7 @@ it('activates only after a successful assistant answer and records a bounded fai
 it('protects the browser route with owner auth and origin guards and rejects forged readiness', async () => {
   const store = new Store(':memory:');
   const workspace = new WorkspaceStore(':memory:', 'fixture-owner');
-  const platform = new Platform(store, workspace, {
+  const platform = await Platform.create(store, workspace, {
     baseUrl: '',
     runtimeUrl: '',
     voiceName: 'marin',
@@ -234,17 +234,17 @@ it('does not activate from user text, partial answers or tool-only success', () 
   expect(capture).not.toHaveBeenCalled();
 });
 
-it('uses installation fallback after a CLI identity is removed, and never loses CLI precedence', () => {
+it('uses installation fallback after a CLI identity is removed, and never loses CLI precedence', async () => {
   const store = new Store(':memory:');
-  const cli = new SetupTelemetry(
+  const cli = await SetupTelemetry.create(
     store,
     { CPK_TELEMETRY_ID: 'cli-one' },
     async () => {},
   );
   expect(cli.identity).toBe('cli-one');
-  const fallback = new SetupTelemetry(store, {}, async () => {});
+  const fallback = await SetupTelemetry.create(store, {}, async () => {});
   expect(fallback.identity).toBe(cli.metadata.installation_id);
-  const replacement = new SetupTelemetry(
+  const replacement = await SetupTelemetry.create(
     store,
     { CPK_TELEMETRY_ID: 'cli-two' },
     async () => {},
@@ -263,9 +263,9 @@ it('bounds a shutdown flush and retains events that did not fit its deadline', a
     const send = vi.fn(async () => {
       await new Promise((resolve) => setTimeout(resolve, 1000));
     });
-    const telemetry = new SetupTelemetry(store, {}, send);
+    const telemetry = await SetupTelemetry.create(store, {}, send);
     for (let i = 0; i < 10; i++)
-      telemetry.capture({ kind: 'step_viewed', step: 'ready' });
+      await telemetry.capture({ kind: 'step_viewed', step: 'ready' });
     const stopped = telemetry.stop();
     await vi.advanceTimersByTimeAsync(3500);
     await stopped;
@@ -275,4 +275,59 @@ it('bounds a shutdown flush and retains events that did not fit its deadline', a
     vi.useRealTimers();
     store.close();
   }
+});
+
+it('defers telemetry delivery and capture until snapshot readers release', async () => {
+  const { MaintenanceGate } =
+    await import('../src/server/storage/maintenance.js');
+  const gate = new MaintenanceGate();
+  const store = new Store(':memory:');
+  const send = vi.fn(async () => {});
+  const telemetry = await SetupTelemetry.create(
+    store,
+    {},
+    send,
+    () => {},
+    gate,
+  );
+  const lease = await gate.acquire({
+    origin: 'manual',
+    signal: new AbortController().signal,
+  });
+  const before = store.setupTelemetryState();
+  const capture = telemetry.capture({ kind: 'step_viewed', step: 'ready' });
+  const flushing = telemetry.flush();
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(store.setupTelemetryState()).toBe(before);
+    expect(send).not.toHaveBeenCalled();
+  } finally {
+    lease.release();
+  }
+  await capture;
+  await flushing;
+  expect(send).toHaveBeenCalledOnce();
+  expect(JSON.parse(store.setupTelemetryState()!).queue).toEqual([]);
+  await telemetry.stop();
+  store.close();
+});
+
+it('retains telemetry for restart without reporting failures after admission closes', async () => {
+  const { MaintenanceGate } =
+    await import('../src/server/storage/maintenance.js');
+  const gate = new MaintenanceGate();
+  const store = new Store(':memory:');
+  const report = vi.fn();
+  const send = vi.fn(async () => {});
+  const telemetry = await SetupTelemetry.create(store, {}, send, report, gate);
+  await telemetry.capture({ kind: 'step_viewed', step: 'ready' });
+  gate.close();
+  await telemetry.stop();
+  expect(report).not.toHaveBeenCalled();
+  expect(send).not.toHaveBeenCalled();
+  const restarted = await SetupTelemetry.create(store, {}, send, report);
+  await restarted.flush();
+  expect(send).toHaveBeenCalledTimes(2);
+  expect(JSON.parse(store.setupTelemetryState()!).queue).toEqual([]);
+  store.close();
 });

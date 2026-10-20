@@ -138,6 +138,49 @@ interface SourceRow {
   tool_name?: string;
   workflow_complete?: boolean;
 }
+export interface CompactSnapshot {
+  lastRunId: string | null;
+  updatedAt: number;
+  lastStatus: string | null;
+  checkpointId: string | null;
+}
+export interface PendingSources {
+  dotId: string;
+  since: number;
+  threadIds: string[];
+  cursor: string;
+}
+export type EvidenceResult<T> = T | Promise<T>;
+export interface ConversationEvidenceRepository {
+  blockedThreads(threadIds: string[]): EvidenceResult<string[]>;
+  sourceThreads(sourceIds: string[]): EvidenceResult<string[]>;
+  pendingRuns(threadIds: string[], cursor: string): EvidenceResult<string[]>;
+  pendingSources(input: PendingSources): EvidenceResult<string[]>;
+  compactSnapshot(
+    threadId: string,
+  ): EvidenceResult<CompactSnapshot | undefined>;
+  completedExchanges(threadId: string, since: number): EvidenceResult<number>;
+  modelMessages(
+    threadId: string,
+    messages: Message[],
+  ): EvidenceResult<Message[]>;
+  indexRun(runId: string): Promise<void>;
+  threadMessages(threadId: string): EvidenceResult<Message[]>;
+  latestCheckpoint(
+    threadId: string,
+    messages?: Message[],
+  ): EvidenceResult<ContextCheckpoint | undefined>;
+  saveCheckpoint(
+    checkpoint: ContextCheckpoint,
+    expectedPrefixHash: string,
+    lease?: { id: string; token: string; now: number },
+  ): EvidenceResult<boolean>;
+  generation(): EvidenceResult<number>;
+  coverage(dotId?: string): EvidenceResult<IndexCoverage>;
+  searchEpisodes(query: EpisodeQuery): EvidenceResult<EpisodePage>;
+  sourceById(id: string): EvidenceResult<SourceRecord | undefined>;
+  readSource(ref: SourceRef): EvidenceResult<SourceRecord | undefined>;
+}
 /** Bound threads are the authority. PG rows alone never establish a grant. */
 export class ConversationMemory {
   constructor(
@@ -176,6 +219,69 @@ export class ConversationMemory {
       dotId,
       this.memoryEnabled(),
     );
+  }
+  async blockedThreads(threadIds: string[]): Promise<string[]> {
+    const result = await this.pg.query<{ id: string }>(
+      `SELECT t.id FROM local_ai_threads t JOIN local_ai_runs r ON r.owner_id=t.owner_id AND r.thread_id=t.id AND r.run_id=t.last_run_id
+      WHERE t.owner_id=$1 AND t.id=ANY($2::text[]) AND r.status='finished'
+      AND EXISTS(SELECT 1 FROM jsonb_array_elements(t.messages) m CROSS JOIN LATERAL jsonb_array_elements(coalesce(m->'toolCalls','[]'::jsonb)) c
+        WHERE m->>'role'='assistant' AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(t.messages) answer WHERE answer->>'role'='tool' AND answer->>'toolCallId'=c->>'id'))`,
+      [this.ownerId, threadIds],
+    );
+    return result.rows.map((row) => row.id);
+  }
+  async sourceThreads(sourceIds: string[]): Promise<string[]> {
+    const result = await this.pg.query<{ thread_id: string }>(
+      'SELECT DISTINCT thread_id FROM memory_episode_chunks WHERE owner_id=$1 AND source_id=ANY($2::text[])',
+      [this.ownerId, sourceIds],
+    );
+    return result.rows.map((row) => row.thread_id);
+  }
+  async pendingRuns(threadIds: string[], cursor: string): Promise<string[]> {
+    const result = await this.pg.query<{ run_id: string }>(
+      `SELECT r.run_id FROM local_ai_runs r WHERE r.owner_id=$1 AND r.thread_id=ANY($2::text[]) AND r.status<>'running' AND r.provenance_complete=true
+      AND r.run_id>$3 AND NOT EXISTS(SELECT 1 FROM memory_index_runs i WHERE i.owner_id=r.owner_id AND i.thread_id=r.thread_id AND i.run_id=r.run_id) ORDER BY r.run_id LIMIT 5`,
+      [this.ownerId, threadIds, cursor],
+    );
+    return result.rows.map((row) => row.run_id);
+  }
+  async pendingSources(input: PendingSources): Promise<string[]> {
+    const result = await this.pg.query<{ source_id: string }>(
+      `SELECT c.source_id FROM memory_episode_chunks c JOIN memory_evidence e ON e.owner_id=c.owner_id AND e.thread_id=c.thread_id AND e.run_id=c.run_id
+      LEFT JOIN memory_processed_sources p ON p.owner_id=c.owner_id AND p.source_id=c.source_id
+      WHERE c.owner_id=$1 AND e.dot_id=$2 AND e.completed_at>=$3 AND c.thread_id=ANY($4::text[]) AND p.source_id IS NULL AND c.source_id>$5 ORDER BY c.source_id LIMIT 40`,
+      [this.ownerId, input.dotId, input.since, input.threadIds, input.cursor],
+    );
+    return result.rows.map((row) => row.source_id);
+  }
+  async compactSnapshot(
+    threadId: string,
+  ): Promise<CompactSnapshot | undefined> {
+    const result = await this.pg.query<{
+      last_run_id: string | null;
+      updated_at: Date;
+      last_status: string | null;
+      checkpoint_id: string | null;
+    }>(
+      `SELECT t.last_run_id,t.updated_at,r.status AS last_status,(SELECT id FROM memory_checkpoints c WHERE c.owner_id=t.owner_id AND c.thread_id=t.id ORDER BY covered_count DESC,created_at DESC LIMIT 1) AS checkpoint_id FROM local_ai_threads t LEFT JOIN local_ai_runs r ON r.owner_id=t.owner_id AND r.thread_id=t.id AND r.run_id=t.last_run_id WHERE t.owner_id=$1 AND t.id=$2`,
+      [this.ownerId, threadId],
+    );
+    const row = result.rows[0];
+    return row
+      ? {
+          lastRunId: row.last_run_id,
+          updatedAt: row.updated_at.getTime(),
+          lastStatus: row.last_status,
+          checkpointId: row.checkpoint_id,
+        }
+      : undefined;
+  }
+  async completedExchanges(threadId: string, since: number): Promise<number> {
+    const result = await this.pg.query(
+      'SELECT count(*) AS n FROM memory_evidence WHERE owner_id=$1 AND thread_id=$2 AND workflow_complete=true AND completed_at>$3',
+      [this.ownerId, threadId, since],
+    );
+    return Number(result.rows[0].n);
   }
   async modelMessages(
     threadId: string,
@@ -371,7 +477,7 @@ export class ConversationMemory {
         JSON.stringify(prefix),
         lease?.id ?? null,
         lease?.token ?? null,
-        lease?.now ?? null,
+        lease ? Math.max(lease.now, Date.now()) : null,
       ],
     );
     return result.rowCount === 1;

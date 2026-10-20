@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { Store } from '../src/server/store.js';
 import { WorkspaceStore } from '../src/server/workspace.js';
+import { MaintenanceGate } from '../src/server/storage/maintenance.js';
 import { VoiceService } from '../src/server/voice.js';
 import type { PlatformConfig } from '../src/server/platform-config.js';
 const resources: (() => void)[] = [];
@@ -8,7 +9,7 @@ afterEach(() => {
   resources.splice(0).forEach((close) => close());
   vi.useRealTimers();
 });
-function fixture() {
+function fixture(maintenance?: MaintenanceGate) {
   const store = new Store(':memory:');
   const workspace = new WorkspaceStore(':memory:', 'owner');
   workspace.bindThread('thread', workspace.dots()[0].id, 'A conversation');
@@ -40,6 +41,7 @@ function fixture() {
     {
       workspace,
       store,
+      maintenance,
       config,
       turn,
       history,
@@ -70,7 +72,7 @@ it('binds voice history and compute to the existing thread, deduplicates tools a
   const body = f.transport.mock.calls[0][1]?.body;
   expect(body).toBeInstanceOf(FormData);
   expect(String((body as FormData).get('session'))).toContain('Earlier topic');
-  f.voice.activate(call.id);
+  await f.voice.activate(call.id);
   await Promise.all([
     f.voice.compute(call.id, 'tool-1', 'Research'),
     f.voice.compute(call.id, 'tool-1', 'Research'),
@@ -256,7 +258,7 @@ it('allows a rejected compute call to be retried with the same tool ID', async (
     offer,
     new AbortController().signal,
   );
-  f.voice.activate(call.id);
+  await f.voice.activate(call.id);
   f.turn.mockRejectedValueOnce(new Error('Provider unavailable'));
   await expect(f.voice.compute(call.id, 'retry', 'Research')).rejects.toThrow(
     'Provider unavailable',
@@ -274,7 +276,7 @@ it('counts failed compute attempts toward the six-turn limit', async () => {
     offer,
     new AbortController().signal,
   );
-  f.voice.activate(call.id);
+  await f.voice.activate(call.id);
   for (let i = 0; i < 6; i++) {
     f.turn.mockRejectedValueOnce(new Error('Provider unavailable'));
     await expect(
@@ -294,7 +296,7 @@ it('counts a retry of the same tool ID as another attempt', async () => {
     offer,
     new AbortController().signal,
   );
-  f.voice.activate(call.id);
+  await f.voice.activate(call.id);
   for (let i = 0; i < 6; i++) {
     f.turn.mockRejectedValueOnce(new Error('Provider unavailable'));
     await expect(f.voice.compute(call.id, 'same', 'Research')).rejects.toThrow(
@@ -314,7 +316,7 @@ it('keeps successful compute turns cached and enforces the six-turn cap', async 
     offer,
     new AbortController().signal,
   );
-  f.voice.activate(call.id);
+  await f.voice.activate(call.id);
   for (let i = 0; i < 6; i++) {
     await expect(f.voice.compute(call.id, String(i), 'Research')).resolves.toBe(
       'Current answer',
@@ -328,4 +330,67 @@ it('keeps successful compute turns cached and enforces the six-turn cap', async 
     'six compute-turn limit',
   );
   await f.voice.end(call.id, '');
+});
+
+it('keeps remote voice admitted through final receipt and expiration cleanup', async () => {
+  const gate = new MaintenanceGate();
+  const f = fixture(gate);
+  const call = await f.voice.begin(
+    'thread',
+    offer,
+    new AbortController().signal,
+  );
+  await expect(
+    gate.acquire({ origin: 'manual', signal: new AbortController().signal }),
+  ).rejects.toThrow(/busy/i);
+  let finish!: (value: string) => void;
+  f.turn.mockImplementationOnce(
+    () =>
+      new Promise<string>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const ending = f.voice.end(call.id, 'Confirmed');
+  await vi.waitFor(() => expect(f.turn).toHaveBeenCalled());
+  let captured = false;
+  const snapshot = gate
+    .acquire({ origin: 'automatic', signal: new AbortController().signal })
+    .then((lease) => {
+      captured = true;
+      return lease;
+    });
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(captured).toBe(false);
+  } finally {
+    finish('saved');
+  }
+  await ending;
+  const lease = await snapshot;
+  expect(f.workspace.call(call.id).transcript).toBe('Confirmed');
+  lease.release();
+  const next = await f.voice.begin(
+    'thread',
+    offer,
+    new AbortController().signal,
+  );
+  let cleanup!: () => void;
+  f.transport.mockImplementationOnce(
+    () =>
+      new Promise<Response>((resolve) => {
+        cleanup = () => resolve(new Response(null, { status: 200 }));
+      }),
+  );
+  const closing = f.voice.close();
+  await vi.waitFor(() => expect(cleanup).toBeTypeOf('function'));
+  await expect(
+    gate.acquire({ origin: 'manual', signal: new AbortController().signal }),
+  ).rejects.toThrow(/busy/i);
+  cleanup();
+  await closing;
+  expect(f.workspace.call(next.id).status).toBe('failed');
+  expect(gate.status().activeWrites).toBe(0);
+  await expect(
+    f.voice.begin('thread', offer, new AbortController().signal),
+  ).rejects.toThrow();
 });

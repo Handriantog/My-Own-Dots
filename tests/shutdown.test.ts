@@ -52,3 +52,27 @@ it('bounds a stuck shutdown and reports operation failures without stopping othe
   expect(exit).toHaveBeenCalledWith(1);
   expect(report).toHaveBeenCalledTimes(2);
 });
+it('applies the shutdown deadline while the asynchronous scheduler is still draining', async () => {
+  vi.useFakeTimers();
+  let release!: () => void;
+  const draining = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const exit = vi.fn();
+  const shutdown = createShutdown({
+    stopRunner: () => draining,
+    stopPlatform: async () => {},
+    closeServer: async () => {},
+    exit,
+    report: () => {},
+    timeoutMs: 100,
+  });
+  const pending = shutdown();
+  try {
+    await vi.advanceTimersByTimeAsync(100);
+    expect(exit).toHaveBeenCalledWith(1);
+  } finally {
+    release();
+    await pending;
+  }
+});

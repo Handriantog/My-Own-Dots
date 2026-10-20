@@ -1,3 +1,18 @@
+import type {
+  StoreRepository,
+  WorkspaceRepository,
+  EvidenceRepository,
+  RecallRepository,
+} from './storage/runtime-repositories.js';
+import {
+  WorkerContext,
+  type RuntimeContext,
+} from './storage/runtime-context.js';
+import type {
+  AsyncRepositories,
+  AsyncRepository,
+} from './storage/repository-contract.js';
+import type { MemoryJobRepository } from './memory-jobs.js';
 import { Pool } from 'pg';
 import {
   runAgent,
@@ -5,8 +20,8 @@ import {
   type AgentResult,
 } from 'myown-llm-integrator';
 import type { Message } from '@ag-ui/core';
-import type { Store } from './store.js';
-import type { WorkspaceStore } from './workspace.js';
+import { Store } from './store.js';
+import { WorkspaceStore } from './workspace.js';
 import type { LocalAiConfig } from './platform-config.js';
 import type { MemorySettingsPatch } from '../shared/memory.js';
 import { ConversationMemory, evidenceHash } from './conversation-memory.js';
@@ -20,6 +35,7 @@ import { InferenceScheduler } from './inference-scheduler.js';
 import { MemoryJobs, type MemoryJob } from './memory-jobs.js';
 import { DreamAnalysis } from './dream-analysis.js';
 import { DreamPublication } from './dream-publication.js';
+import type { MaintenanceGate } from './storage/maintenance.js';
 export function learningDayKey(now: number, timeZone: string): string {
   const parts = new Intl.DateTimeFormat('en', {
     timeZone,
@@ -42,19 +58,25 @@ function pendingApproval(messages: Message[]): boolean {
   );
 }
 interface Options {
+  repositories?: AsyncRepositories;
+  maintenance?: MaintenanceGate;
   pg?: Pool;
   clock?: () => number;
   invoke?: (options: AgentOptions) => Promise<AgentResult>;
 }
 export class MemoryMaintenance {
-  readonly pg: Pool;
+  private legacyPool?: Pool;
+  get pg(): Pool {
+    if (!this.legacyPool) throw new Error('Workspace uses SQLite');
+    return this.legacyPool;
+  }
   readonly scheduler = new InferenceScheduler();
-  readonly repository: ConversationMemory;
-  readonly recall: MemoryRecall;
-  readonly context: ContextBuilder;
+  readonly repository: EvidenceRepository;
+  readonly recall: RecallRepository;
+  readonly context: RuntimeContext;
   readonly compaction: ContextCompaction;
-  readonly jobs: MemoryJobs;
-  readonly publication: DreamPublication;
+  readonly jobs: MemoryJobRepository;
+  readonly publication: DreamPublication | AsyncRepository<'publication'>;
   private clock: () => number;
   private invoke: (options: AgentOptions) => Promise<AgentResult>;
   private ownPool: boolean;
@@ -63,6 +85,8 @@ export class MemoryMaintenance {
   private worker?: Promise<void>;
   private active?: { job: MemoryJob; controller: AbortController };
   private closing = false;
+  private readonly shutdown = new AbortController();
+  private maintenance?: MaintenanceGate;
   private lastInteractiveAt: number;
   private lastError?: string;
   private scanCursor = 0;
@@ -77,57 +101,95 @@ export class MemoryMaintenance {
     }
   >();
   constructor(
-    readonly store: Store,
-    readonly workspace: WorkspaceStore,
+    readonly store: StoreRepository,
+    readonly workspace: WorkspaceRepository,
     readonly config: LocalAiConfig,
     options: Options = {},
   ) {
+    this.maintenance = options.maintenance;
     this.clock = options.clock ?? Date.now;
     this.invoke = options.invoke ?? runAgent;
     this.lastInteractiveAt = this.clock();
-    this.ownPool = !options.pg;
-    this.pg =
-      options.pg ??
-      new Pool({
-        connectionString: config.localDatabaseUrl,
-        max: 2,
-        connectionTimeoutMillis: 5000,
-        query_timeout: 10000,
-      });
-    if (this.ownPool)
-      this.pg.on('error', () => {
-        this.lastError = 'Memory storage connection unavailable';
-      });
-    this.repository = new ConversationMemory(
-      this.pg,
-      workspace.ownerId,
-      workspace,
-      () => store.settings().memoryAllowed,
-    );
-    this.recall = new MemoryRecall(
-      workspace.memory,
-      this.repository,
-      new MemoryAccess(workspace, store),
-    );
     const inference = new MemoryInference(
       { provider: config.llmProvider, model: config.subscriptionModel },
       this.invoke,
       this.scheduler,
     );
-    this.compaction = new ContextCompaction(this.repository, inference);
-    this.context = new ContextBuilder(
-      this.recall,
-      {
-        inputTokenLimit: config.memoryInputTokenLimit,
-        pinnedTokenLimit: config.memoryPinnedTokenLimit,
-      },
-      this.compaction,
-    );
-    this.jobs = new MemoryJobs(this.pg, workspace.ownerId, this.clock);
-    this.publication = new DreamPublication(this.recall);
-    workspace.memory.importLegacy(store.memories());
-    for (const dot of workspace.dots())
-      workspace.memory.settings(dot.id, this.clock());
+    const limits = {
+      inputTokenLimit: config.memoryInputTokenLimit,
+      pinnedTokenLimit: config.memoryPinnedTokenLimit,
+    };
+    const repositories = options.repositories;
+    this.ownPool = !repositories && !options.pg;
+    if (repositories) {
+      this.repository = Object.assign({}, repositories.evidence, {
+        workspace,
+        memoryEnabled: async () => (await store.settings()).memoryAllowed,
+      });
+      this.recall = Object.assign({}, repositories.recall, {
+        memory: workspace.memory,
+        episodes: this.repository,
+        access: Object.assign({}, repositories.access, { store, workspace }),
+      });
+      this.compaction = new ContextCompaction(this.repository, inference);
+      this.context = new WorkerContext(repositories, limits, this.compaction);
+      this.publication = repositories.publication;
+      this.jobs = repositories.jobs;
+    } else {
+      // Synchronous repositories are retained only for legacy adapter tests. Production supplies a worker port.
+      if (!(store instanceof Store) || !(workspace instanceof WorkspaceStore))
+        throw new Error('Worker repositories are required');
+      this.legacyPool =
+        options.pg ??
+        new Pool({
+          connectionString: config.localDatabaseUrl,
+          max: 2,
+          connectionTimeoutMillis: 5000,
+          query_timeout: 10000,
+        });
+      if (this.ownPool)
+        this.pg.on('error', () => {
+          this.lastError = 'Memory storage connection unavailable';
+        });
+      this.repository = new ConversationMemory(
+        this.pg,
+        workspace.ownerId,
+        workspace,
+        () => store.settings().memoryAllowed,
+      );
+      const recall = new MemoryRecall(
+        workspace.memory,
+        this.repository,
+        new MemoryAccess(workspace, store),
+      );
+      this.recall = recall;
+      this.compaction = new ContextCompaction(this.repository, inference);
+      this.context = new ContextBuilder(recall, limits, this.compaction);
+      this.publication = new DreamPublication(recall);
+      this.jobs = new MemoryJobs(this.pg, workspace.ownerId, this.clock, {
+        publication: this.publication,
+        check: () => {
+          if (this.closing) throw new Error('Maintenance stopped');
+        },
+      });
+      workspace.memory.importLegacy(store.memories());
+      for (const dot of workspace.dots())
+        workspace.memory.settings(dot.id, this.clock());
+    }
+  }
+  static async create(
+    store: StoreRepository,
+    workspace: WorkspaceRepository,
+    config: LocalAiConfig,
+    options: Options = {},
+  ) {
+    const service = new MemoryMaintenance(store, workspace, config, options);
+    if (options.repositories) {
+      await workspace.memory.importLegacy(await store.memories());
+      for (const dot of await workspace.dots())
+        await workspace.memory.settings(dot.id, service.clock());
+    }
+    return service;
   }
   start(): void {
     if (this.timer || this.closing) return;
@@ -141,6 +203,7 @@ export class MemoryMaintenance {
   }
   pause(): void {
     this.closing = true;
+    this.shutdown.abort(new Error('Memory maintenance stopped'));
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     this.active?.controller.abort(new Error('Maintenance stopped'));
@@ -158,8 +221,8 @@ export class MemoryMaintenance {
   ): Promise<() => void> {
     if (this.closing) throw new Error('Memory service is closing');
     if (threadId)
-      this.workspace.memory.settings(
-        this.workspace.requireThread(threadId).dotId,
+      await this.workspace.memory.settings(
+        (await this.workspace.requireThread(threadId)).dotId,
         this.clock(),
       );
     this.lastInteractiveAt = this.clock();
@@ -174,8 +237,8 @@ export class MemoryMaintenance {
     revision: number,
     patch: MemorySettingsPatch,
   ) {
-    if (!this.workspace.dot(dotId)) throw new Error('Dot not found');
-    const settings = this.workspace.memory.updateSettings(
+    if (!(await this.workspace.dot(dotId))) throw new Error('Dot not found');
+    const settings = await this.workspace.memory.updateSettings(
       dotId,
       revision,
       patch,
@@ -193,9 +256,9 @@ export class MemoryMaintenance {
     return settings;
   }
   async permissionsChanged(dotId?: string): Promise<void> {
-    for (const dot of this.workspace
-      .dots()
-      .filter((dot) => !dotId || dot.id === dotId)) {
+    for (const dot of (await this.workspace.dots()).filter(
+      (dot) => !dotId || dot.id === dotId,
+    )) {
       await this.jobs.cancelQueued(dot.id, 'dream');
       await this.jobs.cancelQueued(dot.id, 'compact');
     }
@@ -204,16 +267,20 @@ export class MemoryMaintenance {
         new Error('Maintenance disabled by permission change'),
       );
   }
-  private ensureAllowed(dotId: string): void {
+  private async ensureAllowed(dotId: string): Promise<void> {
     if (this.closing) throw new Error('Memory service is closing');
-    if (this.store.settings().paused) throw new Error('Workspace is paused');
-    this.recall.access.forDot(dotId);
+    if ((await this.store.settings()).paused)
+      throw new Error('Workspace is paused');
+    await this.recall.access.forDot(dotId);
   }
-  private ensureJobAllowed(job: MemoryJob): void {
-    if (this.closing || this.store.settings().paused)
+  private async ensureJobAllowed(job: MemoryJob): Promise<void> {
+    if (this.closing || (await this.store.settings()).paused)
       throw new Error('Maintenance paused');
-    const settings = this.workspace.memory.settings(job.dotId, this.clock());
-    if (job.kind === 'dream') this.ensureAllowed(job.dotId);
+    const settings = await this.workspace.memory.settings(
+      job.dotId,
+      this.clock(),
+    );
+    if (job.kind === 'dream') await this.ensureAllowed(job.dotId);
     if (
       job.origin === 'automatic' &&
       (job.kind === 'compact'
@@ -223,46 +290,28 @@ export class MemoryMaintenance {
       throw new Error('Maintenance disabled');
   }
   private async blockedThreads(threads: string[]): Promise<Set<string>> {
-    const result = await this.pg.query<{ id: string }>(
-      `SELECT t.id FROM local_ai_threads t JOIN local_ai_runs r ON r.owner_id=t.owner_id AND r.thread_id=t.id AND r.run_id=t.last_run_id
-      WHERE t.owner_id=$1 AND t.id=ANY($2::text[]) AND r.status='finished'
-      AND EXISTS(SELECT 1 FROM jsonb_array_elements(t.messages) m CROSS JOIN LATERAL jsonb_array_elements(coalesce(m->'toolCalls','[]'::jsonb)) c
-        WHERE m->>'role'='assistant' AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements(t.messages) answer WHERE answer->>'role'='tool' AND answer->>'toolCallId'=c->>'id'))`,
-      [this.workspace.ownerId, threads],
-    );
-    return new Set(result.rows.map((row) => row.id));
+    return new Set(await this.repository.blockedThreads(threads));
   }
   private async jobBlocked(job: MemoryJob): Promise<boolean> {
     if (job.origin !== 'automatic') return false;
     const threads = job.threadId
       ? [job.threadId]
-      : (
-          await this.pg.query<{ thread_id: string }>(
-            'SELECT DISTINCT thread_id FROM memory_episode_chunks WHERE owner_id=$1 AND source_id=ANY($2::text[])',
-            [this.workspace.ownerId, job.sourceIds],
-          )
-        ).rows.map((row) => row.thread_id);
+      : await this.repository.sourceThreads(job.sourceIds);
     return (await this.blockedThreads(threads)).size > 0;
   }
   private async indexPending(dotId?: string): Promise<void> {
-    const threads = this.workspace
-      .conversations()
+    const threads = (await this.workspace.conversations())
       .filter((t) => !dotId || t.dotId === dotId)
       .map((t) => t.id);
     const cursorKey = 'index:' + (dotId ?? 'all');
-    const rows = await this.pg.query<{ run_id: string }>(
-      `SELECT r.run_id FROM local_ai_runs r WHERE r.owner_id=$1 AND r.thread_id=ANY($2::text[]) AND r.status<>'running' AND r.provenance_complete=true
-      AND r.run_id>$3 AND NOT EXISTS(SELECT 1 FROM memory_index_runs i WHERE i.owner_id=r.owner_id AND i.thread_id=r.thread_id AND i.run_id=r.run_id) ORDER BY r.run_id LIMIT 5`,
-      [
-        this.workspace.ownerId,
-        threads,
-        this.workspace.memory.scanCursor(cursorKey),
-      ],
+    const runs = await this.repository.pendingRuns(
+      threads,
+      await this.workspace.memory.scanCursor(cursorKey),
     );
-    for (const row of rows.rows) await this.repository.indexRun(row.run_id);
-    this.workspace.memory.saveScanCursor(
+    for (const run of runs) await this.repository.indexRun(run);
+    await this.workspace.memory.saveScanCursor(
       cursorKey,
-      rows.rows.length === 5 ? rows.rows.at(-1)!.run_id : '',
+      runs.length === 5 ? runs.at(-1)! : '',
     );
   }
   async requestCompact(
@@ -271,13 +320,13 @@ export class MemoryMaintenance {
     idleMs = 0,
     boundaryHash?: string,
   ): Promise<MemoryJob> {
-    if (this.closing || this.store.settings().paused)
+    if (this.closing || (await this.store.settings()).paused)
       throw new Error('Maintenance is paused');
-    const binding = this.workspace.requireThread(threadId);
+    const binding = await this.workspace.requireThread(threadId);
     const hash =
       boundaryHash ??
       evidenceHash(await this.repository.threadMessages(threadId));
-    const settings = this.workspace.memory.settings(
+    const settings = await this.workspace.memory.settings(
       binding.dotId,
       this.clock(),
     );
@@ -302,7 +351,7 @@ export class MemoryMaintenance {
     dotId: string,
     selectedThreadIds?: string[],
   ): Promise<MemoryJob> {
-    this.ensureAllowed(dotId);
+    await this.ensureAllowed(dotId);
     return (await this.enqueueDream(dotId, 'manual', selectedThreadIds))!;
   }
   private async enqueueDream(
@@ -310,16 +359,15 @@ export class MemoryMaintenance {
     origin: 'manual' | 'automatic',
     selected?: string[],
   ): Promise<MemoryJob | undefined> {
-    this.ensureAllowed(dotId);
-    const settings = this.workspace.memory.settings(dotId, this.clock());
+    await this.ensureAllowed(dotId);
+    const settings = await this.workspace.memory.settings(dotId, this.clock());
     if (selected)
-      for (const id of selected) this.workspace.requireThread(id, dotId);
+      for (const id of selected) await this.workspace.requireThread(id, dotId);
     await this.indexPending(dotId);
     const since = selected ? 0 : (settings.enabledAt ?? settings.createdAt);
     const threads =
       selected ??
-      this.workspace
-        .conversations()
+      (await this.workspace.conversations())
         .filter((t) => t.dotId === dotId)
         .map((t) => t.id);
     const cursorKey = 'dream:' + dotId;
@@ -327,49 +375,45 @@ export class MemoryMaintenance {
       origin === 'automatic'
         ? await this.blockedThreads(threads)
         : new Set<string>();
-    const rows = await this.pg.query<{ source_id: string }>(
-      `SELECT c.source_id FROM memory_episode_chunks c JOIN memory_evidence e ON e.owner_id=c.owner_id AND e.thread_id=c.thread_id AND e.run_id=c.run_id
-      LEFT JOIN memory_processed_sources p ON p.owner_id=c.owner_id AND p.source_id=c.source_id
-      WHERE c.owner_id=$1 AND e.dot_id=$2 AND e.completed_at>=$3 AND c.thread_id=ANY($4::text[]) AND p.source_id IS NULL AND c.source_id>$5 ORDER BY c.source_id LIMIT 40`,
-      [
-        this.workspace.ownerId,
-        dotId,
-        since,
-        threads,
-        this.workspace.memory.scanCursor(cursorKey),
-      ],
-    );
+    const rows = await this.repository.pendingSources({
+      dotId,
+      since,
+      threadIds: threads,
+      cursor: await this.workspace.memory.scanCursor(cursorKey),
+    });
     const sourceIds: string[] = [];
     let bytes = 0;
-    for (const row of rows.rows) {
-      const source = await this.repository.sourceById(row.source_id);
+    for (const row of rows) {
+      const source = await this.repository.sourceById(row);
       if (
         !source ||
         blocked.has(source.source.threadId) ||
-        !this.recall.access.canRead(this.recall.access.forDot(dotId), source)
+        !(await this.recall.access.canRead(
+          await this.recall.access.forDot(dotId),
+          source,
+        ))
       ) {
-        this.workspace.memory.saveScanCursor(cursorKey, row.source_id);
+        await this.workspace.memory.saveScanCursor(cursorKey, row);
         continue;
       }
       const size = estimateTokens(
         JSON.stringify({ id: source.id, text: source.text, role: source.role }),
       );
       if (size > 10000) {
-        this.workspace.memory.saveScanCursor(cursorKey, row.source_id);
+        await this.workspace.memory.saveScanCursor(cursorKey, row);
         continue;
       }
       if (sourceIds.length >= 20 || bytes + size > 10000) break;
-      this.workspace.memory.saveScanCursor(cursorKey, row.source_id);
+      await this.workspace.memory.saveScanCursor(cursorKey, row);
       sourceIds.push(source.id);
       bytes += size;
     }
     if (
-      rows.rows.length < 40 &&
-      (!rows.rows.length ||
-        this.workspace.memory.scanCursor(cursorKey) ===
-          rows.rows.at(-1)!.source_id)
+      rows.length < 40 &&
+      (!rows.length ||
+        (await this.workspace.memory.scanCursor(cursorKey)) === rows.at(-1)!)
     )
-      this.workspace.memory.saveScanCursor(cursorKey, '');
+      await this.workspace.memory.saveScanCursor(cursorKey, '');
     if (!sourceIds.length && origin === 'automatic') return;
     const key = 'dream:' + dotId + ':' + evidenceHash(sourceIds);
     const existing = await this.jobs.find(key);
@@ -402,24 +446,35 @@ export class MemoryMaintenance {
   tick(now = this.clock()): Promise<void> {
     if (this.closing) return Promise.resolve();
     if (this.ticking) return this.ticking;
-    this.ticking = this.advance(now).finally(() => {
-      this.ticking = undefined;
-    });
+    const work = this.maintenance
+      ? this.maintenance.runWrite(
+          this.shutdown.signal,
+          () => this.advance(now),
+          { background: true },
+        )
+      : this.advance(now);
+    this.ticking = work
+      .catch((error) => {
+        if (!this.closing) throw error;
+      })
+      .finally(() => {
+        this.ticking = undefined;
+      });
     return this.ticking;
   }
   private async advance(now: number): Promise<void> {
     if (this.active) {
       const job = this.active.job,
-        settings = this.workspace.memory.settings(job.dotId, now),
-        dot = this.workspace.dot(job.dotId);
+        settings = await this.workspace.memory.settings(job.dotId, now),
+        dot = await this.workspace.dot(job.dotId);
       if (
-        this.store.settings().paused ||
+        (await this.store.settings()).paused ||
         !dot ||
         (job.kind === 'compact' &&
           job.origin === 'automatic' &&
           !settings.autoCompact) ||
         (job.kind === 'dream' &&
-          (!this.store.settings().memoryAllowed ||
+          (!(await this.store.settings()).memoryAllowed ||
             !dot.memoryAllowed ||
             (job.origin === 'automatic' &&
               (!settings.learningEnabled || !settings.autoDream))))
@@ -427,19 +482,23 @@ export class MemoryMaintenance {
         this.active.controller.abort(new Error('Maintenance disabled'));
     }
     // Reconcile committed SQLite receipts before call-budget sweeps or another inference.
-    for (const dot of this.workspace.dots())
+    for (const dot of await this.workspace.dots())
       for (const job of await this.jobs.list(dot.id))
         if (
           job.kind === 'dream' &&
           job.state !== 'succeeded' &&
-          this.workspace.memory.history.receipt(job.id)
+          (await this.workspace.memory.history.receipt(job.id))
         )
-          await this.jobs.acknowledge(job.id);
-    if (this.store.settings().paused || this.scheduler.busy || this.worker)
+          await this.jobs.reconcileReceipt(job.id);
+    if (
+      (await this.store.settings()).paused ||
+      this.scheduler.busy ||
+      this.worker
+    )
       return;
     await this.indexPending();
     let queuedDream = false;
-    const threads = this.workspace.conversations();
+    const threads = await this.workspace.conversations();
     const scan = new Set(
       Array.from(
         { length: Math.min(25, threads.length) },
@@ -449,28 +508,19 @@ export class MemoryMaintenance {
     this.scanCursor = threads.length
       ? (this.scanCursor + 25) % threads.length
       : 0;
-    for (const dot of this.workspace.dots()) {
-      const settings = this.workspace.memory.settings(dot.id, now);
-      if (!dot.memoryAllowed || !this.store.settings().memoryAllowed)
+    for (const dot of await this.workspace.dots()) {
+      const settings = await this.workspace.memory.settings(dot.id, now);
+      if (!dot.memoryAllowed || !(await this.store.settings()).memoryAllowed)
         await this.jobs.cancelQueued(dot.id, 'dream');
       if (settings.autoCompact) {
-        for (const thread of this.workspace
-          .conversations()
-          .filter((t) => t.dotId === dot.id && scan.has(t.id))) {
-          const snapshot = await this.pg.query<{
-            last_run_id: string;
-            updated_at: Date;
-            last_status: string;
-            checkpoint_id: string | null;
-          }>(
-            `SELECT t.last_run_id,t.updated_at,r.status AS last_status,(SELECT id FROM memory_checkpoints c WHERE c.owner_id=t.owner_id AND c.thread_id=t.id ORDER BY covered_count DESC,created_at DESC LIMIT 1) AS checkpoint_id FROM local_ai_threads t LEFT JOIN local_ai_runs r ON r.owner_id=t.owner_id AND r.thread_id=t.id AND r.run_id=t.last_run_id WHERE t.owner_id=$1 AND t.id=$2`,
-            [this.workspace.ownerId, thread.id],
-          );
-          const row = snapshot.rows[0];
-          if (!row || row.last_status === 'running') continue;
+        for (const thread of (await this.workspace.conversations()).filter(
+          (t) => t.dotId === dot.id && scan.has(t.id),
+        )) {
+          const row = await this.repository.compactSnapshot(thread.id);
+          if (!row || row.lastStatus === 'running') continue;
           const key = JSON.stringify([
             row,
-            this.workspace.memory.suppressionGeneration(),
+            await this.workspace.memory.suppressionGeneration(),
             dot.spaceIds,
             dot.memoryAllowed,
           ]);
@@ -481,20 +531,20 @@ export class MemoryMaintenance {
               thread.id,
               messages,
             );
-            const exchanges = await this.pg.query(
-              'SELECT count(*) AS n FROM memory_evidence WHERE owner_id=$1 AND thread_id=$2 AND workflow_complete=true AND completed_at>$3',
-              [this.workspace.ownerId, thread.id, checkpoint?.createdAt ?? 0],
+            const exchanges = await this.repository.completedExchanges(
+              thread.id,
+              checkpoint?.createdAt ?? 0,
             );
             boundary = {
               key,
               blocked:
-                row.last_status === 'finished' && pendingApproval(messages),
+                row.lastStatus === 'finished' && pendingApproval(messages),
               bytes: estimateTokens(
                 JSON.stringify(
                   messages.slice(checkpoint?.sourceMessageIds.length ?? 0),
                 ),
               ),
-              exchanges: Number(exchanges.rows[0].n),
+              exchanges: exchanges,
               hash: evidenceHash(messages),
             };
             this.boundaries.delete(thread.id);
@@ -525,7 +575,7 @@ export class MemoryMaintenance {
         settings.learningEnabled &&
         settings.autoDream &&
         dot.memoryAllowed &&
-        this.store.settings().memoryAllowed &&
+        (await this.store.settings()).memoryAllowed &&
         now - this.lastInteractiveAt >= settings.dreamIdleMs
       ) {
         const last =
@@ -538,17 +588,33 @@ export class MemoryMaintenance {
     }
     const job = await this.jobs.claim(now, this.lastInteractiveAt);
     if (job)
-      this.worker = this.execute(job).finally(() => {
-        this.worker = undefined;
-      });
+      this.worker = (
+        this.maintenance
+          ? this.maintenance.runWrite(
+              new AbortController().signal,
+              () => this.execute(job),
+              { background: true },
+            )
+          : this.execute(job)
+      )
+        .catch(() => {
+          this.lastError =
+            'Memory maintenance could not save its outcome; evidence is retained.';
+        })
+        .finally(() => {
+          this.worker = undefined;
+        });
   }
   private async execute(job: MemoryJob): Promise<void> {
     const controller = new AbortController();
     this.active = { job, controller };
+    const renewals = new Set<Promise<unknown>>();
     const renewal = setInterval(() => {
-      void this.jobs
+      const pending = this.jobs
         .renew(job.id, job.leaseToken!)
-        .catch(() => controller.abort(new Error('Maintenance lease lost')));
+        .catch(() => controller.abort(new Error('Maintenance lease lost')))
+        .finally(() => renewals.delete(pending));
+      renewals.add(pending);
     }, 20000);
     renewal.unref();
     const timeout = setTimeout(
@@ -557,7 +623,7 @@ export class MemoryMaintenance {
     );
     timeout.unref();
     const tracked = async (options: AgentOptions): Promise<AgentResult> => {
-      this.ensureJobAllowed(job);
+      await this.ensureJobAllowed(job);
       if (await this.jobBlocked(job)) throw new Error('Waiting for approval');
       await this.jobs.recordUsage(job.id, job.leaseToken!, { modelCalls: 1 });
       const began = this.clock();
@@ -578,7 +644,7 @@ export class MemoryMaintenance {
       this.scheduler,
     );
     try {
-      this.ensureJobAllowed(job);
+      await this.ensureJobAllowed(job);
       if (await this.jobBlocked(job)) {
         await this.jobs.defer(job.id, job.leaseToken!);
         return;
@@ -588,7 +654,7 @@ export class MemoryMaintenance {
           this.repository,
           inference,
           async (checkpoint, hash) => {
-            this.ensureJobAllowed(job);
+            await this.ensureJobAllowed(job);
             if (await this.jobBlocked(job))
               throw new Error('Waiting for approval');
             return this.repository.saveCheckpoint(checkpoint, hash, {
@@ -604,30 +670,28 @@ export class MemoryMaintenance {
         );
         await this.jobs.settle(job.id, job.leaseToken!, { state: 'succeeded' });
       } else {
-        this.ensureAllowed(job.dotId);
-        const receipt = this.workspace.memory.history.receipt(job.id);
-        if (!receipt) {
-          const proposal = await new DreamAnalysis(
-            this.recall,
-            inference,
-          ).analyze(job, controller.signal);
-          controller.signal.throwIfAborted();
-          this.ensureJobAllowed(job);
-          if (await this.jobBlocked(job))
-            throw new Error('Waiting for approval');
-          await this.publication.apply(
-            job.id,
+        await this.ensureAllowed(job.dotId);
+        const receipt = await this.workspace.memory.history.receipt(job.id);
+        const proposal = receipt
+          ? { changes: [], evidence: [] }
+          : await new DreamAnalysis(this.recall, inference).analyze(
+              job,
+              controller.signal,
+            );
+        controller.signal.throwIfAborted();
+        await this.ensureJobAllowed(job);
+        if (await this.jobBlocked(job)) throw new Error('Waiting for approval');
+        await this.jobs.publishDream(
+          {
+            jobId: job.id,
+            lease: job.leaseToken!,
+            generation: job.attempts,
             proposal,
-            job.publicationPolicy ?? 'review_all',
-            job.dotId,
-            (work) =>
-              this.jobs.withLease(job.id, job.leaseToken!, () => {
-                this.ensureJobAllowed(job);
-                return work();
-              }),
-          );
-        }
-        await this.jobs.acknowledge(job.id);
+            policy: job.publicationPolicy ?? 'review_all',
+            dotId: job.dotId,
+          },
+          controller.signal,
+        );
       }
       this.lastError = undefined;
     } catch (error) {
@@ -662,13 +726,14 @@ export class MemoryMaintenance {
     } finally {
       clearInterval(renewal);
       clearTimeout(timeout);
+      await Promise.allSettled(renewals);
       this.active = undefined;
     }
   }
   async status(dotId: string) {
-    if (!this.workspace.dot(dotId)) throw new Error('Dot not found');
+    if (!(await this.workspace.dot(dotId))) throw new Error('Dot not found');
     return {
-      settings: this.workspace.memory.settings(dotId, this.clock()),
+      settings: await this.workspace.memory.settings(dotId, this.clock()),
       jobs: await this.jobs.list(dotId),
       coverage: await this.repository.coverage(dotId),
       busy: this.scheduler.busy,

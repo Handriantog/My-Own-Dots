@@ -49,8 +49,10 @@ vi.mock('electron', async () => {
   });
   return {
     ipcMain: host.ipc,
+    safeStorage: { isEncryptionAvailable: () => false },
     dialog: {
       showOpenDialog: vi.fn(),
+      showSaveDialog: vi.fn(),
       showMessageBox: vi.fn(async () => ({ response: 1 })),
     },
     shell: { openExternal: host.external },
@@ -201,6 +203,28 @@ it('opens a bundled isolated main window and reuses it for dirty-page-safe hando
   expect(window.visible).toBe(false);
   await workspace.open();
   expect(window.visible).toBe(true);
+});
+it('binds storage IPC to the current trusted focused document', async () => {
+  await workspace.open();
+  const window = host.windows[0];
+  const event = {
+    sender: window.webContents,
+    senderFrame: window.webContents.mainFrame,
+  };
+  const choose = host.handlers.get('dot:storage:chooseBackupDirectory');
+  expect(choose).toBeTypeOf('function');
+  window.webContents.mainFrame.url = 'https://untrusted.invalid';
+  await expect(Promise.resolve().then(() => choose!(event))).rejects.toThrow(
+    /sender/i,
+  );
+  window.webContents.mainFrame.url = 'dots://workspace/?surface=workspace';
+  vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({
+    canceled: true,
+    filePaths: [],
+  });
+  expect(await choose!(event)).toBe(false);
+  await workspace.destroy();
+  expect(host.handlers.has('dot:storage:chooseBackupDirectory')).toBe(false);
 });
 it('preserves loaded drafts after backend failure and retry', async () => {
   await workspace.open();

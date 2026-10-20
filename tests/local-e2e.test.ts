@@ -31,7 +31,7 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       slackUsers: [],
       webSearchProvider: 'disabled' as const,
     };
-    let platform = new Platform(store, workspace, config);
+    let platform = await Platform.create(store, workspace, config);
     const makeAgent = (threadId: string) =>
       new ProxiedCopilotRuntimeAgent({
         runtimeUrl: config.runtimeUrl,
@@ -65,7 +65,7 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       ).toBe(true);
       const before = structuredClone(agent.messages);
       await platform.stop();
-      platform = new Platform(store, workspace, config);
+      platform = await Platform.create(store, workspace, config);
       await platform.start();
       const resumed = makeAgent(thread.id);
       await resumed.connectAgent();
@@ -97,7 +97,7 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
         .at(-1)!;
       expect(call.function.name).toBe(pageReviewTool.name);
       await platform.stop();
-      platform = new Platform(store, workspace, config);
+      platform = await Platform.create(store, workspace, config);
       const approved = makeAgent(reviewThread.id);
       await approved.connectAgent();
       approved.addMessage({

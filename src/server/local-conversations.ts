@@ -62,6 +62,20 @@ export interface LocalConversationStore {
   isRunning(threadId: string): Promise<boolean>;
 }
 
+/** Complete repository API consumed by Platform and page services. Runner-only fakes keep the narrower store contract. */
+export interface ConversationRepository extends LocalConversationStore {
+  initialize(): Promise<void>;
+  close(): Promise<void>;
+  createThread(input: ThreadInput): Promise<LocalThreadEndpointRecord>;
+  listThreads(agentId?: string): Promise<LocalThreadEndpointRecord[]>;
+  getThreadMessages(input: {
+    threadId: string;
+    userId: string;
+  }): Promise<{ messages: Message[] }>;
+  getState(threadId: string): Promise<Record<string, unknown>>;
+  getEvents(threadId: string): Promise<BaseEvent[]>;
+}
+
 /** Client history is a set of additions, never an authority over saved output. */
 export function mergeInputMessages(
   saved: Message[],
@@ -168,7 +182,7 @@ type RunRow = {
   status: RunStatus;
 };
 
-export class PostgresConversations implements LocalConversationStore {
+export class PostgresConversations implements ConversationRepository {
   private readonly pool: Pool;
   private initialization?: Promise<void>;
   constructor(

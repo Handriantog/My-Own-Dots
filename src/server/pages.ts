@@ -1,3 +1,4 @@
+import { beginSQLiteTransaction } from './storage/sqlite-transaction.js';
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
@@ -160,7 +161,7 @@ export class Pages {
     toolCallId: string,
   ): ReviewedPage {
     const draft = pageReviewSchema.parse({ ...input, spaceId });
-    this.db.exec('BEGIN IMMEDIATE');
+    const transaction = beginSQLiteTransaction(this.db);
     try {
       const previous = this.reviewReceipt(threadId, toolCallId);
       if (previous) {
@@ -179,7 +180,7 @@ export class Pages {
             409,
           );
         const page = this.get(spaceId, previous.pageId);
-        this.db.exec('COMMIT');
+        transaction.commit();
         return { ...page, reviewDraft: previous.draft };
       }
       const page = this.create(
@@ -192,10 +193,10 @@ export class Pages {
           'INSERT INTO page_reviews (threadId,toolCallId,pageId,spaceId,draft) VALUES (?,?,?,?,?)',
         )
         .run(threadId, toolCallId, page.id, spaceId, JSON.stringify(draft));
-      this.db.exec('COMMIT');
+      transaction.commit();
       return { ...page, reviewDraft: draft };
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      transaction.rollback();
       throw error;
     }
   }
@@ -206,7 +207,7 @@ export class Pages {
         'A valid page patch and expectedRevision are required.',
       );
     const data = parsed.data;
-    this.db.exec('BEGIN IMMEDIATE');
+    const transaction = beginSQLiteTransaction(this.db);
     try {
       const page = this.get(spaceId, id);
       if (page.revision !== data.expectedRevision)
@@ -229,10 +230,10 @@ export class Pages {
           id,
           data.expectedRevision,
         );
-      this.db.exec('COMMIT');
+      transaction.commit();
       return this.get(spaceId, id);
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      transaction.rollback();
       throw error;
     }
   }
@@ -284,13 +285,13 @@ export class Pages {
   }
   delete(spaceId: string, id: string): boolean {
     this.requireSpace(spaceId);
-    this.db.exec('BEGIN IMMEDIATE');
+    const transaction = beginSQLiteTransaction(this.db);
     try {
       const page = this.db
         .prepare('SELECT parentId FROM pages WHERE id=? AND spaceId=?')
         .get(id, spaceId) as { parentId: string | null } | undefined;
       if (!page) {
-        this.db.exec('COMMIT');
+        transaction.commit();
         return false;
       }
       const now = Date.now();
@@ -304,10 +305,10 @@ export class Pages {
       this.db
         .prepare('DELETE FROM pages WHERE id=? AND spaceId=?')
         .run(id, spaceId);
-      this.db.exec('COMMIT');
+      transaction.commit();
       return true;
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      transaction.rollback();
       throw error;
     }
   }

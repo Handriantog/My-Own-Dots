@@ -48,6 +48,21 @@ For controlled source launches, `DOTS_WORKSPACE_DIR` chooses the workspace folde
 
 `npm run dev` remains the Vite development harness at `http://127.0.0.1:5173`. `npm run build && npm start` runs the headless API; it does not serve the production workspace UI.
 
+## Workspace backup and recovery
+
+In the desktop workspace, open **Settings → Backup & restore**. The same controls are available in **Workspace Setup…** when the main workspace cannot open.
+
+- **Backup:** choose a filename and location in the native save dialog, optionally enable **Protect with a password**, then select **Save backup**. No password is required by default. Dot reads the completed file back and checks its contents before reporting success. Finish active chat or voice work first.
+- **Restore:** select a backup file. Dot asks for a password only when that file is encrypted. Select **Review backup**, check the summary, then **Restore**. Dot prepares a separate workspace beside the current one and opens it; the original stays in place. You do not need to choose another destination. Legacy PostgreSQL backups still require an available PostgreSQL server with permission to create a database. Previews expire after 15 minutes; **Cancel** discards unused preparations after ownership checks.
+
+A backup without a password can be read by anyone with access to the file. If you enable protection, keep the password independently: Dot cannot recover an encrypted backup without it. Both choices work for manual backups without OS secure credential storage. Existing encrypted backups remain supported. Choose a new filename for each backup; existing files are never overwritten. Store a copy on another drive for protection against disk failure.
+
+**Advanced options** holds the workspace location, move controls and optional daily backups. For automatic backups, first save an encrypted backup with **Remember password for automatic backups** selected, choose an automatic backup folder, then enable daily backups. This requires OS secure credential storage. Dot backs up changed data while open and idle, retaining seven daily and four weekly recovery points. Manually named backups are never pruned. Changing the automatic backup folder disables scheduling until you opt in again and leaves the old folder untouched.
+
+Older workspaces also have a one-time **Upgrade storage** action in advanced options. Choose where to save the included backup and whether to protect it, then start the upgrade. Dot closes chat, verifies the backup, and prepares an upgraded workspace beside the current one. Review the result and select **Finish upgrade**. The original workspace and Docker data remain available. Once the SQLite workspace opens, this action disappears. An ordinary backup does not change the active storage engine. The fresh-install SQLite default remains gated on the pending chat and voice performance checks.
+
+Backups cover core SQLite/PostgreSQL data, including conversations, memory history and suppression records, pages and voice transcripts. Computer files, browser profiles and provider/OS credentials are excluded. Restored schedules remain paused and external access requires new approval. Individual Dot transfer and remaining platform/release checks are still pending; see [verification and remaining release gates](storage-verification.md).
+
 ## Companion and compact chat
 
 The companion walks, rests, stretches, sleeps, jumps, looks around, waves, grooms, adjusts its headphones and responds to clicks, petting or pinching pickup. With Accessibility enabled, it uses exposed window tops and sides, climbs, hangs and falls when a supporting window moves. Its color changes without replacing its character or animation.

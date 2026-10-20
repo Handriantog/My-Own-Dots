@@ -1,3 +1,4 @@
+import { beginSQLiteTransaction } from './storage/sqlite-transaction.js';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
@@ -24,11 +25,16 @@ const defaults: Settings = {
 };
 export class Store {
   private db: DatabaseSync;
-  constructor(path: string) {
+  private ownsDatabase: boolean;
+  constructor(path: string, database?: DatabaseSync) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
-    this.db = new DatabaseSync(path);
-    this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
+    this.ownsDatabase = !database;
+    this.db = database ?? new DatabaseSync(path);
+    if (!database)
+      this.db.exec('PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;');
+    this.db.exec(`
       CREATE TABLE IF NOT EXISTS setup_telemetry (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS storage_recovery_audit (id TEXT PRIMARY KEY, createdAt INTEGER NOT NULL, tableName TEXT NOT NULL, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, prompt TEXT NOT NULL, status TEXT NOT NULL, intervalSeconds INTEGER, nextRunAt INTEGER, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, error TEXT, lease TEXT, leaseUntil INTEGER);
       CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, taskId TEXT NOT NULL, status TEXT NOT NULL, startedAt INTEGER NOT NULL, finishedAt INTEGER, result TEXT, error TEXT);
@@ -56,16 +62,16 @@ export class Store {
     this.db.prepare('DELETE FROM setup_telemetry').run();
   }
   close() {
-    this.db.close();
+    if (this.ownsDatabase) this.db.close();
   }
   private transaction<T>(fn: () => T): T {
-    this.db.exec('BEGIN IMMEDIATE');
+    const transaction = beginSQLiteTransaction(this.db);
     try {
       const value = fn();
-      this.db.exec('COMMIT');
+      transaction.commit();
       return value;
     } catch (error) {
-      this.db.exec('ROLLBACK');
+      transaction.rollback();
       throw error;
     }
   }

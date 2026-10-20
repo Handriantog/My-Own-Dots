@@ -4,6 +4,7 @@ import type {
   WorkspaceDestination,
   WorkspaceCommand,
 } from './shared/workspace-contract.js';
+import type { DesktopStorageBridge } from './shared/storage-contract.js';
 
 if (
   process.isMainFrame &&
@@ -70,4 +71,38 @@ if (
     },
   };
   contextBridge.exposeInMainWorld('dotWorkspace', bridge);
+  const userAction = (channel: string, value?: unknown) => {
+    if (!navigator.userActivation?.isActive)
+      return Promise.reject(
+        new Error('Use the storage controls in the workspace.'),
+      );
+    return ipcRenderer.invoke(`dot:storage:${channel}`, value);
+  };
+  const storage: DesktopStorageBridge = {
+    status: () => ipcRenderer.invoke('dot:storage:status'),
+    chooseBackupDirectory: () => userAction('chooseBackupDirectory'),
+    chooseBackupFile: () => userAction('chooseBackupFile'),
+    chooseRestoreArchive: () => userAction('chooseRestoreArchive'),
+    backupNow: (value) => userAction('backupNow', value),
+    setAutomatic: (value) => userAction('setAutomatic', value),
+    previewRestore: (value) => userAction('previewRestore', value),
+    previewMigration: (value) => userAction('previewMigration', value),
+    migrate: (value) => userAction('migrate', value),
+    openWorkspaceFolder: () => userAction('openWorkspaceFolder'),
+    chooseWorkspaceMove: () => userAction('chooseWorkspaceMove'),
+    moveWorkspace: (value) => userAction('moveWorkspace', value),
+    restore: (value) => userAction('restore', value),
+    cancel: (id) => userAction('cancel', id),
+    onStatus(callback) {
+      const listener = (
+        _event: unknown,
+        value: Parameters<typeof callback>[0],
+      ) => callback(value);
+      ipcRenderer.on('dot:storage:status', listener);
+      return () => {
+        ipcRenderer.removeListener('dot:storage:status', listener);
+      };
+    },
+  };
+  contextBridge.exposeInMainWorld('dotStorage', storage);
 }

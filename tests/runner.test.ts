@@ -36,7 +36,7 @@ it('records generic scheduled runs without research wording', async () => {
     ]);
     expect(execute).toHaveBeenCalledOnce();
   } finally {
-    runner.stop();
+    await runner.stop();
     store.close();
   }
 });
@@ -64,7 +64,7 @@ it('aborts research when permissions are revoked outside the runner instance', a
   expect(requestSignal?.aborted).toBe(true);
   expect(request).toHaveBeenCalledOnce();
   expect(store.tasks()[0].status).toBe('interrupted');
-  runner.stop();
+  await runner.stop();
   store.close();
 });
 it('checks abort again before sending source evidence or memories to the model', async () => {
@@ -106,7 +106,7 @@ it('omits stored memories from research when memory permission is disabled', asy
       'Fictional sample brief ready.',
     );
   } finally {
-    runner.stop();
+    await runner.stop();
     store.close();
   }
 });
@@ -127,7 +127,7 @@ it('holds active work for review on graceful shutdown', async () => {
   store.createTask('Read https://example.com');
   const pending = runner.tick();
   await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce());
-  runner.stop();
+  await runner.stop();
   await pending;
   expect(store.tasks()[0].status).toBe('interrupted');
   expect(store.claim()).toBeNull();
@@ -200,4 +200,39 @@ it('aborts work instead of throwing from an ownership timer', async () => {
   } finally {
     store.close();
   }
+});
+
+it('defers scheduled claims through snapshot cleanup and cancels queued work on shutdown', async () => {
+  const { MaintenanceGate } =
+    await import('../src/server/storage/maintenance.js');
+  const gate = new MaintenanceGate();
+  const store = new Store(':memory:');
+  const task = store.createTask('Snapshot-safe scheduled task');
+  let called = false;
+  const runner = new Runner(
+    store,
+    config,
+    async () => {
+      called = true;
+      return { text: 'Done', sources: [], sample: false };
+    },
+    1000,
+    gate,
+  );
+  const lease = await gate.acquire({
+    origin: 'manual',
+    signal: new AbortController().signal,
+  });
+  const ticking = runner.tick();
+  try {
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(called).toBe(false);
+    expect(store.detail(task.id)?.runs).toHaveLength(0);
+    await runner.stop();
+  } finally {
+    lease.release();
+  }
+  await ticking;
+  expect(called).toBe(false);
+  store.close();
 });

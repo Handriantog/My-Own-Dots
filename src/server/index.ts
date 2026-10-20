@@ -1,4 +1,10 @@
 import './local-defaults.js';
+import { readWorkspaceManifest } from '../shared/workspace-manifest.js';
+import { existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { LegacySnapshotSource } from './storage/legacy-snapshot.js';
+import { UnifiedSnapshotSource } from './storage/unified-snapshot.js';
+import { SnapshotOperations } from './storage/snapshot-routes.js';
 import {
   claimWorkspaceDatabase,
   workspaceIdentity,
@@ -8,11 +14,12 @@ import { webSearchProvider } from './parallel.js';
 import { createShutdown } from './shutdown.js';
 import { reportChannelFailure, safeFailure } from './slack-channel.js';
 import { serve } from '@hono/node-server';
-import { Store } from './store.js';
+import { StorageClient } from './storage/storage-client.js';
+import { sqliteStorageSchema } from './storage/sqlite-schema.js';
 import { Runner } from './runner.js';
 import { createApp } from './app.js';
 import { resolveAppOrigins } from './app-origin.js';
-import { WorkspaceStore } from './workspace.js';
+
 import { Platform } from './platform.js';
 import {
   agentRunTimeoutMsFromEnv,
@@ -33,13 +40,35 @@ if (
     'External binding requires an OWNER_TOKEN of at least 24 characters.',
   );
 const database = process.env.DATABASE_PATH ?? 'data/opendots.sqlite';
-claimWorkspaceDatabase(database);
-const workspaceId = workspaceIdentity(database);
-const store = new Store(database);
-const workspace = new WorkspaceStore(
-  database,
-  process.env.OWNER_ID ?? 'opendots-owner',
+const manifest = await readWorkspaceManifest(
+  dirname(resolve(process.env.DOTS_WORKSPACE_ENV || '.env')),
 );
+if (
+  manifest &&
+  (manifest.storage === 'sqlite'
+    ? manifest.schema > sqliteStorageSchema
+    : manifest.schema !== 1)
+)
+  throw new Error(
+    'This workspace requires a compatible SQLite storage runtime',
+  );
+if (
+  manifest &&
+  process.env.OWNER_ID &&
+  manifest.ownerId !== process.env.OWNER_ID
+)
+  throw new Error('Workspace manifest owner does not match its configuration');
+claimWorkspaceDatabase(database);
+const workspaceId = manifest?.id ?? workspaceIdentity(database);
+const storage = await StorageClient.open({
+  database,
+  ownerId: manifest?.ownerId ?? process.env.OWNER_ID ?? 'opendots-owner',
+  engine: manifest?.storage ?? 'legacy-postgres',
+  machineId: process.env.DOTS_PORTABLE_MACHINE_ID,
+  postgresUrl: localAi.localDatabaseUrl,
+  pinnedTokenLimit: localAi.memoryPinnedTokenLimit,
+});
+const { store, workspace } = storage.repositories;
 const config: PlatformConfig = {
   ...localAi,
   intelligenceKey: intelligenceApiKeyFromEnv(process.env),
@@ -78,7 +107,31 @@ const config: PlatformConfig = {
   runtimeUrl: `http://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/api/copilotkit`,
   ownerToken,
 };
-const platform = new Platform(store, workspace, config);
+const platform = await Platform.create(store, workspace, config, { storage });
+const configurationPath = resolve(process.env.DOTS_WORKSPACE_ENV || '.env');
+const snapshotOptions = {
+  sqlitePath: database,
+  ownerId: workspace.ownerId,
+  workspaceId,
+  gate: platform.maintenance,
+  configurationPath: existsSync(configurationPath)
+    ? configurationPath
+    : undefined,
+};
+const snapshots =
+  ownerToken && config.conversationBackend === 'local'
+    ? new SnapshotOperations(
+        storage.engine === 'sqlite'
+          ? new UnifiedSnapshotSource({ ...snapshotOptions, storage })
+          : new LegacySnapshotSource({
+              ...snapshotOptions,
+              postgresUrl: config.localDatabaseUrl,
+              owned: true,
+              conversationBackend: config.conversationBackend,
+            }),
+        join(dirname(resolve(database)), '.storage-snapshots'),
+      )
+    : undefined;
 const localVoice = new LocalVoiceService(
   platform,
   localVoiceConfig(process.env),
@@ -98,7 +151,7 @@ const runner = new Runner(
   store,
   researchConfig,
   async (claim, _memories, signal, progress) => {
-    const threadId = workspace.taskThread(claim.id);
+    const threadId = await workspace.taskThread(claim.id);
     if (!threadId)
       throw new Error(
         'This legacy task has no conversation. Create a new scheduled task from a conversation.',
@@ -110,6 +163,7 @@ const runner = new Runner(
     return { text, sources: [], sample: false };
   },
   config.agentRunTimeoutMs,
+  platform.maintenance,
 );
 const wsOrigin =
   config.conversationBackend === 'local'
@@ -125,6 +179,7 @@ const app = createApp({
   origin: resolveAppOrigins(process.env.APP_ORIGIN, process.env.NODE_ENV),
   platform,
   localVoice,
+  snapshots,
 });
 app.use('*', async (c, next) => {
   c.header('X-Content-Type-Options', 'nosniff');
@@ -140,6 +195,7 @@ app.get('/api/desktop/identity', (c) =>
     service: 'my-own-dots',
     protocol: 1,
     workspaceId,
+    capabilities: snapshots ? ['workspace-snapshot-v1'] : [],
     setup: platform.setup(),
   }),
 );
@@ -157,10 +213,18 @@ const server = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
     );
 });
 const shutdown = createShutdown({
-  stopRunner: () => runner.stop(),
+  stopRunner: async () => {
+    platform.maintenance.close();
+    await runner.stop();
+  },
   stopPlatform: async () => {
+    await snapshots?.close();
     await localVoice.close();
-    await platform.stop();
+    try {
+      await platform.stop();
+    } finally {
+      await storage.close();
+    }
   },
   closeServer: () =>
     new Promise<void>((resolve, reject) =>
@@ -172,3 +236,11 @@ const shutdown = createShutdown({
 });
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+const storageFailed = () => {
+  reportChannelFailure('Storage worker stopped; closing the backend', [
+    safeFailure(storage.signal.reason),
+  ]);
+  void shutdown();
+};
+storage.signal.addEventListener('abort', storageFailed, { once: true });
+if (storage.signal.aborted) storageFailed();

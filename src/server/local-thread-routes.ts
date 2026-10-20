@@ -1,17 +1,19 @@
-import type { PostgresConversations } from './local-conversations.js';
-import type { WorkspaceStore } from './workspace.js';
+import type { WorkspaceRepository } from './storage/runtime-repositories.js';
+import type { ConversationRepository } from './local-conversations.js';
 
 /** Called only after authentication and validateRuntimeScope. */
 export async function localThreadResponse(
   request: Request,
   body: unknown,
-  storage: PostgresConversations,
-  workspace: WorkspaceStore,
+  storage: ConversationRepository,
+  workspace: WorkspaceRepository,
 ): Promise<Response | undefined> {
   const url = new URL(request.url);
   const path = url.pathname.slice('/api/copilotkit/'.length);
   if (path === 'threads' && request.method === 'GET') {
-    const bound = new Set(workspace.conversations().map((thread) => thread.id));
+    const bound = new Set(
+      (await workspace.conversations()).map((thread) => thread.id),
+    );
     const threads = (
       await storage.listThreads(url.searchParams.get('agentId') ?? undefined)
     ).filter((thread) => bound.has(thread.id));
@@ -45,7 +47,7 @@ export async function localThreadResponse(
     'threadId' in body &&
     typeof body.threadId === 'string'
   ) {
-    const thread = workspace.requireThread(body.threadId);
+    const thread = await workspace.requireThread(body.threadId);
     await storage.getOrCreateThread({
       threadId: thread.id,
       userId: workspace.ownerId,

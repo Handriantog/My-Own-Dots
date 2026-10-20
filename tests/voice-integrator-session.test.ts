@@ -146,7 +146,7 @@ await import(${JSON.stringify(new URL('./fixtures/subscription-provider.mjs', im
         dot.id,
         new AbortController().signal,
       );
-      const call = service.require(handle.id, handle.token);
+      const call = await service.require(handle.id, handle.token);
       const completed: string[] = [];
       let failure: unknown;
       call.listen(async (event) => {
@@ -159,7 +159,7 @@ await import(${JSON.stringify(new URL('./fixtures/subscription-provider.mjs', im
           }
         }
         if (event.type === 'audio')
-          call.played(
+          await call.played(
             event.generation,
             event.sequence,
             Buffer.from(event.pcm, 'base64').length / 2,

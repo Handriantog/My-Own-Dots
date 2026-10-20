@@ -1,3 +1,4 @@
+import { MaintenanceGate } from './storage/maintenance.js';
 import { MemoryMaintenance } from './memory-maintenance.js';
 import { PostgresConversations } from './local-conversations.js';
 import { LocalAgentRunner } from './local-runner.js';
@@ -14,8 +15,14 @@ import {
 } from '@copilotkit/runtime/v2';
 import { createSlackChannel } from './slack-channel.js';
 export { slackIdentity } from './slack-channel.js';
-import { Store } from './store.js';
-import { WorkspaceStore } from './workspace.js';
+import type {
+  StoreRepository,
+  WorkspaceRepository,
+} from './storage/runtime-repositories.js';
+import type { StorageClient } from './storage/storage-client.js';
+import { SQLiteConversations } from './storage/sqlite-conversations.js';
+import type { ConversationRepository } from './local-conversations.js';
+
 import { DotAgent } from './dot-agent.js';
 import { runThreadTurn } from './headless.js';
 import {
@@ -26,44 +33,83 @@ import {
 import { validateRuntimeScope } from './runtime-scope.js';
 import { learningSelector } from './learning.js';
 import { SetupTelemetry } from './setup-telemetry.js';
+import { VoiceService } from './voice.js';
 export class Platform {
+  readonly maintenance = new MaintenanceGate();
+  readonly voice = new VoiceService(this);
   private channelStartupFailed = false;
-  readonly setupTelemetry: SetupTelemetry;
-  readonly pages: PageService;
-  readonly computers: ComputerService;
-  readonly connections: ConnectionService;
-  readonly intelligence?: CopilotKitIntelligence;
-  readonly localConversations?: PostgresConversations;
-  readonly memory?: MemoryMaintenance;
-  private readonly localRunner?: LocalAgentRunner;
-  readonly handler?: CopilotHonoApp;
-  constructor(
-    readonly store: Store,
-    readonly workspace: WorkspaceStore,
+  setupTelemetry!: SetupTelemetry;
+  pages!: PageService;
+  computers!: ComputerService;
+  connections!: ConnectionService;
+  intelligence?: CopilotKitIntelligence;
+  localConversations?: ConversationRepository;
+  memory?: MemoryMaintenance;
+  private localRunner?: LocalAgentRunner;
+  handler?: CopilotHonoApp;
+  private constructor(
+    readonly store: StoreRepository,
+    readonly workspace: WorkspaceRepository,
     readonly config: PlatformConfig,
-  ) {
-    this.setupTelemetry = new SetupTelemetry(store);
+  ) {}
+  static async create(
+    store: StoreRepository,
+    workspace: WorkspaceRepository,
+    config: PlatformConfig,
+    options: { storage?: StorageClient } = {},
+  ): Promise<Platform> {
+    const platform = new Platform(
+      store,
+      workspace,
+      options.storage
+        ? { ...config, storageEngine: options.storage.engine }
+        : config,
+    );
+    await platform.initialize(options);
+    return platform;
+  }
+  private async initialize(options: { storage?: StorageClient }) {
+    const { store, workspace, config } = this;
+    this.setupTelemetry = await SetupTelemetry.create(
+      store,
+      undefined,
+      undefined,
+      undefined,
+      this.maintenance,
+    );
     this.computers = new ComputerService(
       workspace,
       config,
-      () => store.settings().paused,
+      async () => (await store.settings()).paused,
     );
     this.connections = new ConnectionService(workspace.connections);
-    this.pages = new PageService(workspace, () => {
-      this.requireReady();
-      return this.localConversations ?? this.intelligence!;
-    });
+    this.pages = new PageService(
+      workspace,
+      () => {
+        this.requireReady();
+        return this.localConversations ?? this.intelligence!;
+      },
+      this.maintenance,
+    );
     if (config.conversationBackend === 'local') {
-      if (!config.localDatabaseUrl) return;
-      this.localConversations = new PostgresConversations(
-        config.localDatabaseUrl,
-        workspace.ownerId,
-      );
+      if (options.storage?.engine !== 'sqlite' && !config.localDatabaseUrl)
+        return;
+      this.localConversations =
+        options.storage?.engine === 'sqlite'
+          ? new SQLiteConversations(options.storage)
+          : new PostgresConversations(
+              config.localDatabaseUrl!,
+              workspace.ownerId,
+            );
       if (config.llmBackend === 'subscription')
-        this.memory = new MemoryMaintenance(store, workspace, config);
+        this.memory = await MemoryMaintenance.create(store, workspace, config, {
+          maintenance: this.maintenance,
+          repositories: options.storage?.repositories,
+        });
       this.localRunner = new LocalAgentRunner(
         this.localConversations,
         this.memory,
+        this.maintenance,
       );
     } else {
       if (!config.intelligenceKey) return;
@@ -73,7 +119,7 @@ export class Platform {
         wsUrl: config.intelligenceWsUrl,
         getLearningContainerId: learningSelector(
           workspace,
-          config.slackDotId ?? workspace.dots()[0]?.id,
+          config.slackDotId ?? (await workspace.dots())[0]?.id,
         ),
       });
     }
@@ -84,14 +130,14 @@ export class Platform {
       config.slackTeam &&
       config.slackUsers.length
     ) {
-      const dotId = config.slackDotId ?? workspace.dots()[0].id;
-      if (!workspace.dot(dotId))
+      const dotId = config.slackDotId ?? (await workspace.dots())[0].id;
+      if (!(await workspace.dot(dotId)))
         throw new Error('SLACK_DOT_ID does not identify an existing Dot.');
       const slack = createSlackChannel({
         name: config.slackChannel,
         config,
         ownerId: workspace.ownerId,
-        paused: () => store.settings().paused,
+        paused: async () => (await store.settings()).paused,
         agent: () =>
           new DotAgent(
             store,
@@ -109,20 +155,18 @@ export class Platform {
       telemetryProperties: this.setupTelemetry.metadata,
       agents: async () =>
         Object.fromEntries(
-          workspace
-            .dots()
-            .map((dot) => [
+          (await workspace.dots()).map((dot) => [
+            dot.id,
+            new DotAgent(
+              store,
+              workspace,
+              config,
               dot.id,
-              new DotAgent(
-                store,
-                workspace,
-                config,
-                dot.id,
-                false,
-                this.setupTelemetry,
-                this.memory,
-              ),
-            ]),
+              false,
+              this.setupTelemetry,
+              this.memory,
+            ),
+          ]),
         ),
     };
     const runtime = this.localRunner
@@ -159,7 +203,13 @@ export class Platform {
       );
   }
   async start() {
-    await this.localConversations?.initialize();
+    await this.maintenance.runWrite(
+      new AbortController().signal,
+      async () => {
+        await this.localConversations?.initialize();
+      },
+      { background: true },
+    );
     this.memory?.start();
     this.setupTelemetry.start();
     if (this.handler?.channels) {
@@ -168,7 +218,7 @@ export class Platform {
         this.channelStartupFailed = false;
       } catch (error) {
         this.channelStartupFailed = true;
-        this.setupTelemetry.capture({
+        await this.setupTelemetry.capture({
           kind: 'setup_failed',
           step: 'settings',
           error_class: 'channel_start_failed',
@@ -178,19 +228,21 @@ export class Platform {
     }
   }
   async stop() {
+    this.maintenance.close();
     this.memory?.pause();
     try {
-      await this.localRunner?.close();
+      await Promise.all([this.voice.close(), this.localRunner?.close()]);
     } finally {
       await this.memory?.stop();
-      await this.localConversations?.close();
       await this.setupTelemetry.stop();
       await this.handler?.channels?.stop();
+      await this.maintenance.drain();
+      await this.localConversations?.close();
     }
   }
   /** Cancel only a run whose latest input is the server-issued voice message. */
   async stopVoiceTurn(threadId: string, messageId: string): Promise<void> {
-    this.workspace.requireThread(threadId);
+    await this.workspace.requireThread(threadId);
     const run = (await this.localConversations?.getSnapshot(threadId))?.lastRun;
     if (
       run?.status === 'running' &&
@@ -200,7 +252,7 @@ export class Platform {
   }
   async createConversation(dotId: string, title: string) {
     this.requireReady();
-    if (!this.workspace.dot(dotId)) throw new Error('Dot not found.');
+    if (!(await this.workspace.dot(dotId))) throw new Error('Dot not found.');
     const id = randomUUID();
     try {
       await (this.localConversations ?? this.intelligence!).createThread({
@@ -216,11 +268,11 @@ export class Platform {
           : 'Intelligence could not create this conversation. Check the runtime key and connection.',
       );
     }
-    return this.workspace.bindThread(id, dotId, title);
+    return await this.workspace.bindThread(id, dotId, title);
   }
   async history(threadId: string): Promise<string> {
     this.requireReady();
-    this.workspace.requireThread(threadId);
+    await this.workspace.requireThread(threadId);
     const history = await (
       this.localConversations ?? this.intelligence!
     ).getThreadMessages({
@@ -252,7 +304,7 @@ export class Platform {
         .json()
         .catch(() => null);
     try {
-      validateRuntimeScope(request, this.workspace, body);
+      await validateRuntimeScope(request, this.workspace, body);
     } catch (error) {
       return Response.json(
         {
@@ -309,7 +361,7 @@ export class Platform {
     metadata?: Record<string, unknown>,
   ): Promise<string> {
     this.requireReady();
-    const thread = this.workspace.requireThread(threadId);
+    const thread = await this.workspace.requireThread(threadId);
     return runThreadTurn(
       this.config.runtimeUrl,
       this.config.ownerToken

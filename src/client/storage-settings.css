@@ -1,0 +1,141 @@
+.storage-settings {
+  display: grid;
+  gap: 18px;
+  text-align: left;
+  max-width: 740px;
+  width: 100%;
+  --storage-border: var(--ws-border, #dce3ed);
+  --storage-muted: var(--ws-muted, #66758b);
+}
+.storage-settings h3,
+.storage-settings h4,
+.storage-settings p {
+  margin: 0;
+}
+.storage-settings p {
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.storage-heading {
+  display: grid;
+  gap: 6px;
+}
+.storage-heading > p,
+.storage-muted {
+  color: var(--storage-muted);
+  font-size: 13px;
+}
+.storage-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.storage-card,
+.storage-step {
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--storage-border);
+  border-radius: 12px;
+  padding: 20px;
+}
+.storage-card {
+  grid-template-rows: auto 1fr auto;
+}
+.storage-card p {
+  color: var(--storage-muted);
+  font-size: 13px;
+}
+.storage-settings label {
+  display: grid;
+  gap: 8px;
+}
+.storage-settings label:has(input[type='checkbox']) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.storage-settings input[type='password'] {
+  width: 100%;
+  box-sizing: border-box;
+}
+.storage-settings input[type='checkbox'] {
+  width: auto;
+}
+.storage-settings button {
+  justify-self: start;
+  cursor: pointer;
+}
+.storage-settings button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+.storage-settings .storage-primary {
+  background: var(--ws-accent, #315fd1);
+  color: var(--ws-canvas, white);
+  border-color: transparent;
+}
+.storage-settings .storage-primary:hover:not(:disabled) {
+  filter: brightness(0.95);
+}
+.storage-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.storage-file {
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--storage-border) 25%, transparent);
+  border-radius: 8px;
+}
+.storage-file > span {
+  color: var(--storage-muted);
+  font-size: 12px;
+}
+.storage-settings [role='alert'] {
+  color: #bd3434;
+}
+.storage-message {
+  padding: 12px;
+  border: 1px solid var(--storage-border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.storage-details {
+  border-top: 1px solid var(--storage-border);
+  padding-top: 14px;
+  font-size: 13px;
+}
+.storage-details > summary {
+  cursor: pointer;
+  color: var(--storage-muted);
+}
+.storage-detail-content {
+  display: grid;
+  gap: 16px;
+  padding-top: 16px;
+}
+.storage-upgrade,
+.storage-automatic {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--storage-border);
+  padding-top: 16px;
+}
+.storage-password {
+  max-width: 400px;
+}
+.storage-counts {
+  font-weight: 600;
+}
+@media (max-width: 520px) {
+  .storage-actions {
+    grid-template-columns: 1fr;
+  }
+  .storage-card,
+  .storage-step {
+    padding: 16px;
+  }
+}

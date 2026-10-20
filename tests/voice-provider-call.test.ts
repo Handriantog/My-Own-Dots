@@ -119,12 +119,12 @@ it.skipIf(!existsSync(python))(
         dot.id,
         new AbortController().signal,
       );
-      const call = service.require(handle.id, handle.token);
+      const call = await service.require(handle.id, handle.token);
       let completed = 0;
       let failure: unknown;
       call.listen(async (event) => {
         if (event.type === 'audio')
-          call.played(
+          await call.played(
             event.generation,
             event.sequence,
             Buffer.from(event.pcm, 'base64').length / 2,

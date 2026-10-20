@@ -229,8 +229,8 @@ it('completes a longer background run after another worker checks the old lease 
       expect.objectContaining({ status: 'completed', result }),
     ]);
   } finally {
-    runner.stop();
-    competing.stop();
+    await runner.stop();
+    await competing.stop();
     await pending;
   }
 });
@@ -271,8 +271,8 @@ it('still times out a longer background run after another worker checks its leas
       }),
     ]);
   } finally {
-    runner.stop();
-    competing.stop();
+    await runner.stop();
+    await competing.stop();
     await pending;
   }
 });

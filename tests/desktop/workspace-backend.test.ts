@@ -1,10 +1,20 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:net';
 import { createServer as httpServer } from 'node:http';
 import { WorkspaceBackend } from '../../src/desktop/host/workspace-backend.js';
+import { randomUUID } from 'node:crypto';
+import { saveJournal } from '../../src/server/storage/restore-journal.js';
+import { createWorkspaceManifest } from '../../src/shared/workspace-manifest.js';
 
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -51,6 +61,151 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
   return { backend, root, bundle, workspace, port };
 }
 describe('workspace backend ownership', () => {
+  it.each([undefined, '', 'existing-owner-token'])(
+    'authenticates an owned backend with legacy OWNER_TOKEN=%s without rewriting configuration',
+    async (configuredToken) => {
+      const f = await fixture(`
+const http = require('node:http');
+const server = http.createServer((req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  if (process.env.OWNER_TOKEN && req.headers.authorization !== 'Bearer ' + process.env.OWNER_TOKEN) {
+    res.writeHead(401);
+    return res.end('{}');
+  }
+  res.end(JSON.stringify({
+    service: 'my-own-dots', protocol: 1, workspaceId: process.env.DOTS_WORKSPACE_ID,
+    capabilities: process.env.OWNER_TOKEN ? ['workspace-snapshot-v1'] : []
+  }));
+});
+server.listen(Number(process.env.PORT), process.env.HOST);
+process.on('SIGTERM', () => server.close(() => process.exit(0)));
+`);
+      const envFile = path.join(f.workspace, '.env');
+      const contents =
+        (await readFile(envFile, 'utf8')) +
+        (configuredToken === undefined
+          ? ''
+          : `OWNER_TOKEN=${configuredToken}\n`);
+      await writeFile(envFile, contents);
+      const connection = await f.backend.start();
+      expect(connection.ownerToken).toBeTruthy();
+      if (configuredToken) expect(connection.ownerToken).toBe(configuredToken);
+      else expect(connection.ownerToken).toMatch(/^[a-f0-9]{64}$/);
+      const endpoint = `${connection.url}/api/desktop/identity`;
+      expect((await fetch(endpoint)).status).toBe(401);
+      const identity = await fetch(endpoint, {
+        headers: { authorization: `Bearer ${connection.ownerToken}` },
+      });
+      expect(identity.status).toBe(200);
+      expect((await identity.json()).capabilities).toContain(
+        'workspace-snapshot-v1',
+      );
+      expect(await readFile(envFile, 'utf8')).toBe(contents);
+      expect(JSON.stringify(f.backend.status)).not.toContain(
+        connection.ownerToken!,
+      );
+      await f.backend.stop();
+      const restarted = await f.backend.start();
+      if (configuredToken) expect(restarted.ownerToken).toBe(configuredToken);
+      else expect(restarted.ownerToken).not.toBe(connection.ownerToken);
+    },
+  );
+  it('opens an explicit SQLite workspace without contacting PostgreSQL or Docker', async () => {
+    const f = await fixture();
+    const id = randomUUID();
+    await createWorkspaceManifest(f.workspace, {
+      version: 1,
+      id,
+      ownerId: 'owner',
+      storage: 'sqlite',
+      schema: 2,
+    });
+    await mkdir(path.join(f.workspace, 'data'));
+    await writeFile(
+      path.join(f.workspace, 'data/opendots.sqlite'),
+      'fixture database',
+    );
+    await writeFile(
+      path.join(f.workspace, '.env'),
+      `PORT=${f.port}\nCONVERSATION_BACKEND=local\nDATABASE_PATH=data/opendots.sqlite\nLOCAL_DATABASE_URL=deliberately-invalid\nDOCKER_BIN=must-not-run\n`,
+    );
+    expect(await f.backend.start()).toMatchObject({ owned: true });
+    expect(f.backend.status.warning).toBeUndefined();
+    expect(f.backend.configuration).toMatchObject({
+      workspaceId: id,
+      storageEngine: 'sqlite',
+    });
+  });
+  it('refuses a selected SQLite workspace with a missing database or configuration', async () => {
+    const f = await fixture();
+    await createWorkspaceManifest(f.workspace, {
+      version: 1,
+      id: randomUUID(),
+      ownerId: 'owner',
+      storage: 'sqlite',
+      schema: 2,
+    });
+    await expect(f.backend.start()).rejects.toThrow(
+      /database.*missing|missing.*database/i,
+    );
+    await rm(path.join(f.workspace, '.env'));
+    await expect(f.backend.start()).rejects.toThrow(/configuration|\.env/i);
+    await expect(
+      readFile(path.join(f.workspace, '.env')),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('awaits host recovery worker before reading any selected workspace', async () => {
+    const f = await fixture();
+    const recoverStorage = vi.fn(async () => {
+      throw new Error('Recovery worker rejected journal');
+    });
+    const backend = new WorkspaceBackend({
+      bundle: f.bundle,
+      data: path.join(f.root, 'worker-profile'),
+      sourceRoot: f.workspace,
+      environment: {},
+      recoverStorage,
+    });
+    cleanups.push(() => backend.stop());
+    await expect(backend.start()).rejects.toThrow(
+      'Recovery worker rejected journal',
+    );
+    expect(recoverStorage).toHaveBeenCalledOnce();
+    expect(backend.configuration).toBeUndefined();
+  });
+  it('reconciles an interrupted restore before opening the selected workspace', async () => {
+    const { backend, root, workspace, port } = await fixture();
+    const data = path.join(root, 'data');
+    const interrupted = path.join(root, 'incomplete-restore');
+    await mkdir(data);
+    await mkdir(interrupted);
+    await writeFile(
+      path.join(interrupted, '.env'),
+      `PORT=${port}\nCONVERSATION_BACKEND=intelligence\n`,
+    );
+    const operationId = randomUUID();
+    await writeFile(path.join(interrupted, '.restore-owner'), operationId);
+    await writeFile(
+      path.join(data, 'workspace-location.json'),
+      JSON.stringify({ directory: interrupted }),
+    );
+    await saveJournal(data, {
+      version: 1,
+      operationId,
+      phase: 'switching',
+      createdAt: Date.now(),
+      directory: interrupted,
+      previousSelection: JSON.stringify({ directory: workspace }),
+      files: [],
+    });
+    await backend.start();
+    expect(backend.configuration?.workspace).toBe(workspace);
+    expect(
+      JSON.parse(
+        await readFile(path.join(data, 'workspace-location.json'), 'utf8'),
+      ).directory,
+    ).toBe(workspace);
+  });
   it('starts the bundled backend in its configured workspace and stops only its child', async () => {
     const { backend, workspace, port } = await fixture();
     const stages: (string | undefined)[] = [];
@@ -212,18 +367,27 @@ it('keeps the SQLite workspace available with an actionable warning when Docker 
   expect(backend.status.phase).toBe('ready');
 });
 
-it('creates a private persistent configuration under userData on a new installation', async () => {
+it('creates a private persistent configuration in the platform data directory on a new installation', async () => {
   const { root, bundle } = await fixture();
+  const data = path.join(root, 'new-profile');
+  const localAppData = path.join(root, 'local-app-data');
+  const xdgDataHome = path.join(root, 'xdg-data');
+  const expectedWorkspace = {
+    darwin: path.join(data, 'workspace'),
+    win32: path.join(localAppData, 'My Own Dots', 'workspace'),
+    linux: path.join(xdgDataHome, 'my-own-dots', 'workspace'),
+  }[process.platform as 'darwin' | 'win32' | 'linux'];
   const backend = new WorkspaceBackend({
     bundle,
-    data: path.join(root, 'new-profile'),
-    environment: {},
+    data,
+    // Keep native default resolution inside the disposable fixture on every OS.
+    environment: { LOCALAPPDATA: localAppData, XDG_DATA_HOME: xdgDataHome },
   });
   await backend.configure({ CONVERSATION_BACKEND: 'intelligence' });
   const config = backend.configuration!;
-  expect(config.workspace).toBe(path.join(root, 'new-profile/workspace'));
+  expect(config.workspace).toBe(expectedWorkspace);
   expect(config.database).toBe(
-    path.join(root, 'new-profile/workspace/data/opendots.sqlite'),
+    path.join(expectedWorkspace, 'data/opendots.sqlite'),
   );
   const values = await readFile(config.envFile, 'utf8');
   expect(values).toMatch(/OWNER_TOKEN=[a-f0-9]{64}/);
@@ -286,13 +450,22 @@ it('preserves quotes and literal backslashes when saving dotenv configuration', 
   expect(backend.configuration?.database).toBe(database);
 });
 
-it('keeps the Integrator default uv environment outside the signed application', async () => {
-  const { backend, workspace } = await fixture();
+it('keeps new Integrator environments outside the application and core workspace', async () => {
+  const { backend, root } = await fixture();
   const connection = await backend.start();
   const response = await fetch(`${connection.url}/api/desktop/identity`);
   expect(await response.json()).toMatchObject({
-    pythonEnvironment: path.join(workspace, 'integrations/llm/.venv'),
+    pythonEnvironment: path.join(root, 'data/integrations/llm/.venv'),
   });
+});
+it('continues using an existing integration environment after the location default changes', async () => {
+  const { backend, workspace } = await fixture();
+  const previous = path.join(workspace, 'integrations/llm/.venv');
+  await mkdir(previous, { recursive: true });
+  const connection = await backend.start();
+  expect(
+    await (await fetch(`${connection.url}/api/desktop/identity`)).json(),
+  ).toMatchObject({ pythonEnvironment: previous });
 });
 
 it.each([undefined, 'owner-selected-project'])(
@@ -505,4 +678,79 @@ it('retries failed Docker preparation after stop and clears the degraded status 
   expect((await backend.start()).warning).toBeUndefined();
   expect(backend.status).not.toHaveProperty('warning');
   expect((await readFile(log, 'utf8')).trim().split('\n')).toHaveLength(2);
+});
+it('does not recreate a missing explicitly selected workspace', async () => {
+  const f = await fixture();
+  const selected = path.join(f.root, 'missing-drive', 'workspace');
+  await mkdir(path.join(f.root, 'data'));
+  await writeFile(
+    path.join(f.root, 'data/workspace-location.json'),
+    JSON.stringify({ directory: selected }),
+  );
+  await expect(f.backend.start()).rejects.toThrow(
+    /missing|unavailable|restore/i,
+  );
+  await expect(readFile(path.join(selected, '.env'))).rejects.toMatchObject({
+    code: 'ENOENT',
+  });
+  expect(
+    JSON.parse(
+      await readFile(path.join(f.root, 'data/workspace-location.json'), 'utf8'),
+    ).directory,
+  ).toBe(selected);
+});
+it('uses a persisted manifest identity without changing a legacy workspace backend', async () => {
+  const f = await fixture();
+  const id = randomUUID();
+  await writeFile(
+    path.join(f.workspace, 'workspace.json'),
+    JSON.stringify({
+      version: 1,
+      id,
+      ownerId: 'opendots-owner',
+      storage: 'legacy-postgres',
+      schema: 1,
+    }),
+  );
+  const state = await f.backend.start();
+  expect(
+    (await (await fetch(state.url + '/api/desktop/identity')).json())
+      .workspaceId,
+  ).toBe(id);
+});
+it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+  'reports a read-only selected workspace without changing its configuration',
+  async () => {
+    const f = await fixture();
+    const original = await readFile(path.join(f.workspace, '.env'), 'utf8');
+    await chmod(f.workspace, 0o500);
+    try {
+      await expect(f.backend.start()).rejects.toThrow(/not writable/);
+      expect(await readFile(path.join(f.workspace, '.env'), 'utf8')).toBe(
+        original,
+      );
+      expect(f.backend.status.phase).toBe('error');
+    } finally {
+      await chmod(f.workspace, 0o700);
+    }
+  },
+);
+it('rejects a mismatched manifest owner before starting a backend', async () => {
+  const f = await fixture();
+  await writeFile(
+    path.join(f.workspace, 'workspace.json'),
+    JSON.stringify({
+      version: 1,
+      id: randomUUID(),
+      ownerId: 'different-owner',
+      storage: 'legacy-postgres',
+      schema: 1,
+    }),
+  );
+  const config =
+    (await readFile(path.join(f.workspace, '.env'), 'utf8')) +
+    'OWNER_ID=config-owner\n';
+  await writeFile(path.join(f.workspace, '.env'), config);
+  await expect(f.backend.start()).rejects.toThrow(/owner does not match/);
+  expect(await readFile(path.join(f.workspace, '.env'), 'utf8')).toBe(config);
 });

@@ -1,7 +1,9 @@
+import type { StoreRepository } from './storage/runtime-repositories.js';
 import { randomUUID } from 'node:crypto';
 import { EventType } from '@ag-ui/core';
 import { z } from 'zod';
-import type { Store } from './store.js';
+
+import type { MaintenanceGate } from './storage/maintenance.js';
 
 const step = z.enum(['setup_required', 'ready', 'settings']);
 const viewed = z.object({ kind: z.literal('step_viewed'), step }).strict();
@@ -98,9 +100,11 @@ const productionSend: Send = async (identity, body) => {
 export class SetupTelemetry {
   private state?: State;
   private pending?: Promise<void>;
+  private captures = new Set<Promise<void>>();
+  private readonly signal = new AbortController().signal;
   private timer?: ReturnType<typeof setInterval>;
   constructor(
-    private store: Store,
+    private store: StoreRepository,
     private env: NodeJS.ProcessEnv = process.env,
     private send: Send = productionSend,
     private report: (diagnostic: Diagnostic) => void = (diagnostic) =>
@@ -109,10 +113,17 @@ export class SetupTelemetry {
         context: { component: 'setup_telemetry' },
         timestamp: new Date().toISOString(),
       }),
-  ) {
-    if (!this.enabled()) return;
+    private maintenance?: MaintenanceGate,
+  ) {}
+  static async create(...args: ConstructorParameters<typeof SetupTelemetry>) {
+    const telemetry = new SetupTelemetry(...args);
+    await telemetry.initialize();
+    return telemetry;
+  }
+  private async initialize() {
+    if (!(await this.enabled())) return;
     try {
-      const saved = this.store.setupTelemetryState();
+      const saved = await this.store.setupTelemetryState();
       const parsed = saved
         ? stateSchema.safeParse(JSON.parse(saved))
         : undefined;
@@ -132,9 +143,9 @@ export class SetupTelemetry {
         : this.state.installationId;
       if (this.state.lastStep && !this.state.activated) {
         const last = this.state.lastStep;
-        this.capture({ kind: 'setup_abandoned', step: last });
+        await this.captureNow({ kind: 'setup_abandoned', step: last });
       }
-      this.persist();
+      await this.persist();
     } catch {
       this.report('storage_failed');
     }
@@ -148,7 +159,7 @@ export class SetupTelemetry {
       ...(this.state ? { installation_id: this.state.installationId } : {}),
     };
   }
-  private enabled() {
+  private async enabled() {
     const off =
       ['DO_NOT_TRACK', 'COPILOTKIT_TELEMETRY_DISABLED'].some((key) =>
         ['true', '1'].includes(this.env[key] ?? ''),
@@ -156,25 +167,44 @@ export class SetupTelemetry {
     if (off) {
       this.state = undefined;
       try {
-        this.store.clearSetupTelemetry();
+        await this.store.clearSetupTelemetry();
       } catch {
         this.report('storage_failed');
       }
     }
     return !off;
   }
-  private persist() {
+  private async persist() {
     if (!this.state) return false;
     try {
-      this.store.saveSetupTelemetryState(JSON.stringify(this.state));
+      await this.store.saveSetupTelemetryState(JSON.stringify(this.state));
       return true;
     } catch {
       this.report('storage_failed');
       return false;
     }
   }
-  capture(input: SetupEvent) {
-    if (!this.enabled() || !this.state) return;
+  async capture(input: SetupEvent) {
+    if (!this.maintenance) return await this.captureNow(input);
+    const pending = this.maintenance
+      .runWrite(
+        this.signal,
+        async () => {
+          await this.captureNow(input);
+        },
+        { background: true },
+      )
+      .catch(() => {
+        if (!this.maintenance?.closing) this.report('storage_failed');
+      })
+      .finally(() => {
+        this.captures.delete(pending);
+      });
+    this.captures.add(pending);
+    return pending;
+  }
+  private async captureNow(input: SetupEvent) {
+    if (!(await this.enabled()) || !this.state) return;
     const parsed = eventSchema.safeParse(input);
     if (!parsed.success) {
       this.report('invalid_event');
@@ -197,10 +227,10 @@ export class SetupTelemetry {
       event,
     });
     this.state.queue = this.state.queue.slice(-256);
-    this.persist();
+    await this.persist();
   }
   start() {
-    if (this.timer || !this.enabled()) return;
+    if (this.timer || !this.state) return;
     // Delivery is independent of setup; flush reports failures with closed diagnostics.
     void this.flush();
     this.timer = setInterval(() => void this.flush(), 15000);
@@ -209,25 +239,45 @@ export class SetupTelemetry {
   async stop() {
     clearInterval(this.timer);
     this.timer = undefined;
+    if (this.maintenance?.closing) {
+      // Shutdown admits no new writes. Retain lastStep and queued events; the
+      // next startup records abandonment before replaying the durable queue.
+      await Promise.all([...this.captures, this.pending]);
+      return;
+    }
     if (this.state?.lastStep)
-      this.capture({ kind: 'setup_abandoned', step: this.state.lastStep });
+      await this.capture({
+        kind: 'setup_abandoned',
+        step: this.state.lastStep,
+      });
     await this.flush();
   }
   flush(): Promise<void> {
-    return (this.pending ??= this.deliver()
-      .catch(() => this.report('delivery_failed'))
+    return (this.pending ??= this.flushCaptured()
+      .catch(() => {
+        if (!this.maintenance?.closing) this.report('delivery_failed');
+      })
       .finally(() => {
         this.pending = undefined;
       }));
   }
+  private async flushCaptured() {
+    await Promise.all(this.captures);
+    if (this.maintenance) {
+      await this.maintenance.runWrite(this.signal, () => this.deliver(), {
+        background: true,
+      });
+    } else await this.deliver();
+  }
   private async deliver() {
-    if (!this.enabled() || !this.state || !this.persist()) return;
+    if (!(await this.enabled()) || !this.state || !(await this.persist()))
+      return;
     // One bounded pass. New events and retries are handled by the next pass.
     const queued = this.state?.queue.slice() ?? [];
     const deadline = Date.now() + 2000;
     for (const entry of queued) {
       if (Date.now() >= deadline) return;
-      if (!this.enabled() || !this.state) return;
+      if (!(await this.enabled()) || !this.state) return;
       try {
         await this.send(this.state.identity, {
           event: names[entry.event.kind],
@@ -241,11 +291,11 @@ export class SetupTelemetry {
         this.report('delivery_failed');
         return;
       }
-      if (!this.enabled() || !this.state) return;
+      if (!(await this.enabled()) || !this.state) return;
       this.state.queue = this.state.queue.filter(
         (event) => event.id !== entry.id,
       );
-      this.persist();
+      await this.persist();
     }
   }
 }

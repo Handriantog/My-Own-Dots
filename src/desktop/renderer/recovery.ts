@@ -1,4 +1,7 @@
 import './recovery.css';
+import { createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import { StorageSettings } from '../../client/StorageSettings';
 import { recoveryView, watchWorkspaceStatus } from './recovery-state.js';
 import type {
   DesktopWorkspaceBridge,
@@ -10,6 +13,27 @@ const element = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 const setup = location.hash === '#setup';
 const panel = element<HTMLDetailsElement>('setup-panel');
+const storagePanel = element<HTMLDetailsElement>('storage-panel');
+const storageRoot = createRoot(element('storage-root'));
+storagePanel.addEventListener('toggle', () => {
+  storageRoot.render(storagePanel.open ? createElement(StorageSettings) : null);
+});
+// Migration closes the workspace document before copying. Keep its progress and
+// preview controls visible on the recovery screen that replaces that document.
+window.dotStorage?.onStatus((value) => {
+  if (value.operation?.kind === 'migration' || value.operation?.kind === 'move')
+    storagePanel.open = true;
+});
+void window.dotStorage
+  ?.status()
+  .then((value) => {
+    if (
+      value.operation?.kind === 'migration' ||
+      value.operation?.kind === 'move'
+    )
+      storagePanel.open = true;
+  })
+  .catch(() => {});
 const scene = element('scene');
 const mascot = element<HTMLButtonElement>('mascot');
 const buttons = [...document.querySelectorAll<HTMLButtonElement>('button')];
