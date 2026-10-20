@@ -116,6 +116,7 @@ export function createApp({
         [
           '/api/state',
           '/api/desktop/identity',
+          '/api/storage/status',
           '/api/local-voice/status',
           '/api/copilotkit/info',
         ].includes(path)) ||

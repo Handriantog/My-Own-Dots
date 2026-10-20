@@ -289,3 +289,40 @@ describe.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
     });
   },
 );
+it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
+  'detects committed changes without counting its own reads and defers while busy',
+  async () => {
+    const f = await storageWorkspace();
+    try {
+      const source = new LegacySnapshotSource({
+        ...f,
+        owned: true,
+        conversationBackend: 'local',
+      });
+      // Flush committed fixture statistics before taking the baseline.
+      await f.pg.query('SELECT pg_stat_force_next_flush()');
+      await f.pg.query('SELECT 1');
+      const before = await source.activity();
+      expect(before.idle).toBe(true);
+      expect((await source.activity()).revision).toBe(before.revision);
+      f.store.saveMemory('new change', 'changed');
+      const sqlite = await source.activity();
+      expect(sqlite.revision).not.toBe(before.revision);
+      await f.pg.query('UPDATE local_ai_threads SET name=$1 WHERE id=$2', [
+        'changed',
+        f.thread,
+      ]);
+      await f.pg.query('SELECT pg_stat_force_next_flush()');
+      await f.pg.query('SELECT 1');
+      expect((await source.activity()).revision).not.toBe(sqlite.revision);
+      const release = await f.gate.enterWrite(new AbortController().signal);
+      try {
+        expect((await source.activity()).idle).toBe(false);
+      } finally {
+        release();
+      }
+    } finally {
+      await f.dispose();
+    }
+  },
+);

@@ -1,4 +1,14 @@
-import { mkdtemp, mkdir, readdir, rm } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  readdir,
+  rm,
+  writeFile,
+  rename,
+  realpath,
+  readFile,
+} from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -152,4 +162,177 @@ it('admits only one native chooser at a time', async () => {
     finish(undefined);
     await pending;
   }
+});
+it('requires a secure remembered password and destination for automatic backups', async () => {
+  const f = await fixture('basic_text');
+  await expect(
+    f.controller.invoke('setAutomatic', { enabled: true }, f.context),
+  ).rejects.toThrow(/secure/i);
+  const secure = await fixture();
+  await expect(
+    secure.controller.invoke('setAutomatic', { enabled: true }, secure.context),
+  ).rejects.toThrow(/folder/i);
+  vi.mocked(secure.context.chooseDirectory).mockResolvedValue(secure.root);
+  await secure.controller.invoke(
+    'chooseBackupDirectory',
+    undefined,
+    secure.context,
+  );
+  await expect(
+    secure.controller.invoke('setAutomatic', { enabled: true }, secure.context),
+  ).rejects.toThrow(/password/i);
+  await secure.keys.remember('password');
+  await secure.controller.invoke(
+    'setAutomatic',
+    { enabled: true },
+    secure.context,
+  );
+  expect((await secure.controller.status()).automatic).toBe(true);
+  await secure.controller.invoke(
+    'setAutomatic',
+    { enabled: false },
+    secure.context,
+  );
+  expect((await secure.controller.status()).automatic).toBe(false);
+});
+
+it('runs changed daily backups only while idle and recovers after a missing destination', async () => {
+  const f = await fixture();
+  const destination = join(f.root, 'backups');
+  await mkdir(destination);
+  vi.mocked(f.context.chooseDirectory).mockResolvedValue(destination);
+  await f.controller.invoke('chooseBackupDirectory', undefined, f.context);
+  await f.keys.remember('password');
+  await f.controller.invoke('setAutomatic', { enabled: true }, f.context);
+  let revision = 'one',
+    idle = false,
+    archiveId = randomUUID();
+  let archiveTime = Date.UTC(2026, 9, 20);
+  const operation = randomUUID();
+  const origins: string[] = [];
+  f.request.mockImplementation(async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    if (path.endsWith('/storage/status'))
+      return Response.json({ idle, revision });
+    if (path.endsWith('/desktop/identity'))
+      return Response.json({
+        workspaceId: 'workspace',
+        capabilities: ['workspace-snapshot-v1'],
+      });
+    if (path.endsWith('/storage/snapshots')) {
+      origins.push(JSON.parse(init.body).origin);
+      archiveId = randomUUID();
+      return Response.json({ id: operation });
+    }
+    if (path.endsWith('/release')) return Response.json({ ok: true });
+    return Response.json({
+      phase: 'ready',
+      directory: join(f.workspace, 'data/.storage-snapshots', operation),
+      manifest: {
+        version: 1,
+        minimumReader: 1,
+        kind: 'workspace-backup',
+        archiveId,
+        workspaceId: 'workspace',
+        ownerId: 'owner',
+        createdAt: new Date(archiveTime).toISOString(),
+        entries: [],
+        coverage: [],
+      },
+    });
+  });
+  f.worker.run.mockImplementation(async (command) => {
+    await writeFile(command.destination, 'verified fixture archive');
+    return {
+      id: archiveId,
+      createdAt: new Date(archiveTime).toISOString(),
+      verified: true,
+      coverage: [],
+    };
+  });
+  const day = Date.UTC(2026, 9, 20);
+  try {
+    await f.controller.tick(day);
+    expect(f.worker.run).not.toHaveBeenCalled();
+    idle = true;
+    await Promise.all([f.controller.tick(day), f.controller.tick(day)]);
+    expect(origins).toEqual(['automatic']);
+    const success = (await f.controller.status()).lastSuccess;
+    await f.controller.tick(day + 86400000);
+    expect(origins).toHaveLength(1);
+    revision = 'two';
+    archiveTime += 86400000;
+    await rename(destination, destination + '-offline');
+    await expect(f.controller.tick(day + 86400000)).rejects.toThrow();
+    expect((await f.controller.status()).lastSuccess).toBe(success);
+    expect((await f.controller.status()).error).toMatch(/failed/i);
+    await rename(destination + '-offline', destination);
+    await f.controller.tick(day + 86400000);
+    expect(origins).toEqual(['automatic', 'automatic']);
+    expect(
+      (await readdir(destination)).filter((x) => x.endsWith('.dotbackup')),
+    ).toHaveLength(2);
+    const unmanaged = join(destination, 'user-managed.dotpack');
+    await writeFile(unmanaged, 'never prune a user export');
+    const changed = join(
+      destination,
+      (await readdir(destination)).find((name) => name.endsWith('.dotbackup'))!,
+    );
+    await writeFile(changed, 'user replaced this file with unrelated content');
+    for (let offset = 2; offset < 35; offset++) {
+      revision = `revision-${offset}`;
+      archiveTime = day + offset * 86400000;
+      await f.controller.tick(archiveTime);
+    }
+    const retained = (await readdir(destination)).filter((name) =>
+      name.endsWith('.dotbackup'),
+    );
+    expect(retained.length).toBeGreaterThanOrEqual(7);
+    expect(retained.length).toBeLessThanOrEqual(12);
+    expect(await readFile(unmanaged, 'utf8')).toBe('never prune a user export');
+    expect(await readFile(changed, 'utf8')).toBe(
+      'user replaced this file with unrelated content',
+    );
+  } finally {
+    await f.controller.close();
+  }
+});
+it('changing backup folders clears managed ownership and requires opting in again', async () => {
+  const f = await fixture();
+  const a = join(f.root, 'a'),
+    b = join(f.root, 'b');
+  await mkdir(a);
+  await mkdir(b);
+  vi.mocked(f.context.chooseDirectory).mockResolvedValue(a);
+  await f.controller.invoke('chooseBackupDirectory', undefined, f.context);
+  await f.keys.remember('password');
+  await f.controller.invoke('setAutomatic', { enabled: true }, f.context);
+  vi.mocked(f.context.chooseDirectory).mockResolvedValue(b);
+  await f.controller.invoke('chooseBackupDirectory', undefined, f.context);
+  expect(await f.controller.status()).toMatchObject({
+    automatic: false,
+    destination: await realpath(b),
+  });
+});
+
+it('close prevents a delayed idle check from starting an automatic backup', async () => {
+  const f = await fixture();
+  vi.mocked(f.context.chooseDirectory).mockResolvedValue(f.root);
+  await f.controller.invoke('chooseBackupDirectory', undefined, f.context);
+  await f.keys.remember('password');
+  await f.controller.invoke('setAutomatic', { enabled: true }, f.context);
+  let finish!: (value: Response) => void;
+  f.request.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const tick = f.controller.tick();
+  await vi.waitFor(() => expect(finish).toBeDefined());
+  const closing = f.controller.close();
+  finish(Response.json({ idle: true, revision: 'changed' }));
+  await Promise.all([tick, closing]);
+  expect(f.worker.run).not.toHaveBeenCalled();
+  expect((await f.controller.status()).lastSuccess).toBeUndefined();
 });

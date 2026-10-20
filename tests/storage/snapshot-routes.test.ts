@@ -124,3 +124,53 @@ it('retains ready captures until release and rejects overlapping operations', as
     await rm(root, { recursive: true, force: true });
   }
 });
+it('authenticates idle revision status without admitting itself as a writer', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dot-status-api-'));
+  const gate = new MaintenanceGate();
+  const store = new Store(':memory:');
+  const config = {
+    mode: 'sample' as const,
+    baseUrl: 'https://example.invalid',
+  };
+  const snapshots = new SnapshotOperations(
+    {
+      capture: async () => {
+        throw new Error('Unexpected capture');
+      },
+      activity: async () => ({
+        idle: !gate.status().held && gate.status().activeWrites === 0,
+        revision: 'revision-1',
+      }),
+    },
+    root,
+  );
+  const app = createApp({
+    store,
+    runner: new Runner(store, config),
+    config,
+    ownerToken: 'secret',
+    maintenance: gate,
+    snapshots,
+  });
+  const request = (token = 'secret') =>
+    app.request('/api/storage/status', {
+      headers: { authorization: `Bearer ${token}` },
+    });
+  try {
+    expect((await request('wrong')).status).toBe(401);
+    expect(await (await request()).json()).toEqual({
+      idle: true,
+      revision: 'revision-1',
+    });
+    const release = await gate.enterWrite(new AbortController().signal);
+    try {
+      expect(await (await request()).json()).toMatchObject({ idle: false });
+    } finally {
+      release();
+    }
+  } finally {
+    await snapshots.close();
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

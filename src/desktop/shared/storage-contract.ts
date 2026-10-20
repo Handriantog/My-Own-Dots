@@ -3,6 +3,7 @@ export const storageMethods = [
   'status',
   'chooseBackupDirectory',
   'backupNow',
+  'setAutomatic',
   'previewRestore',
   'restore',
   'cancel',
@@ -43,6 +44,7 @@ export interface DesktopStorageBridge {
   status(): Promise<StorageStatus>;
   chooseBackupDirectory(): Promise<boolean>;
   backupNow(input: { passphrase: string; remember: boolean }): Promise<void>;
+  setAutomatic(input: { enabled: boolean }): Promise<void>;
   previewRestore(input: { passphrase: string }): Promise<void>;
   restore(input: {
     operationId: string;

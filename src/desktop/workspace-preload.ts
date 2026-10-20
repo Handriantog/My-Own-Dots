@@ -82,6 +82,7 @@ if (
     status: () => ipcRenderer.invoke('dot:storage:status'),
     chooseBackupDirectory: () => userAction('chooseBackupDirectory'),
     backupNow: (value) => userAction('backupNow', value),
+    setAutomatic: (value) => userAction('setAutomatic', value),
     previewRestore: (value) => userAction('previewRestore', value),
     restore: (value) => userAction('restore', value),
     cancel: (id) => userAction('cancel', id),

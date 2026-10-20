@@ -48,6 +48,19 @@ For controlled source launches, `DOTS_WORKSPACE_DIR` chooses the workspace folde
 
 `npm run dev` remains the Vite development harness at `http://127.0.0.1:5173`. `npm run build && npm start` runs the headless API; it does not serve the production workspace UI.
 
+## Workspace backup and recovery
+
+In the desktop workspace, open **Settings and setup → Storage & recovery**. The same controls are available in **Workspace Setup…** when the main workspace cannot open.
+
+1. Choose a backup folder outside the workspace, preferably on another disk.
+2. Enter a recovery password and select **Back up now**. Finish active chat or voice work first. Success is shown only after the encrypted archive has been read back and verified.
+3. To enable daily backups, make a backup with **Remember** selected, then enable **Back up daily after changes while idle**. This requires the operating system's secure credential storage. Dot must be running; changed data is backed up on the next eligible idle check. Retention keeps seven daily and four weekly recovery points, sharing overlapping points. User exports and files replaced by the user are retained.
+4. For recovery, enter the archive password and choose **Choose backup and preview restore**. Select the archive and a parent folder for a new workspace, inspect the preview, then choose **Open restored workspace**. The selected PostgreSQL server must be available and permit creation of a new database. Existing source data is retained. Replacement first requires a fresh verified backup.
+
+Keep the recovery password independently; the encrypted archive cannot be recovered without it on another computer. Linux without a supported keyring can still make manual password-based backups. A missing backup drive reports failure and retries when it returns; it does not update the last verified success. Choosing another backup folder disables scheduling until you opt in again and leaves the old folder untouched.
+
+Current backups cover core SQLite/PostgreSQL data, including messages, memory history and suppression records, pages and voice transcripts. They exclude computer files, browser profiles and provider/OS credentials. Restored schedules remain paused and external access requires new approval. This feature does **not** yet move live conversations out of Docker or provide individual Dot transfer. See [verification and remaining release gates](storage-verification.md) before treating this development build as release-ready.
+
 ## Companion and compact chat
 
 The companion walks, rests, stretches, sleeps, jumps, looks around, waves, grooms, adjusts its headphones and responds to clicks, petting or pinching pickup. With Accessibility enabled, it uses exposed window tops and sides, climbs, hangs and falls when a supporting window moves. Its color changes without replacing its character or animation.

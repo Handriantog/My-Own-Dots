@@ -80,11 +80,12 @@ export class WorkspaceWindow {
     );
     this.storage = new StorageController({
       profile: data,
-      keys: new BackupKeys({
-        file: path.join(data, 'backup-password.bin'),
-        storage: safeStorage,
-        platform: process.platform,
-      }),
+      keys: (directory) =>
+        new BackupKeys({
+          file: path.join(directory, 'backup-password.bin'),
+          storage: safeStorage,
+          platform: process.platform,
+        }),
       worker: new ArchiveWorkerClient({
         entry: path.join(bundle, 'archive-worker.cjs'),
       }),
@@ -98,6 +99,7 @@ export class WorkspaceWindow {
         if (!this.disposed) await this.retry();
       },
     });
+    this.storage.start();
     this.storage.subscribe((status) => {
       for (const window of this.windows)
         if (!window.isDestroyed())

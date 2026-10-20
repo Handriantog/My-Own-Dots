@@ -11,7 +11,9 @@ import { WorkspaceStore } from '../../src/server/workspace.js';
 import { PostgresConversations } from '../../src/server/local-conversations.js';
 import { MaintenanceGate } from '../../src/server/storage/maintenance.js';
 
-export async function storageWorkspace() {
+export async function storageWorkspace(
+  postgresUrl = process.env.LOCAL_TEST_DATABASE_URL!,
+) {
   const root = await mkdtemp(join(tmpdir(), 'dot-snapshot-'));
   const sqlitePath = join(root, 'workspace.sqlite');
   const configurationPath = join(root, 'workspace.env');
@@ -20,7 +22,6 @@ export async function storageWorkspace() {
   const workspaceId = randomUUID();
   const store = new Store(sqlitePath);
   const workspace = new WorkspaceStore(sqlitePath, ownerId);
-  const postgresUrl = process.env.LOCAL_TEST_DATABASE_URL!;
   const conversations = new PostgresConversations(postgresUrl, ownerId);
   const foreign = new PostgresConversations(postgresUrl, foreignOwner);
   const pg = new Pool({ connectionString: postgresUrl });
@@ -155,6 +156,16 @@ export async function storageWorkspace() {
     configurationPath,
     'OWNER_TOKEN=recovery-evidence-only\nLOCAL_DATABASE_URL=do-not-activate\n',
   );
+  let disconnected = false;
+  const disconnect = async () => {
+    if (disconnected) return;
+    disconnected = true;
+    store.close();
+    workspace.close();
+    await conversations.close();
+    await foreign.close();
+    await pg.end();
+  };
   return {
     root,
     sqlitePath,
@@ -175,19 +186,19 @@ export async function storageWorkspace() {
     job,
     call,
     directory: join(root, 'capture'),
+    disconnect,
     async dispose() {
-      store.close();
-      workspace.close();
-      await conversations.close();
-      await foreign.close();
-      for (const owner of [ownerId, foreignOwner]) {
-        await pg.query('DELETE FROM memory_jobs WHERE owner_id=$1', [owner]);
-        await pg.query('DELETE FROM local_ai_runs WHERE owner_id=$1', [owner]);
-        await pg.query('DELETE FROM local_ai_threads WHERE owner_id=$1', [
-          owner,
-        ]);
-      }
-      await pg.end();
+      if (!disconnected)
+        for (const owner of [ownerId, foreignOwner]) {
+          await pg.query('DELETE FROM memory_jobs WHERE owner_id=$1', [owner]);
+          await pg.query('DELETE FROM local_ai_runs WHERE owner_id=$1', [
+            owner,
+          ]);
+          await pg.query('DELETE FROM local_ai_threads WHERE owner_id=$1', [
+            owner,
+          ]);
+        }
+      await disconnect();
       await rm(root, { recursive: true, force: true });
     },
   };

@@ -68,13 +68,10 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
         file: join(profile, 'key'),
         platform: 'linux',
         storage: {
-          isEncryptionAvailable: () => false,
-          encryptString: () => {
-            throw new Error('Must not be called');
-          },
-          decryptString: () => {
-            throw new Error('Must not be called');
-          },
+          isEncryptionAvailable: () => true,
+          getSelectedStorageBackend: () => 'gnome_libsecret',
+          encryptString: (value) => Buffer.from(value),
+          decryptString: (value) => value.toString(),
         },
       }),
       worker: new ArchiveWorkerClient({
@@ -113,7 +110,7 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       await controller.invoke('chooseBackupDirectory', undefined, context);
       await controller.invoke(
         'backupNow',
-        { passphrase: 'private fixture password', remember: false },
+        { passphrase: 'private fixture password', remember: true },
         context,
       );
       const status = await controller.status();
@@ -140,6 +137,15 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       }
       expect((await controller.status()).lastSuccess).toBe(status.lastSuccess);
       expect(await readdir(destination)).toEqual(files);
+      await controller.invoke('setAutomatic', { enabled: true }, context);
+      await controller.tick();
+      expect((await controller.status()).operation?.phase).toBe('ready');
+      const automaticFiles = (await readdir(destination)).filter((name) =>
+        name.endsWith('.dotbackup'),
+      );
+      expect(automaticFiles).toHaveLength(1); // Retention keeps the latest point today.
+      expect(automaticFiles).not.toEqual(files);
+      archive = join(destination, automaticFiles[0]);
       await controller.invoke(
         'previewRestore',
         { passphrase: 'private fixture password' },

@@ -160,6 +160,28 @@ export function StorageSettings({
           ? new Date(status.lastAttempt).toLocaleString()
           : 'None'}
       </p>
+      <label>
+        <input
+          type="checkbox"
+          aria-label="Automatic daily backups"
+          checked={status?.automatic ?? false}
+          disabled={
+            busy ||
+            (!status?.automatic &&
+              (!status?.secureStorage || !status?.destination))
+          }
+          onChange={(event) => {
+            const enabled = event.target.checked;
+            void action(() => bridge.setAutomatic({ enabled }));
+          }}
+        />{' '}
+        Back up daily after changes while idle
+      </label>
+      <p className="field-note">
+        Make a backup with “Remember” selected before enabling this. Dot must be
+        running. Retain seven daily and four weekly recovery points; overlapping
+        points share one archive.
+      </p>
       <p>
         Last verified backup:{' '}
         {status?.lastSuccess

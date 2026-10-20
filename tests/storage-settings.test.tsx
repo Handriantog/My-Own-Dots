@@ -21,6 +21,7 @@ it('distinguishes snapshotting from a verified backup', async () => {
     status: vi.fn(async () => status),
     chooseBackupDirectory: vi.fn(),
     backupNow: vi.fn(),
+    setAutomatic: vi.fn(),
     previewRestore: vi.fn(),
     restore: vi.fn(),
     cancel: vi.fn(),
@@ -46,6 +47,10 @@ it('distinguishes snapshotting from a verified backup', async () => {
   expect(JSON.stringify(root.toJSON())).toContain('Backup verified');
   expect(
     root.root.findByProps({ 'aria-label': 'Remember recovery password' }).props
+      .disabled,
+  ).toBe(true);
+  expect(
+    root.root.findByProps({ 'aria-label': 'Automatic daily backups' }).props
       .disabled,
   ).toBe(true);
 });

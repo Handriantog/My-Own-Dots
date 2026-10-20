@@ -91,6 +91,11 @@ export class SnapshotOperations {
       this.starting = false;
     }
   }
+  async activity() {
+    if (this.closed || !this.source.activity)
+      throw new Error('Storage activity is unavailable');
+    return this.source.activity();
+  }
   status(id: string): Status | undefined {
     const operation = this.operations.get(id);
     if (!operation) return;
@@ -123,6 +128,13 @@ export class SnapshotOperations {
 }
 export function snapshotRoutes(operations: SnapshotOperations) {
   const app = new Hono();
+  app.get('/storage/status', async (c) => {
+    try {
+      return c.json(await operations.activity());
+    } catch {
+      return c.json({ error: 'Storage activity is unavailable.' }, 503);
+    }
+  });
   app.post('/storage/snapshots', async (c) => {
     const parsed = z
       .object({ origin: z.enum(['manual', 'automatic']).default('manual') })

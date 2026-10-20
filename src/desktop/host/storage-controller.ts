@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, realpath, rm, statfs } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  open,
+  readFile,
+  realpath,
+  rm,
+  statfs,
+} from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { parseEnv } from 'node:util';
@@ -12,7 +20,11 @@ import type {
   StorageOperationStatus,
 } from '../shared/storage-contract.js';
 import type { BackupKeys } from './backup-keys.js';
-import type { ArchiveWorkerPort } from './archive-worker-client.js';
+import { BackupSchedule } from './backup-schedule.js';
+import type {
+  ArchiveWorkerPort,
+  ArchiveWorkerResult,
+} from './archive-worker-client.js';
 import type {
   WorkspaceBackendConfiguration,
   WorkspaceBackendConnection,
@@ -41,6 +53,15 @@ const metadataSchema = z
             createdAt: z.string(),
             verified: z.literal(true),
             managed: z.literal(true),
+            file: z
+              .object({
+                size: z.number(),
+                mtimeMs: z.number(),
+                ino: z.number(),
+                dev: z.number(),
+              })
+              .strict()
+              .optional(),
           })
           .strict(),
       )
@@ -50,7 +71,7 @@ const metadataSchema = z
 type Metadata = z.infer<typeof metadataSchema>;
 interface Options {
   profile: string;
-  keys: BackupKeys;
+  keys: BackupKeys | ((metadataDirectory: string) => BackupKeys);
   worker: ArchiveWorkerPort;
   configuration(): WorkspaceBackendConfiguration | undefined;
   connection(): WorkspaceBackendConnection | undefined;
@@ -68,7 +89,109 @@ export class StorageController {
   private listeners = new Set<(status: StorageStatus) => void>();
   private disposed = false;
   private choosing = false;
+  private ticking?: Promise<void>;
+  private cancelling = false;
+  private timer?: ReturnType<typeof setInterval>;
   constructor(private readonly options: Options) {}
+  private keys() {
+    return typeof this.options.keys === 'function'
+      ? this.options.keys(dirname(this.stateFile()))
+      : this.options.keys;
+  }
+  start() {
+    if (this.timer || this.disposed) return;
+    this.timer = setInterval(() => {
+      void this.tick().catch(() => {});
+    }, 60000);
+    this.timer.unref();
+  }
+  tick(now = Date.now()): Promise<void> {
+    if (this.disposed || this.cancelling || this.running || this.choosing)
+      return Promise.resolve();
+    if (this.ticking) return this.ticking;
+    this.choosing = true;
+    this.ticking = this.automaticTick(now).finally(() => {
+      this.ticking = undefined;
+      this.choosing = false;
+    });
+    return this.ticking;
+  }
+  private async automaticTick(now: number) {
+    if (!this.options.configuration()) return;
+    const metadata = await this.metadata();
+    if (!metadata.automatic) return;
+    try {
+      const connection = this.options.connection();
+      if (!connection?.ownerToken) return;
+      const activity = z
+        .object({ idle: z.boolean(), revision: z.string().min(1) })
+        .parse(await this.json(connection, '/storage/status'));
+      if (!activity.idle || this.disposed || this.cancelling) return;
+      const passphrase = await this.keys().recall();
+      if (!passphrase) throw new Error('Remember the recovery password again');
+      if (this.disposed || this.cancelling) return;
+      const destinationKey = createHash('sha256')
+        .update(metadata.destination ?? '')
+        .digest('hex');
+      const schedule = new BackupSchedule({
+        stateFile: join(
+          dirname(this.stateFile()),
+          `schedule-${destinationKey}.json`,
+        ),
+        backup: async () => {
+          let result:
+            Extract<ArchiveWorkerResult, { verified: true }> | undefined;
+          await this.run('backup', async (signal) => {
+            result = await this.backup(passphrase, signal, 'automatic');
+          });
+          return { ...result!, managed: true };
+        },
+        list: async () => (await this.metadata()).records,
+        remove: (id) => this.removeManagedBackup(id),
+      });
+      await schedule.tick({ now, ...activity });
+      const state = await schedule.status();
+      if (state.error)
+        await this.save({ ...(await this.metadata()), error: state.error });
+    } catch (error) {
+      await this.save({
+        ...(await this.metadata()),
+        lastAttempt: new Date(now).toISOString(),
+        error:
+          'Automatic backup failed. Check the backup folder and recovery password.',
+      });
+      throw error;
+    }
+  }
+  private async removeManagedBackup(id: string) {
+    const metadata = await this.metadata();
+    const record = metadata.records.find((record) => record.id === id);
+    // Old metadata without a file identity is retained conservatively.
+    if (!record?.file || !metadata.destination || metadata.records.length < 2)
+      return;
+    const destination = await this.checkDestination(metadata.destination);
+    const file = join(destination, `${z.uuid().parse(id)}.dotbackup`);
+    let value;
+    try {
+      value = await lstat(file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+    if (value) {
+      if (
+        !value.isFile() ||
+        (['size', 'mtimeMs', 'ino', 'dev'] as const).some(
+          (key) => value[key] !== record.file![key],
+        )
+      )
+        return;
+      await rm(file);
+    }
+    await this.save({
+      ...metadata,
+      records: metadata.records.filter((record) => record.id !== id),
+    });
+  }
   subscribe(listener: (status: StorageStatus) => void) {
     this.listeners.add(listener);
     return () => {
@@ -119,7 +242,7 @@ export class StorageController {
   async status(): Promise<StorageStatus> {
     const metadata = await this.metadata();
     return {
-      secureStorage: this.options.keys.available(),
+      secureStorage: this.keys().available(),
       destination: metadata.destination,
       automatic: metadata.automatic,
       lastAttempt: metadata.lastAttempt,
@@ -149,6 +272,7 @@ export class StorageController {
       throw new Error('A storage chooser is already active');
     const chooser = [
       'chooseBackupDirectory',
+      'setAutomatic',
       'previewRestore',
       'restore',
     ].includes(method);
@@ -177,6 +301,27 @@ export class StorageController {
     }
     this.guard(context, true);
     if (this.running) throw new Error('A storage operation is already active');
+    if (method === 'setAutomatic') {
+      const { enabled } = z
+        .object({ enabled: z.boolean() })
+        .strict()
+        .parse(input);
+      const metadata = await this.metadata();
+      if (enabled) {
+        if (!this.keys().available())
+          throw new Error('Secure storage is required for automatic backups');
+        if (!metadata.destination)
+          throw new Error('Choose a backup folder first');
+        await this.checkDestination(metadata.destination);
+        if (!(await this.keys().recall()))
+          throw new Error(
+            'Remember a recovery password before enabling automatic backups',
+          );
+      }
+      this.guard(context, true);
+      await this.save({ ...metadata, automatic: enabled });
+      return;
+    }
     if (method === 'chooseBackupDirectory') {
       if (input !== undefined)
         throw new Error('Folder paths must be chosen natively');
@@ -185,7 +330,12 @@ export class StorageController {
       if (!selected) return false;
       const destination = await this.checkDestination(selected);
       this.guard(context, true);
-      await this.save({ ...(await this.metadata()), destination });
+      const metadata = await this.metadata();
+      await this.save(
+        metadata.destination === destination
+          ? metadata
+          : { version: 1, destination, automatic: false, records: [] },
+      );
       return true;
     }
     if (method === 'backupNow') {
@@ -193,12 +343,12 @@ export class StorageController {
         .object({ passphrase: password, remember: z.boolean() })
         .strict()
         .parse(input);
-      if (value.remember && !this.options.keys.available())
+      if (value.remember && !this.keys().available())
         throw new Error(
           'Secure storage is unavailable; use a manual backup without remembering the password',
         );
       return this.run('backup', async (signal) => {
-        if (value.remember) await this.options.keys.remember(value.passphrase);
+        if (value.remember) await this.keys().remember(value.passphrase);
         this.guard(context, true);
         await this.backup(value.passphrase, signal, 'manual');
       });
@@ -261,7 +411,7 @@ export class StorageController {
         async (signal) => {
           let verifiedBackupDirectory: string | undefined;
           if (value.mode === 'replace') {
-            const passphrase = await this.options.keys.recall();
+            const passphrase = await this.keys().recall();
             if (!passphrase)
               throw new Error(
                 'Save a recovery password and create a verified backup before replacement',
@@ -459,6 +609,9 @@ export class StorageController {
       );
       if (!('verified' in result) || !result.verified)
         throw new Error('Backup was not verified');
+      if (result.id !== archiveId) throw new Error('Backup identity changed');
+      const file = await lstat(join(destination, `${archiveId}.dotbackup`));
+      if (!file.isFile()) throw new Error('Verified backup is unavailable');
       this.coverage = result.coverage;
       metadata.lastSuccess = new Date().toISOString();
       metadata.records.push({
@@ -466,6 +619,12 @@ export class StorageController {
         createdAt: result.createdAt,
         verified: true,
         managed: true,
+        file: {
+          size: file.size,
+          mtimeMs: file.mtimeMs,
+          ino: file.ino,
+          dev: file.dev,
+        },
       });
       await this.save(metadata);
       return result;
@@ -487,11 +646,15 @@ export class StorageController {
     }
   }
   async cancelActive() {
+    this.cancelling = true;
     this.running?.controller.abort();
     await this.running?.done.catch(() => {});
+    await this.ticking?.catch(() => {});
+    this.cancelling = false;
   }
   async close() {
     this.disposed = true;
+    clearInterval(this.timer);
     await this.cancelActive();
     this.listeners.clear();
   }

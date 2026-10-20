@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { chmod, mkdir, open, readFile, rm } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
 import { Pool } from 'pg';
@@ -9,9 +9,13 @@ import type {
   ArchiveManifest,
 } from '../../shared/storage-archive.js';
 import { MaintenanceGate } from './maintenance.js';
-import { capturePostgresRecords } from './postgres-records.js';
+import {
+  capturePostgresRecords,
+  POSTGRES_RECORDS,
+} from './postgres-records.js';
 
 export interface SnapshotSource {
+  activity?(): Promise<{ idle: boolean; revision: string }>;
   capture(
     directory: string,
     signal: AbortSignal,
@@ -49,6 +53,68 @@ export class LegacySnapshotSource implements SnapshotSource {
       throw new Error(
         'Workspace configuration changed; reconnect before taking a backup',
       );
+  }
+  /** Conservative, bounded change signal: no history scans or per-chat writes.
+   * PostgreSQL counters can lag, so the next idle tick observes late changes.
+   * Shared-server writes may cause an extra backup, never an omitted scope.
+   */
+  async activity() {
+    const { gate, sqlitePath, postgresUrl, configurationPath } = this.options;
+    const idle = () =>
+      !gate.closing && !gate.status().held && gate.status().activeWrites === 0;
+    if (!idle()) return { idle: false, revision: 'busy' };
+    if (!postgresUrl) throw new Error('Conversation storage is unavailable');
+    const files = await Promise.all(
+      [
+        sqlitePath,
+        `${sqlitePath}-wal`,
+        ...(configurationPath ? [configurationPath] : []),
+      ].map(async (file) => {
+        try {
+          const value = await stat(file, { bigint: true });
+          return [
+            file,
+            String(value.size),
+            String(value.mtimeNs),
+            String(value.ino),
+          ];
+        } catch (error) {
+          if (
+            file.endsWith('-wal') &&
+            (error as NodeJS.ErrnoException).code === 'ENOENT'
+          )
+            return [file, 'absent'];
+          throw error;
+        }
+      }),
+    );
+    const pool = new Pool({
+      connectionString: postgresUrl,
+      max: 1,
+      connectionTimeoutMillis: 5000,
+      statement_timeout: 5000,
+    });
+    pool.on('error', () => {});
+    try {
+      const result = await pool.query(
+        `SELECT schemaname,relname,relid::text,n_tup_ins::text,n_tup_upd::text,n_tup_del::text
+        FROM pg_stat_user_tables WHERE schemaname='public' AND relname=ANY($1::text[]) ORDER BY relname`,
+        [Object.keys(POSTGRES_RECORDS)],
+      );
+      const reset = await pool.query(
+        "SELECT stats_reset::text,current_setting('track_counts') AS tracking FROM pg_stat_database WHERE datname=current_database()",
+      );
+      if (reset.rows[0]?.tracking !== 'on')
+        throw new Error('PostgreSQL change tracking is disabled');
+      return {
+        idle: idle(),
+        revision: createHash('sha256')
+          .update(JSON.stringify([files, result.rows, reset.rows]))
+          .digest('hex'),
+      };
+    } finally {
+      await pool.end();
+    }
   }
   async capture(
     directory: string,
