@@ -34,14 +34,14 @@
 
 ## Ordered implementation plans
 
-| Stage | Plan                                                                                                              | Independently usable result                                                     |
-| ----- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| 1     | [Backup and recovery](storage-plan-01-backup-recovery.md)                                                         | Encrypted, verified recovery of current SQLite/PostgreSQL workspaces            |
-| 2     | [Unified storage and migration requirements](storage-portability-design.md#repository-boundaries-and-concurrency) | Docker-free new workspaces, preserved legacy data, measured chat/voice behavior |
-| 3     | [Dot export and import requirements](storage-portability-design.md#individual-dot-transfer)                       | Previewed, scoped `.dotpack` transfer into a new Dot                            |
-| 4     | [Native platform acceptance requirements](storage-portability-design.md#cross-platform-release-boundary)          | Normal and portable builds with native storage/voice evidence per OS            |
+| Stage | Plan                                                                                                     | Independently usable result                                                     |
+| ----- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| 1     | [Backup and recovery](storage-plan-01-backup-recovery.md)                                                | Encrypted, verified recovery of current SQLite/PostgreSQL workspaces            |
+| 2     | [Unified storage and migration](storage-plan-02-unified-workspace.md)                                    | Docker-free new workspaces, preserved legacy data, measured chat/voice behavior |
+| 3     | [Dot export and import requirements](storage-portability-design.md#individual-dot-transfer)              | Previewed, scoped `.dotpack` transfer into a new Dot                            |
+| 4     | [Native platform acceptance requirements](storage-portability-design.md#cross-platform-release-boundary) | Normal and portable builds with native storage/voice evidence per OS            |
 
-Each stage runs its focused tests before the repository checks. Stage 1 has the executable task plan; later task plans will build on its tested interfaces without changing the approved scope. Stage 2 must not flip existing users automatically or ship as default until its migration and performance gates pass. Stage 4 may prepare platform adapters earlier, but it cannot claim product support before native checks pass.
+Each stage runs its focused tests before the repository checks. Stages 1 and 2 have executable task plans; later task plans will build on their tested interfaces without changing the approved scope. Stage 2 must not flip existing users automatically or ship as default until its migration and performance gates pass. Stage 4 may prepare platform adapters earlier, but it cannot claim product support before native checks pass.
 
 ## Execution and integration
 
