@@ -638,3 +638,67 @@ it('does not start providers while manual snapshot admission is held', async () 
   await vi.waitFor(() => expect(gate.status().activeWrites).toBe(0));
   await runner.close();
 });
+
+it('awaits a durable lifecycle gate before running and settles under maintenance admission', async () => {
+  const store = new MemoryStore();
+  const order: string[] = [];
+  const { MaintenanceGate } =
+    await import('../src/server/storage/maintenance.js');
+  const maintenance = new MaintenanceGate();
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const lifecycle = {
+    begin: vi.fn(async () => {
+      order.push('begin');
+      await blocked;
+      return {
+        settle: async (outcome: { failed: boolean; stopped: boolean }) => {
+          expect(store.snapshot.lastRun?.status).toBe('finished');
+          expect(maintenance.status().activeWrites).toBeGreaterThan(0);
+          expect(outcome).toMatchObject({ failed: false, stopped: false });
+          order.push('settled');
+        },
+      };
+    }),
+  };
+  const agent = new TestAgent((i) => {
+    order.push('agent');
+    return answer(i);
+  });
+  const runner = new LocalAgentRunner(store, undefined, maintenance, lifecycle);
+  const finished = collect(
+    runner.run({ threadId: 'thread', agent, input: input() }),
+  );
+  await vi.waitFor(() => expect(order).toEqual(['begin']));
+  expect(agent.calls).toHaveLength(0);
+  release();
+  await finished;
+  expect(order).toEqual(['begin', 'agent', 'settled']);
+  expect(lifecycle.begin).toHaveBeenCalledWith(
+    expect.objectContaining({
+      agentId: 'dot',
+      input: expect.objectContaining({ threadId: 'thread' }),
+    }),
+  );
+});
+
+it('denies a terminal delegated thread before provider invocation', async () => {
+  const store = new MemoryStore();
+  const agent = new TestAgent(answer);
+  const runner = new LocalAgentRunner(store, undefined, undefined, {
+    begin: async () => {
+      throw Error('Delegated task is already completed.');
+    },
+  });
+  const events = await collect(
+    runner.run({ threadId: 'thread', agent, input: input() }),
+  );
+  expect(agent.calls).toHaveLength(0);
+  expect(events.at(-1)).toMatchObject({
+    type: EventType.RUN_ERROR,
+    message: expect.stringContaining('completed'),
+  });
+  expect(store.snapshot.lastRun).toBeUndefined();
+});

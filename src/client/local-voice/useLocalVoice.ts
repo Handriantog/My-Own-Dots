@@ -7,6 +7,10 @@ import type {
 } from '../../shared/local-voice';
 import { authHeaders } from '../api';
 import { LocalVoiceAudio } from './audio';
+import {
+  voiceQualitySchema,
+  type VoiceQuality,
+} from '../../shared/voice-settings';
 
 declare global {
   interface Window {
@@ -16,9 +20,11 @@ declare global {
 interface Options {
   threadId: string;
   dotId: string;
+  quality?: VoiceQuality;
   onTranscript(transcript: { messageId: string; text: string }): Promise<void>;
   onCancelTranscript?(messageId: string): Promise<void> | void;
   onSaved(): void;
+  onCanonicalSaved?(): Promise<void> | void;
 }
 type Control =
   | { action: 'heartbeat' | 'interrupt' | 'end' }
@@ -26,6 +32,7 @@ type Control =
   | { action: 'answer'; messageId: string }
   | { action: 'played'; generation: number; sequence: number; samples: number };
 interface Session {
+  quality: VoiceQuality;
   audio: LocalVoiceAudio;
   handle?: LocalVoiceHandle;
   stream: AbortController;
@@ -113,6 +120,7 @@ function parseEvent(text: string): LocalVoiceEvent {
     throw new Error('Invalid local voice event');
   const data = event as Record<string, unknown>;
   const valid =
+    data.type === 'review-folders' ||
     (data.type === 'phase' &&
       ['listening', 'thinking', 'speaking', 'approval'].includes(
         String(data.phase),
@@ -121,7 +129,7 @@ function parseEvent(text: string): LocalVoiceEvent {
       integer(data.generation) &&
       (data.keepTranscript === undefined ||
         typeof data.keepTranscript === 'boolean')) ||
-    (data.type === 'transcript' &&
+    (['transcript', 'native-transcript'].includes(String(data.type)) &&
       integer(data.generation) &&
       typeof data.messageId === 'string' &&
       data.messageId.length > 0 &&
@@ -132,7 +140,7 @@ function parseEvent(text: string): LocalVoiceEvent {
     (data.type === 'caption' &&
       typeof data.text === 'string' &&
       data.text.length <= 64000) ||
-    (data.type === 'notice' &&
+    (['notice', 'saved'].includes(String(data.type)) &&
       typeof data.text === 'string' &&
       data.text.length > 0 &&
       data.text.length <= 1000) ||
@@ -177,6 +185,9 @@ export function useLocalVoice(options: Options) {
   const [phase, setPhase] = useState<VoicePhase>('listening');
   const [caption, setCaption] = useState('');
   const [userCaption, setUserCaption] = useState('');
+  const [quality, setQuality] = useState<VoiceQuality>(
+    options.quality ?? 'medium',
+  );
 
   const cancelTranscript = useCallback((current: Session) => {
     const id = current.submittedId;
@@ -304,7 +315,12 @@ export function useLocalVoice(options: Options) {
             });
         },
         onPlayed: ({ generation, sequence, playedSamples }) => {
-          if (current.cancelled || generation !== current.generation) return;
+          if (
+            current.quality === 'basic' ||
+            current.cancelled ||
+            generation !== current.generation
+          )
+            return;
           void control(current, {
             action: 'played',
             generation,
@@ -314,6 +330,7 @@ export function useLocalVoice(options: Options) {
         },
         onError: (failure) => fail(current, failure),
       }),
+      quality: options.quality ?? 'medium',
       stream: new AbortController(),
       cancelled: false,
       generation: 0,
@@ -343,6 +360,7 @@ export function useLocalVoice(options: Options) {
     setPhase('listening');
     setCaption('');
     setUserCaption('');
+    setQuality(current.quality);
 
     const checkAnswer = (afterRun = false) => {
       const id = current.answerId;
@@ -380,6 +398,11 @@ export function useLocalVoice(options: Options) {
             .catch(() => {});
         if (event.phase === 'thinking' || event.phase === 'speaking')
           setNotice('');
+      } else if (event.type === 'review-folders') {
+        if (current.quality === 'high' && current.handle)
+          void window.dotVoice
+            ?.reviewFolders?.(current.handle.id)
+            .catch(() => {});
       } else if (event.type === 'caption') {
         setCaption(event.text);
       } else if (event.type === 'notice') {
@@ -399,6 +422,7 @@ export function useLocalVoice(options: Options) {
         setCaption('');
       } else if (event.type === 'audio') {
         if (
+          current.quality === 'basic' ||
           event.generation < current.generation ||
           current.outputPaused ||
           current.speakerMuted
@@ -409,7 +433,32 @@ export function useLocalVoice(options: Options) {
           sequence: event.sequence,
           pcm: decodePcm(event.pcm),
         });
+      } else if (event.type === 'saved') {
+        if (current.quality !== 'high') return;
+        setNotice(event.text);
+        latest.current.onSaved();
+        void Promise.resolve(latest.current.onCanonicalSaved?.()).catch(
+          (failure) => fail(current, failure),
+        );
+      } else if (event.type === 'native-transcript') {
+        if (
+          current.quality !== 'high' ||
+          event.generation < current.generation ||
+          current.seen.has(event.messageId)
+        )
+          return;
+        if (event.generation !== current.generation || current.seen.size >= 100)
+          throw Error('Invalid native transcript generation');
+        current.seen.add(event.messageId);
+        setNotice('');
+        setUserCaption(event.text);
+        latest.current.onSaved();
+        void Promise.resolve(latest.current.onCanonicalSaved?.()).catch(
+          (failure) => fail(current, failure),
+        );
       } else if (event.type === 'transcript') {
+        if (current.quality === 'high')
+          throw Error('High requires a server-owned conversation.');
         if (
           event.generation < current.generation ||
           current.seen.has(event.messageId)
@@ -491,11 +540,15 @@ export function useLocalVoice(options: Options) {
 
     try {
       // This call occurs in the button gesture, before warming workers or HTTP awaits.
-      await current.audio.startPlayback();
+      if (current.quality !== 'basic') await current.audio.startPlayback();
       if (current.cancelled) return;
       const result = (await post(
         '/api/local-voice/calls',
-        { threadId: options.threadId, dotId: options.dotId },
+        {
+          threadId: options.threadId,
+          dotId: options.dotId,
+          expectedQuality: current.quality,
+        },
         undefined,
         false,
         125000,
@@ -511,6 +564,13 @@ export function useLocalVoice(options: Options) {
       )
         throw new Error('Invalid local voice call response');
       current.handle = result;
+      const actualQuality = voiceQualitySchema.parse(
+        result.quality ?? 'medium',
+      );
+      if (actualQuality !== current.quality)
+        throw new Error(
+          'Voice quality changed. Refresh the settings and start again.',
+        );
       if (current.cancelled) {
         await control(current, { action: 'end' }, true);
         latest.current.onSaved();
@@ -526,7 +586,9 @@ export function useLocalVoice(options: Options) {
           });
       }, 2000);
       current.expires = setTimeout(() => void finish(current), 15 * 60_000);
-      await window.dotVoice?.begin(result.id);
+      if (current.quality === 'basic')
+        await window.dotVoice?.begin(result.id, 'basic');
+      else await window.dotVoice?.begin(result.id);
       if (current.cancelled) return;
       current.connecting = setTimeout(
         () =>
@@ -552,11 +614,19 @@ export function useLocalVoice(options: Options) {
       setStatus('active');
       setStartedAt(Date.now());
       // Approval continuations can finish outside onTranscript's original promise.
-      current.answers = setInterval(() => checkAnswer(), 500);
+      if (current.quality !== 'high')
+        current.answers = setInterval(() => checkAnswer(), 500);
     } catch (failure) {
       fail(current, failure);
     }
-  }, [options.threadId, options.dotId, fail, finish, cancelTranscript]);
+  }, [
+    options.threadId,
+    options.dotId,
+    options.quality,
+    fail,
+    finish,
+    cancelTranscript,
+  ]);
 
   const end = useCallback(() => finish(), [finish]);
   const toggleMute = useCallback(() => {
@@ -588,7 +658,8 @@ export function useLocalVoice(options: Options) {
   }, [fail]);
   const toggleSpeaker = useCallback(() => {
     const current = session.current;
-    if (!current?.handle || current.cancelled) return;
+    if (!current?.handle || current.cancelled || current.quality === 'basic')
+      return;
     current.speakerMuted = !current.speakerMuted;
     const next = current.speakerMuted;
     current.audio.setSpeakerMuted(next);
@@ -651,6 +722,7 @@ export function useLocalVoice(options: Options) {
     phase,
     caption,
     userCaption,
+    quality,
     toggleMute,
     toggleSpeaker,
     interrupt,

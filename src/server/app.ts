@@ -133,7 +133,7 @@ export function createApp({
   if (platform) app.route('/api', computerRoutes(platform.computers));
   app.route('/api', localVoiceRoutes(localVoice));
   if (platform?.workspace?.folders)
-    app.route('/api', folderRoutes(platform.workspace.folders));
+    app.route('/api', folderRoutes(platform.workspace.folders, platform));
   if (platform)
     app.route(
       '/api',

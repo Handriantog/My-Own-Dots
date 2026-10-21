@@ -21,9 +21,9 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
-it.skipIf(!existsSync(python))(
-  'uses the installed persistent provider in a real governed call, plays saved spans early, reuses it and reaps it',
-  async () => {
+it.skipIf(!existsSync(python)).each(['basic', 'medium'] as const)(
+  'uses the installed persistent provider in a governed %s call, preserves saved text, reuses it and reaps it',
+  async (quality) => {
     const root = await mkdtemp(join(tmpdir(), 'dots-provider-call-'));
     const fixture = join(root, 'codex');
     await writeFile(
@@ -44,6 +44,10 @@ it.skipIf(!existsSync(python))(
     const conversations = new MemoryStore();
     const runner = new LocalAgentRunner(conversations);
     const dot = workspace.dots()[0];
+    workspace.setVoiceSettings(dot.id, {
+      ...workspace.voiceSettings(dot.id),
+      quality,
+    });
     const threadId = 'thread';
     workspace.bindThread(threadId, dot.id, 'Streaming fixture');
     const config = {
@@ -90,6 +94,7 @@ it.skipIf(!existsSync(python))(
     const synthesis = vi
       .spyOn(LocalSpeechWorker.prototype, 'synthesize')
       .mockImplementation(async (text) => {
+        if (quality === 'basic') throw Error('Basic must not synthesize');
         const saved = conversations.snapshot.lastRun!;
         expect(
           saved.events.some(
@@ -111,7 +116,7 @@ it.skipIf(!existsSync(python))(
       manifest: join(root, 'manifest.json'),
     });
     try {
-      expect((await service.status()).inferenceRuntime).toBe(
+      expect((await service.status(dot.id)).inferenceRuntime).toBe(
         'persistent-provider',
       );
       const handle = await service.start(
@@ -120,9 +125,12 @@ it.skipIf(!existsSync(python))(
         new AbortController().signal,
       );
       const call = await service.require(handle.id, handle.token);
+      expect(handle.quality).toBe(quality);
       let completed = 0;
       let failure: unknown;
       call.listen(async (event) => {
+        if (quality === 'basic' && event.type === 'audio')
+          failure = Error('Basic emitted audio');
         if (event.type === 'audio')
           await call.played(
             event.generation,
@@ -178,7 +186,9 @@ it.skipIf(!existsSync(python))(
           },
           { timeout: 7000 },
         );
-        expect(synthesis).toHaveBeenCalledTimes(turn * 2);
+        expect(synthesis).toHaveBeenCalledTimes(
+          quality === 'basic' ? 0 : turn * 2,
+        );
       }
       const rows = (await readFile(join(root, 'requests.jsonl'), 'utf8'))
         .trim()
@@ -206,13 +216,19 @@ it.skipIf(!existsSync(python))(
       const traces = logs.mock.calls
         .filter(([name]) => name === '[voice-timing]')
         .map(([, row]) => JSON.parse(row));
-      const summaries = traces.filter((row) => row.event === 'first_playback');
+      const summaries = traces.filter(
+        (row) =>
+          row.event === (quality === 'basic' ? 'text_reply' : 'first_playback'),
+      );
       expect(summaries).toHaveLength(2);
       expect(new Set(summaries.map((row) => row.messageId)).size).toBe(2);
       for (const summary of summaries) {
         expect(summary.callId).toBe(handle.id);
+        expect(summary.quality).toBe(quality);
         expect(summary.durations.recognitionMs).toBeGreaterThanOrEqual(0);
-        expect(summary.durations.firstSynthesisMs).toBeGreaterThanOrEqual(0);
+        if (quality === 'medium')
+          expect(summary.durations.firstSynthesisMs).toBeGreaterThanOrEqual(0);
+        else expect(summary.durations).not.toHaveProperty('firstSynthesisMs');
         expect(summary.durations.providerToFirstTextMs).toBeGreaterThan(0);
         const stages = traces.filter(
           (row) => row.messageId === summary.messageId,
@@ -227,12 +243,13 @@ it.skipIf(!existsSync(python))(
           phases.firstValidatedTextMs,
         );
         expect(stages.some((row) => row.stage === 'playback_finished')).toBe(
-          true,
+          quality === 'medium',
         );
         expect(stages.some((row) => row.stage === 'interrupted')).toBe(false);
-        expect(
-          stages.find((row) => row.stage === 'provider_finished').elapsedMs,
-        ).toBeGreaterThan(summary.elapsedMs);
+        if (quality === 'medium')
+          expect(
+            stages.find((row) => row.stage === 'provider_finished').elapsedMs,
+          ).toBeGreaterThan(summary.elapsedMs);
         expect(
           stages.find((row) => row.event === 'provider_result').timings
             .reusedProvider,

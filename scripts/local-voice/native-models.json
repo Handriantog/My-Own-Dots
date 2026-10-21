@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "audio": {
+    "repository": "mlx-community/LFM2.5-Audio-1.5B-4bit",
+    "revision": "55d4de65fa10fa935561aaaa995271d8b8ff2ee0",
+    "files": [
+      {
+        "path": "config.json",
+        "bytes": 3331,
+        "sha256": "d4876b45c6c8ac5fe2956e3a6374c0a554e6ddafb674fe617e77ae07415ba635"
+      },
+      {
+        "path": "model.safetensors",
+        "bytes": 1088588169,
+        "sha256": "73616f26c107680056df4ff0ce3c1f081fe7db792e76da026014f2dc5790afbc"
+      },
+      {
+        "path": "tokenizer.json",
+        "bytes": 4732404,
+        "sha256": "fbb4071ea653afe958c24562139c2c09618f90bb6bf50d7669dfe10a0fa02e68"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "bytes": 91566,
+        "sha256": "08292c7f40aad564c5ebcb6d52640bd4c90c5467093db1c6eace1ed4de5b85b6"
+      },
+      {
+        "path": "special_tokens_map.json",
+        "bytes": 434,
+        "sha256": "742aefe2b7dec496e8caffdba03a75d0c1a9925d53bd3f3e0d388c96b591b6f4"
+      },
+      {
+        "path": "audio_detokenizer/config.json",
+        "bytes": 1150,
+        "sha256": "08dfc773eefd415a474914f6aba2708ff4550e23419c927ea06c0f9ba152b68d"
+      },
+      {
+        "path": "audio_detokenizer/model.safetensors",
+        "bytes": 314137512,
+        "sha256": "d294aef1eacaab6dc7a5dab53fc88ac3fdd45c0a1994888489caaacf87d1ac70"
+      }
+    ]
+  },
+  "router": {
+    "repository": "mlx-community/Qwen3-4B-Instruct-2507-4bit",
+    "revision": "50d427756c6b1b2fe0c0a10f67fbda1fc8e82c1b",
+    "files": [
+      {
+        "path": "config.json",
+        "bytes": 938,
+        "sha256": "574349e5a343236546fda55e4744a76e181f534182d7dc60ff1bad7e7a502849"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "bytes": 5440,
+        "sha256": "4397cc477eb6d79715ccd2000accd6b3531928f30029665832fa1b255f24d2b9"
+      },
+      {
+        "path": "tokenizer.json",
+        "bytes": 11422654,
+        "sha256": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4"
+      },
+      {
+        "path": "model.safetensors",
+        "bytes": 2263022417,
+        "sha256": "2a73c6c248601ab904e035548abd8e6abb65ea27dcb5f342fb0a8910eb44173f"
+      }
+    ]
+  }
+}

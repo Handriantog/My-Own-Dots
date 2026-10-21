@@ -3,6 +3,32 @@ import { VoiceTurnTiming } from '../src/server/local-voice/timing.js';
 
 afterEach(() => vi.unstubAllEnvs());
 
+it('identifies Basic turns and reports text completion without a playback measurement', () => {
+  const rows: string[] = [];
+  let now = 100;
+  const trace = new VoiceTurnTiming('call', 'message', 100, {
+    enabled: true,
+    quality: 'basic',
+    now: () => now,
+    write: (row) => rows.push(row),
+  });
+  trace.mark('recognition_started');
+  now = 300;
+  trace.mark('recognition_finished');
+  now = 1200;
+  trace.mark('text_reply_complete');
+  trace.mark('text_reply_complete');
+  const decoded = rows.map((row) => JSON.parse(row));
+  expect(decoded.every((row) => row.quality === 'basic')).toBe(true);
+  expect(decoded.filter((row) => row.event === 'text_reply')).toEqual([
+    expect.objectContaining({
+      elapsedMs: 1100,
+      durations: { recognitionMs: 200 },
+    }),
+  ]);
+  expect(decoded.some((row) => row.event === 'first_playback')).toBe(false);
+});
+
 it('records distinct recognition outcomes with bounded content-free diagnostics', () => {
   const rows: string[] = [];
   const trace = new VoiceTurnTiming('call', 'message', 0, {

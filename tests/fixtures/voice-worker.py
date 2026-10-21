@@ -51,6 +51,7 @@ for line in sys.stdin:
     else:
         if mode == 'selected-voice':
             assert request['voiceId'] == 'bm_george' and request['personality'] == 'calm'
+            assert set(request) == {'id', 'method', 'text', 'voiceId', 'personality'}
         if mode == 'synthesis-hang':
             time.sleep(60)
         result = {'pcm': base64.b64encode(bytes(4800)).decode()}

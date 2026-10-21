@@ -104,13 +104,18 @@ def deny_download(*args, **kwargs):
     raise WorkerError("Automatic speech-model downloads are disabled")
 
 
-def verify_runtime():
+def verify_runtime(modes=None):
     if sys.version_info[:2] != (3, 12):
         raise WorkerError("Local speech runtime requires Python 3.12")
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise WorkerError("Pinned speech runtime requires macOS arm64")
     lock = json.loads((HERE / "runtime-lock.json").read_text(encoding="utf-8"))
+    required = None if modes is None else set().union(*(lock["modes"][mode] for mode in modes))
+    if required is not None and not required.issubset({p["name"] for p in lock["packages"]}):
+        raise WorkerError("Incomplete pinned runtime dependency group")
     for package in lock["packages"]:
+        if required is not None and package["name"] not in required:
+            continue
         try:
             installed = importlib.metadata.version(package["name"])
         except importlib.metadata.PackageNotFoundError as error:
@@ -120,7 +125,7 @@ def verify_runtime():
 
 
 def load_engines(paths):
-    verify_runtime()
+    verify_runtime([mode for key, mode in (("whisper", "recognition"), ("kokoro", "synthesis")) if key in paths])
     # Each process imports only its selected engine after local assets hash.
     whisper = load_recognition(paths["whisper"]) if "whisper" in paths else None
     kokoro = load_synthesis(paths) if "kokoro" in paths else None
@@ -165,7 +170,7 @@ def load_synthesis(paths):
 
 
 def load_vad(path):
-    verify_runtime()
+    verify_runtime(["vad"])
     import numpy as np
     import onnxruntime as ort
 

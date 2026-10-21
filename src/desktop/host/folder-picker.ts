@@ -24,6 +24,7 @@ export class CompanionFolderPicker {
     private readonly getWindow: () => BrowserWindow | null,
     private readonly getAddress: () => string,
     private readonly channel = 'dot:folders',
+    private readonly nativePage: (url: string) => boolean = isWorkspacePage,
   ) {
     ipcMain.on(`${this.channel}:context`, this.context);
     ipcMain.handle(`${this.channel}:choose`, (event, ...args: unknown[]) =>
@@ -35,7 +36,7 @@ export class CompanionFolderPicker {
     try {
       const url = new URL(value);
       const configured = new URL(this.getAddress());
-      if (configured.protocol === 'dots:') return isWorkspacePage(value);
+      if (configured.protocol === 'dots:') return this.nativePage(value);
       return (
         /^https?:$/.test(configured.protocol) &&
         ['localhost', '127.0.0.1', '[::1]'].includes(configured.hostname) &&
@@ -65,11 +66,11 @@ export class CompanionFolderPicker {
     );
   }
 
-  private available(window: BrowserWindow): boolean {
+  private available(window: BrowserWindow, requireFocus = true): boolean {
     return (
       !window.isDestroyed() &&
       window.isVisible() &&
-      window.isFocused() &&
+      (!requireFocus || window.isFocused()) &&
       !window.isMinimized()
     );
   }
@@ -82,7 +83,7 @@ export class CompanionFolderPicker {
       throw new Error('Invalid folder chooser request');
     const window = this.getWindow()!;
     if (!this.available(window))
-      throw new Error('Open and focus the chat window to choose a folder');
+      throw new Error('Open and focus the approval window to choose a folder');
     if (this.pending) throw new Error('A folder chooser is already open');
 
     const frame = window.webContents.mainFrame;
@@ -102,7 +103,9 @@ export class CompanionFolderPicker {
         revision !== this.revision ||
         this.getWindow() !== window ||
         !this.trusted(event) ||
-        !this.available(window) ||
+        // A native sheet can settle before macOS restores the parent's focus.
+        // Focus is required to open it; the same visible frame still owns its result.
+        !this.available(window, false) ||
         window.webContents.mainFrame !== frame ||
         frame.url !== url ||
         this.getAddress() !== address ||

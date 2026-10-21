@@ -88,6 +88,25 @@ afterEach(() => {
 });
 
 describe('native folder selection boundary', () => {
+  it('allows the approval surface only for its separately scoped picker', async () => {
+    address = 'dots://workspace/';
+    window.webContents.mainFrame.url = 'dots://workspace/?surface=approval';
+    expect(context()).toBe(false);
+    await expect(choose()).rejects.toThrow();
+    picker.destroy();
+    picker = new CompanionFolderPicker(
+      () => window as unknown as BrowserWindow,
+      () => address,
+      'dot:folders',
+      (url) => url === 'dots://workspace/?surface=approval',
+    );
+    picker.attach(window as unknown as BrowserWindow);
+    expect(context()).toBe(true);
+    await expect(choose()).resolves.toEqual({ path: '/chosen/project' });
+    window.webContents.mainFrame.url = 'dots://workspace/?surface=workspace';
+    expect(context()).toBe(false);
+    await expect(choose()).rejects.toThrow();
+  });
   it('returns only the selected path from a fixed parented directory dialog', async () => {
     await expect(choose()).resolves.toEqual({ path: '/chosen/project' });
     expect(host.showOpenDialog).toHaveBeenCalledExactlyOnceWith(window, {
@@ -191,6 +210,13 @@ describe('native folder selection boundary', () => {
     await expect(choose()).resolves.toEqual({ path: '/chosen/project' });
   });
 
+  it('retains the owner selection when the native sheet has not restored parent focus yet', async () => {
+    const pending = pendingSelection();
+    window.focused = false;
+    pending.finish();
+    await expect(pending.pending).resolves.toEqual({ path: '/chosen/project' });
+  });
+
   it.each(['hide', 'minimize', 'close', 'closed'])(
     'discards selection when %s occurs while native dialog is pending',
     async (event) => {
@@ -244,7 +270,6 @@ describe('native folder selection boundary', () => {
     'frame',
     'address',
     'window',
-    'focus',
     'visible',
     'minimized',
     'destroyed',
@@ -255,7 +280,6 @@ describe('native folder selection boundary', () => {
       window.webContents.mainFrame = { url: workspaceUrl };
     if (changed === 'address') address = 'http://localhost:4310/';
     if (changed === 'window') window = windowDouble();
-    if (changed === 'focus') window.focused = false;
     if (changed === 'visible') window.visible = false;
     if (changed === 'minimized') window.minimized = true;
     if (changed === 'destroyed') window.destroyed = true;

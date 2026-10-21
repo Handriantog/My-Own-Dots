@@ -106,20 +106,28 @@ try {
     );
   for (const rows of turns.values()) {
     const first = rows[0];
-    const summary = rows.find((row) => row.event === 'first_playback');
+    const quality = ['basic', 'medium', 'high'].includes(first.quality)
+      ? first.quality
+      : 'medium';
+    const summary = rows.find(
+      (row) =>
+        row.event === (quality === 'basic' ? 'text_reply' : 'first_playback'),
+    );
     console.log(
-      `\n${safe(first.at)}  call ${safe(first.callId)}  turn ${safe(first.messageId)}`,
+      `\n${safe(first.at)}  call ${safe(first.callId)}  turn ${safe(first.messageId)}  mode ${quality}`,
     );
     if (summary) {
       console.log(
-        `Observed wait to first playback acknowledgement: ${seconds(summary.elapsedMs)}`,
+        `Observed wait to ${quality === 'basic' ? 'text reply completion' : 'first playback acknowledgement'}: ${seconds(summary.elapsedMs)}`,
       );
       for (const [key, label] of Object.entries(labels))
         if (Object.hasOwn(summary.durations ?? {}, key))
           console.log(`  ${label}: ${seconds(summary.durations[key])}`);
     } else
       console.log(
-        'No playback acknowledgement recorded (pending, muted, interrupted, approval or failed).',
+        quality === 'basic'
+          ? 'No text completion recorded (pending, interrupted, approval or failed).'
+          : 'No playback acknowledgement recorded (pending, muted, interrupted, approval or failed).',
       );
     for (const row of rows.filter(
       (row) => row.event === 'recognition_result',

@@ -37,6 +37,7 @@ import { buildWorld } from './core/world.js';
 import { HelperSupervisor } from './host/helper.js';
 import { DesktopDiagnostics } from './host/diagnostics.js';
 import { CompanionChatWindow } from './host/chat-window.js';
+import { FolderApprovalWindow } from './host/folder-approval-window.js';
 import { CompanionCloudMenu } from './host/cloud-menu.js';
 import { TalkShortcut } from './host/talk-shortcut.js';
 import { shortcutLabel } from './shared/talk-shortcut.js';
@@ -162,6 +163,7 @@ async function start(): Promise<void> {
     app.getPath('userData'),
     backend,
     () => openSettings(),
+    () => folderApprovals.review(false),
   );
   protocol.handle(
     'dots',
@@ -222,6 +224,7 @@ async function start(): Promise<void> {
         if (!quitting) rebuildMenu();
       },
       error: reportVoiceError,
+      reviewFolders: () => folderApprovals.review(false),
     },
     workspace,
   );
@@ -306,11 +309,20 @@ async function start(): Promise<void> {
       rebuildMenu();
     }
   }
+  const folderApprovals = new FolderApprovalWindow(
+    __dirname,
+    () => workspace.activeConnection,
+    () => panelBounds(320, 250),
+    () => {
+      updateOptions();
+      if (!quitting) rebuildMenu();
+    },
+  );
   function updateOptions(): void {
     animatingVisibility = appearance.sample(performance.now()).active;
     simulation.setOptions({
-      paused: preferences.paused || menuOpen,
-      frozen: menuOpen || animatingVisibility,
+      paused: preferences.paused || menuOpen || folderApprovals.isOpen,
+      frozen: menuOpen || folderApprovals.isOpen || animatingVisibility,
       voice: voiceState,
       reducedMotion:
         preferences.reducedMotion ||
@@ -481,6 +493,7 @@ async function start(): Promise<void> {
       helper.current(now)?.sceneValid !== false &&
       !assetError;
     const next = !!available && !userHidden;
+    folderApprovals.sync(next);
     if (userHidden || osSuspended) chat.hide();
     if ((!rendererReady || assetError) && chat.windowlessVoice)
       chat.stopVoice('companion-unavailable');
@@ -527,7 +540,9 @@ async function start(): Promise<void> {
           listening: 'Listening',
           thinking: 'Thinking…',
           speaking: 'Speaking',
-          approval: 'Needs your approval — open Chat',
+          approval: folderApprovals.count
+            ? 'Needs your folder approval'
+            : 'Needs your approval — open Chat',
         }[voiceState]
       : '';
     tray.setToolTip(
@@ -553,6 +568,16 @@ async function start(): Promise<void> {
         },
       },
       { label: 'Chat with Dot', click: openChat },
+      {
+        label: `Review folder requests (${folderApprovals.count})`,
+        enabled: folderApprovals.count > 0,
+        click: () => {
+          userHidden = false;
+          companionMenu.close();
+          syncVisibility();
+          folderApprovals.review();
+        },
+      },
       { label: 'Talk with Dot', click: openTalk },
       {
         label: voiceState ? 'End talk' : 'Talk without a window',
@@ -939,6 +964,7 @@ async function start(): Promise<void> {
     if (message.includes('Graphics context lost'))
       recoverRenderer('graphics-context-lost');
   });
+  folderApprovals.start();
   helper.start();
   try {
     talkShortcut.set(preferences.talkShortcut);
@@ -1124,6 +1150,7 @@ async function start(): Promise<void> {
     if (quitting) return;
     event.preventDefault();
     quitting = true;
+    folderApprovals.destroy();
     const workspaceShutdown = workspace.destroy();
     talkShortcut.destroy();
     chat.destroy();

@@ -160,6 +160,7 @@ function fixture(
     warm(signal: AbortSignal): Promise<void>;
     close(): Promise<void>;
   },
+  quality: 'basic' | 'medium' = 'medium',
 ) {
   const events: LocalVoiceEvent[] = [];
   let probability = 0;
@@ -197,11 +198,11 @@ function fixture(
   const createWorkers = vi.fn((): VoiceWorkers => ({
     recognition,
     vad,
-    synthesis,
+    ...(quality === 'medium' ? { synthesis } : {}),
     ...(inference ? { inference } : {}),
   }));
   const call = new LiveVoiceCall(
-    { id: 'call', token: 'token', threadId: 'thread', dotId: 'dot' },
+    { id: 'call', token: 'token', threadId: 'thread', dotId: 'dot', quality },
     port,
     createWorkers,
   );
@@ -246,6 +247,93 @@ async function utterance(f: ReturnType<typeof fixture>) {
   );
   return event;
 }
+it.each(['buffered', 'streamed'] as const)(
+  'completes repeated Basic %s turns with no synthesis worker or audio',
+  async (path) => {
+    const f = fixture(true, undefined, 'basic');
+    try {
+      await f.call.start();
+      for (let i = 0; i < 2; i++) {
+        const event = await utterance(f);
+        await f.call.speaker(false);
+        if (path === 'streamed') {
+          await f.call.commitText(event.messageId, 'answer', 0, 'Hello there.');
+          f.call.finishText(event.messageId);
+        } else {
+          await f.call.answer(event.messageId);
+        }
+        expect(f.events.findLast((e) => e.type === 'phase')).toEqual({
+          type: 'phase',
+          phase: 'listening',
+        });
+        expect(f.events.findLast((e) => e.type === 'caption')).toEqual({
+          type: 'caption',
+          text: 'Hello there.',
+        });
+        await f.call.interrupt();
+      }
+      expect(
+        f.events.some(
+          (e) =>
+            e.type === 'audio' ||
+            (e.type === 'phase' && e.phase === 'speaking'),
+        ),
+      ).toBe(false);
+      expect(f.synthesis.warm).not.toHaveBeenCalled();
+      expect(f.synthesis.synthesize).not.toHaveBeenCalled();
+      expect(f.synthesis.close).not.toHaveBeenCalled();
+    } finally {
+      await f.call.end();
+    }
+    expect(f.port.receipt).toHaveBeenLastCalledWith(
+      'ended',
+      expect.stringContaining('Hello there.'),
+      undefined,
+    );
+    expect(f.port.delivery).toHaveBeenLastCalledWith([]);
+  },
+);
+it('keeps Basic approvals and recognition recovery usable without synthesis', async () => {
+  const f = fixture(true, undefined, 'basic');
+  try {
+    await f.call.start();
+    f.recognition.transcribe.mockRejectedValueOnce(
+      new Error('recognizer exited'),
+    );
+    const event = await utterance(f);
+    f.port.snapshot.mockResolvedValue(
+      snapshot([
+        { ...user, id: event.messageId },
+        {
+          ...answer,
+          toolCalls: [
+            {
+              id: 'permission',
+              type: 'function',
+              function: { name: 'review', arguments: '{}' },
+            },
+          ],
+        },
+      ]),
+    );
+    await f.call.answer(event.messageId);
+    expect(f.events.findLast((e) => e.type === 'phase')).toEqual({
+      type: 'phase',
+      phase: 'approval',
+    });
+    f.port.snapshot.mockResolvedValue(
+      snapshot([{ ...user, id: event.messageId }, answer]),
+    );
+    await f.call.answer(event.messageId);
+    expect(f.events.findLast((e) => e.type === 'phase')).toEqual({
+      type: 'phase',
+      phase: 'listening',
+    });
+    expect(f.synthesis.warm).not.toHaveBeenCalled();
+  } finally {
+    await f.call.end();
+  }
+});
 it('records recognition failure and recovery without a fabricated playback time or private error', async () => {
   vi.stubEnv('LOCAL_VOICE_TIMING_LOG', '1');
   const logs = vi.spyOn(console, 'info').mockImplementation(() => {});

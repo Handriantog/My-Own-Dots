@@ -98,15 +98,42 @@ export function App({
   const companionColor = useCompanionColor(desktop);
   const [state, setState] = useState<State>();
   const [workspace, setWorkspace] = useState<WorkspaceState>();
-  const [localVoice, setLocalVoice] = useState<LocalVoiceStatus>({
+  const [selectedDot, setSelectedDot] = useState(selection.dotId);
+  const dot =
+    workspace?.dots.find((item) => item.id === selectedDot) ??
+    workspace?.dots[0];
+  const [voiceRevision, setVoiceRevision] = useState(0);
+  const refreshVoiceSettings = useCallback(
+    () => setVoiceRevision((value) => value + 1),
+    [],
+  );
+  const [activeVoiceDot, setActiveVoiceDot] = useState<string>();
+  const voiceActive = useCallback((dotId: string, active: boolean) => {
+    setActiveVoiceDot((previous) =>
+      active ? dotId : previous === dotId ? undefined : previous,
+    );
+  }, []);
+  const voiceScope = `${dot?.id ?? ''}:${voiceRevision}`;
+  const [resolvedVoiceScope, setResolvedVoiceScope] = useState('');
+  const [voiceStatus, setLocalVoice] = useState<LocalVoiceStatus>({
     enabled: false,
     ready: false,
     reason: 'Checking local voice setup…',
   });
   const [voiceIntent, setVoiceIntent] = useState(0);
   const nextVoiceIntent = useRef(0);
-  const [localVoiceChecked, setLocalVoiceChecked] = useState(false);
-  const [localVoiceResolved, setLocalVoiceResolved] = useState(false);
+  const [voiceChecked, setLocalVoiceChecked] = useState(false);
+  const [voiceResolved, setLocalVoiceResolved] = useState(false);
+  const currentVoiceScope = voiceScope === resolvedVoiceScope;
+  const localVoiceChecked = currentVoiceScope && voiceChecked;
+  const localVoiceResolved = currentVoiceScope && voiceResolved;
+  const localVoice = currentVoiceScope
+    ? voiceStatus
+    : ({
+        enabled: voiceStatus.enabled,
+        ready: false,
+        reason: 'Checking local voice setup…',
+      } as LocalVoiceStatus);
   const voiceCreation = useRef(0);
   const consumeVoiceIntent = useCallback(() => {
     setVoiceIntent(0);
@@ -137,39 +164,49 @@ export function App({
     };
   }, [consumeVoiceIntent]);
   useEffect(() => {
+    if (!dot?.id) return;
     let active = true;
-    const check = () =>
-      void api<LocalVoiceStatus>(
-        '/local-voice/status',
-        'GET',
-        undefined,
-        AbortSignal.timeout(10000),
-      )
-        .then((status) => {
-          if (active) {
-            setLocalVoice(status);
-            setLocalVoiceChecked(true);
-            setLocalVoiceResolved(true);
-          }
-        })
-        .catch(() => {
-          if (active) {
-            setLocalVoiceChecked(false);
-            setLocalVoiceResolved(true);
-            setLocalVoice((previous) => ({
-              ...previous,
-              ready: false,
-              reason: 'Local voice setup is unavailable.',
-            }));
-          }
-        });
-    check();
-    const timer = setInterval(check, 5000);
+    let checking = false;
+    const controller = new AbortController();
+    const check = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        const status = await api<LocalVoiceStatus>(
+          `/local-voice/status?dotId=${encodeURIComponent(dot.id)}`,
+          'GET',
+          undefined,
+          AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]),
+        );
+        if (active) {
+          setLocalVoice(status);
+          setLocalVoiceChecked(true);
+          setLocalVoiceResolved(true);
+          setResolvedVoiceScope(voiceScope);
+        }
+      } catch {
+        if (active) {
+          setLocalVoiceChecked(false);
+          setLocalVoiceResolved(true);
+          setResolvedVoiceScope(voiceScope);
+          setLocalVoice((previous) => ({
+            ...previous,
+            ready: false,
+            reason: 'Local voice setup is unavailable.',
+          }));
+        }
+      } finally {
+        checking = false;
+      }
+    };
+    void check();
+    const timer = setInterval(() => void check(), 5000);
     return () => {
       active = false;
+      controller.abort();
       clearInterval(timer);
     };
-  }, [voiceIntent]);
+  }, [dot?.id, voiceScope, voiceIntent]);
   useEffect(() => {
     // A failed status poll blocks new starts, but the active call has its own
     // heartbeat/SSE failure handling. Only confirmed unavailability revokes it.
@@ -189,7 +226,6 @@ export function App({
     },
     [],
   );
-  const [selectedDot, setSelectedDot] = useState(selection.dotId);
   const [selectedThread, setSelectedThread] = useState<string | undefined>(
     selection.threadId,
   );
@@ -300,7 +336,10 @@ export function App({
     const offCommand = bridge?.onCommand((command) =>
       handlers.current.command(command),
     );
-    const offStatus = bridge?.onStatus(setBackendStatus);
+    const offStatus = bridge?.onStatus((status) => {
+      setBackendStatus(status);
+      if (status.phase !== 'ready') refreshVoiceSettings();
+    });
     void bridge
       ?.status()
       .then(setBackendStatus)
@@ -473,9 +512,6 @@ export function App({
       return false;
     }
   };
-  const dot =
-    workspace?.dots.find((item) => item.id === selectedDot) ??
-    workspace?.dots[0];
   const thread = workspace?.conversations.find(
     (item) => item.id === selectedThread && item.dotId === dot?.id,
   );
@@ -966,8 +1002,13 @@ export function App({
                     !desktop &&
                     localVoiceChecked &&
                     !localVoice.enabled &&
+                    (localVoice.selectedQuality ?? 'medium') === 'medium' &&
                     workspace.setup.voice
                   }
+                  localVoiceQuality={localVoice.selectedQuality ?? 'medium'}
+                  localVoiceStatus={localVoice}
+                  onVoiceSettingsSaved={refreshVoiceSettings}
+                  onVoiceActive={voiceActive}
                   localVoiceReady={localVoice.ready}
                   localVoiceEnabled={localVoice.enabled}
                   localVoiceReason={localVoice.reason}
@@ -987,14 +1028,18 @@ export function App({
               ) : (
                 <div className="new-conversation">
                   <FolderAccessSettings dotId={dot.id} />
-                  {(localVoice.enabled || localVoice.ready) && (
+                  {
                     <VoiceSettings
                       dotId={dot.id}
                       callActive={!!voiceIntent}
-                      previewReady={localVoice.ready}
+                      previewReady={
+                        localVoice.modes?.medium.ready ?? localVoice.ready
+                      }
+                      status={localVoice}
+                      onSaved={refreshVoiceSettings}
                       unavailableReason={localVoice.reason}
                     />
-                  )}
+                  }
                   <div className="empty-chat-persona">
                     <Mascot
                       identity={dot.id}
@@ -1336,6 +1381,15 @@ export function App({
       {dialog && (
         <WorkspaceDialog
           dialog={dialog}
+          voiceStatus={
+            dialog.type === 'dot' && dialog.dot?.id === dot?.id
+              ? localVoice
+              : undefined
+          }
+          voiceActive={
+            dialog.type === 'dot' && dialog.dot?.id === activeVoiceDot
+          }
+          onVoiceSettingsSaved={refreshVoiceSettings}
           state={state}
           workspace={workspace}
           onClose={() => setDialog(undefined)}

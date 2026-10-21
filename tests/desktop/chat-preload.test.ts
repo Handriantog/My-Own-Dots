@@ -106,6 +106,7 @@ it('delivers Talk received before React subscribes once and unsubscribes control
     'onTalk',
     'phase',
     'reportError',
+    'reviewFolders',
     'setReady',
   ]);
   host.ipc!.emit('dot:voice:talk');
@@ -123,9 +124,11 @@ it('delivers Talk received before React subscribes once and unsubscribes control
   host.ipc!.emit('dot:voice:stop', {}, 'sleep');
   expect(stop).toHaveBeenCalledOnce();
   await bridge.begin('call-12345678');
+  await bridge.reviewFolders('call-12345678');
   await bridge.end('call-12345678');
   expect(host.invoke.mock.calls).toEqual([
     ['dot:voice:begin', 'call-12345678'],
+    ['dot:voice:review-folders', 'call-12345678'],
     ['dot:voice:end', 'call-12345678'],
   ]);
 });

@@ -102,6 +102,28 @@ async function fixture() {
 }
 it('captures all core records and restores them without a PostgreSQL server', async () => {
   const f = await fixture();
+  const call = await f.workspace.createCall(f.thread.id);
+  const handoff = {
+    id: 'voice-job',
+    dotId: f.dot.id,
+    callId: call.id,
+    parentThreadId: f.thread.id,
+    workerThreadId: 'voice-task',
+    utteranceId: 'utterance',
+    sourceMessageId: 'user',
+    sourceText: 'I prefer jasmine tea.',
+    request: 'Find jasmine tea sources.',
+  };
+  await f.storage.repositories.voiceDelegations.enqueue(handoff);
+  const jobLease = (await f.storage.repositories.voiceDelegations.claim(
+    'voice-job',
+    'task-run',
+    1000,
+  ))!;
+  await f.storage.repositories.voiceDelegations.settle(jobLease, {
+    status: 'completed',
+    result: 'Saved task result',
+  });
   const directory = join(f.root, 'snapshot');
   const manifest = await f.source.capture(
     directory,
@@ -111,7 +133,7 @@ it('captures all core records and restores them without a PostgreSQL server', as
     version: 2,
     minimumReader: 2,
     workspaceId: f.workspaceId,
-    storage: { engine: 'sqlite', schema: 2 },
+    storage: { engine: 'sqlite', schema: 3 },
   });
   expect(manifest.entries.map((entry) => entry.path).sort()).toEqual([
     'core/workspace.sqlite',
@@ -139,11 +161,12 @@ it('captures all core records and restores them without a PostgreSQL server', as
     signal: new AbortController().signal,
   });
   expect(preview.counts).toMatchObject({
-    conversation_threads: 1,
+    conversation_threads: 2,
     conversation_runs: 1,
     memory_episode_chunks: 1,
     memory_items: 1,
     tasks: 1,
+    voice_delegations: 1,
   });
   await service.activateRestore(
     preview.operationId,
@@ -155,7 +178,7 @@ it('captures all core records and restores them without a PostgreSQL server', as
   expect(identity).toMatchObject({
     storage: 'sqlite',
     ownerId: f.ownerId,
-    schema: 2,
+    schema: 3,
   });
   const env = parseEnv(await readFile(join(destination, '.env'), 'utf8'));
   expect(env.LOCAL_DATABASE_URL).toBeUndefined();
@@ -164,6 +187,16 @@ it('captures all core records and restores them without a PostgreSQL server', as
     ownerId: identity.ownerId,
   });
   cleanups.push(() => restored.close());
+  expect(
+    await restored.repositories.voiceDelegations.get('voice-job'),
+  ).toMatchObject({
+    status: 'completed',
+    result: 'Saved task result',
+    receiptMessageId: null,
+  });
+  expect(
+    (await restored.repositories.voiceDelegations.enqueue(handoff)).kind,
+  ).toBe('existing');
   expect(
     (await new SQLiteConversations(restored).getSnapshot(f.thread.id))
       ?.messages,

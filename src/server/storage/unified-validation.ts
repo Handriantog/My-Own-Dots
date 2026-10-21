@@ -10,8 +10,16 @@ export async function validateUnifiedGraph(
   db: DatabaseSync,
   ownerId: string,
   signal: AbortSignal,
+  schema = 3,
 ) {
   const checks = [
+    ...(schema >= 3
+      ? [
+          `SELECT 1 FROM voice_delegations j JOIN conversation_threads p ON p.owner_id=j.owner_id AND p.id=j.parent_thread_id JOIN conversation_threads w ON w.owner_id=j.owner_id AND w.id=j.worker_thread_id JOIN calls c ON c.id=j.call_id WHERE p.agent_id<>j.dot_id OR w.agent_id<>j.dot_id OR c.threadId<>j.parent_thread_id LIMIT 1`,
+          `SELECT 1 FROM voice_delegations j JOIN conversation_messages m ON m.owner_id=j.owner_id AND m.thread_id=j.parent_thread_id AND m.message_id=j.source_message_id JOIN conversation_message_versions v ON v.owner_id=m.owner_id AND v.thread_id=m.thread_id AND v.message_id=m.message_id AND v.hash=m.hash WHERE json_extract(v.value,'$.role') IS NOT 'user' OR json_extract(v.value,'$.content') IS NOT j.source_text LIMIT 1`,
+          `SELECT 1 FROM voice_delegations j JOIN conversation_messages m ON m.owner_id=j.owner_id AND m.thread_id=j.parent_thread_id AND m.message_id=j.receipt_message_id JOIN conversation_message_versions v ON v.owner_id=m.owner_id AND v.thread_id=m.thread_id AND v.message_id=m.message_id AND v.hash=m.hash WHERE json_extract(v.value,'$.role') IS NOT 'assistant' LIMIT 1`,
+        ]
+      : []),
     `SELECT 1 FROM conversation_threads t LEFT JOIN dots d ON d.id=t.agent_id WHERE d.id IS NULL LIMIT 1`,
     `SELECT 1 FROM conversation_threads t WHERE t.last_run_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM conversation_runs r WHERE r.owner_id=t.owner_id AND r.thread_id=t.id AND r.run_id=t.last_run_id) LIMIT 1`,
     `SELECT 1 FROM thread_bindings b LEFT JOIN conversation_threads t ON t.owner_id=b.ownerId AND t.id=b.id WHERE t.id IS NULL OR t.agent_id<>b.dotId LIMIT 1`,

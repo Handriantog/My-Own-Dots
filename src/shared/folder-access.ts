@@ -37,6 +37,14 @@ export type FolderRequestDetail = {
   grant?: FolderGrant;
   decision?: FolderDecision;
 };
+/** A durable approval awaiting its client tool result, including saved decisions. */
+export type FolderApprovalPending = {
+  requestId: string;
+  threadId: string;
+  dotId: string;
+  dotName: string;
+  toolCallId: string;
+};
 export const folderRequestSchema = z
   .object({
     reason: z.string().trim().min(1).max(1000),
@@ -56,6 +64,6 @@ export const folderApprovalSchema = z.object({ requestId: z.uuid() }).strict();
 export const folderApprovalTool = {
   name: 'review_local_folder_access',
   description:
-    'Ask the owner to choose a local folder and approve read or read/write access for this Dot. Use the request ID returned by request_local_folder_access. Only the owner can grant access. Call once and wait for the approval result before using the folder.',
+    'Ask the owner to review the suggested local folder (or choose one) and approve read or read/write access for this Dot. Use the request ID returned by request_local_folder_access. Only the owner can grant access. Call once and wait for the approval result before using the folder.',
   parameters: z.toJSONSchema(folderApprovalSchema),
 };

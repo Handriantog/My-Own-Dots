@@ -2,6 +2,7 @@ import { expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { WorkspaceStore } from '../src/server/workspace';
 import {
   DEFAULT_VOICE_SETTINGS,
@@ -31,6 +32,7 @@ it('persists voice and personality per Dot across restarts without altering role
     expect(workspace.voiceSettings(dot.id)).toEqual({
       voiceId: 'bm_george',
       personality: 'serious',
+      quality: 'medium',
     });
     expect(workspace.voiceSettings(other.id)).toEqual(DEFAULT_VOICE_SETTINGS);
     expect(workspace.dot(dot.id)?.instructions).toBe(dot.instructions);
@@ -46,6 +48,32 @@ it('persists voice and personality per Dot across restarts without altering role
   } finally {
     workspace.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+it('normalizes legacy records and preserves an explicit quality on older updates', () => {
+  const database = new DatabaseSync(':memory:');
+  const workspace = new WorkspaceStore(':memory:', 'owner', database);
+  try {
+    const dot = workspace.dots()[0];
+    const legacy = { voiceId: 'af_heart', personality: 'calm' };
+    database
+      .prepare('INSERT INTO dot_voice_settings VALUES (?,?)')
+      .run(dot.id, JSON.stringify(legacy));
+    expect(workspace.voiceSettings(dot.id)).toEqual({
+      ...legacy,
+      quality: 'medium',
+    });
+    workspace.setVoiceSettings(dot.id, { ...legacy, quality: 'high' });
+    expect(
+      workspace.setVoiceSettings(dot.id, { ...legacy, personality: 'serious' }),
+    ).toEqual({ ...legacy, personality: 'serious', quality: 'high' });
+    expect(() =>
+      workspace.setVoiceSettings(dot.id, { ...legacy, quality: 'ultra' }),
+    ).toThrow();
+  } finally {
+    workspace.close();
+    database.close();
   }
 });
 

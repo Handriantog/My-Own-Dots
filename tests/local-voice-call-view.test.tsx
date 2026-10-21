@@ -23,6 +23,19 @@ const voice: VoiceControls = {
   toggleSpeaker: () => {},
   interrupt: () => {},
 };
+it('keeps Basic text replies accessible and offers no speaker control', () => {
+  const html = renderToStaticMarkup(
+    createElement(CallView, {
+      dot,
+      voice: { ...voice, quality: 'basic', phase: 'listening' },
+    }),
+  );
+  expect(html).toContain('call-view minimized');
+  expect(html).toContain('Basic');
+  expect(html).toContain('Text replies');
+  expect(html).not.toContain('Mute call audio');
+  expect(html).toContain('Mute microphone');
+});
 it('exposes the existing chat for approval while retaining visible call controls and chosen companion', () => {
   const html = renderToStaticMarkup(
     createElement(CallView, { dot, voice, companionColor: '#abcdef' }),

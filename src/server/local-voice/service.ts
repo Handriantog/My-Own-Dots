@@ -1,20 +1,27 @@
-import { timingSafeEqual, randomBytes } from 'node:crypto';
+import { timingSafeEqual, randomBytes, createHash } from 'node:crypto';
 import { access, lstat, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import type { Platform } from '../platform.js';
-import type { LocalVoiceStatus } from '../../shared/local-voice.js';
+import type {
+  LocalVoiceStatus,
+  VoiceModeStatus,
+} from '../../shared/local-voice.js';
 import { LiveVoiceCall, waitForVoiceOperation } from './live.js';
 import { LocalSpeechWorker } from './worker.js';
 import { clearVoiceTurn, setVoiceTurn } from './context.js';
 import {
   personalityFor,
   voiceSettingsSchema,
+  voiceSettingsUpdateSchema,
+  type VoiceQuality,
   type VoiceSettings,
 } from '../../shared/voice-settings.js';
 import { encodeFixtureWav } from './audio.js';
 import { VoiceInferenceSession, VoiceProviderSession } from './inference.js';
+import { NativeVoiceWorker } from './native-worker.js';
+import { voiceJobReceipt } from './native-runtime.js';
 export interface LocalVoiceConfig {
   enabled: boolean;
   inferenceSession?: boolean;
@@ -23,14 +30,32 @@ export interface LocalVoiceConfig {
   assets: string;
   worker: string;
   manifest: string;
+  nativeRoot?: string;
+  nativePython?: string;
+  nativeLauncher?: string;
+  nativeManifest?: string;
 }
 export function localVoiceConfig(env: NodeJS.ProcessEnv): LocalVoiceConfig {
   const root = join(
     homedir(),
     'Library/Application Support/My Own Dots/local-voice',
   );
+  const nativeRoot =
+    env.LOCAL_VOICE_NATIVE_ROOT ||
+    join(homedir(), 'Library/Application Support/My Own Dots/native-voice');
   return {
     enabled: env.LOCAL_VOICE_ENABLED === '1',
+    nativeRoot,
+    nativePython:
+      env.LOCAL_VOICE_NATIVE_PYTHON || join(nativeRoot, 'venv/bin/python'),
+    nativeLauncher: resolve(
+      env.DOTS_RUNTIME_ROOT || '.',
+      'scripts/local-voice/native_launcher.py',
+    ),
+    nativeManifest: resolve(
+      env.DOTS_RUNTIME_ROOT || '.',
+      'scripts/local-voice/native-models.json',
+    ),
     inferenceSession: env.LOCAL_VOICE_INTEGRATOR_SESSION === '1',
     providerSession: env.LOCAL_VOICE_PROVIDER_SESSION === '1',
     python: env.LOCAL_VOICE_PYTHON || join(root, 'venv/bin/python'),
@@ -48,6 +73,7 @@ export function localVoiceConfig(env: NodeJS.ProcessEnv): LocalVoiceConfig {
 export class LocalVoiceService {
   private call?: LiveVoiceCall;
   private starting = false;
+  private savingSettings = false;
   private closed = false;
   private previewing?: { controller: AbortController; done: Promise<Buffer> };
   private readonly shutdown = new AbortController();
@@ -59,15 +85,27 @@ export class LocalVoiceService {
     return await this.platform.workspace.voiceSettings(dotId);
   }
   async saveSettings(dotId: string, input: unknown) {
+    if (this.savingSettings)
+      throw Error('Voice settings are being saved. Please retry.');
     if (
       this.starting ||
       (this.call && !this.call.ended && this.call.scope.dotId === dotId)
     )
       throw Error('End the call before changing its voice.');
-    return await this.platform.workspace.setVoiceSettings(
-      dotId,
-      voiceSettingsSchema.parse(input),
-    );
+    const update = voiceSettingsUpdateSchema.parse(input);
+    this.savingSettings = true;
+    try {
+      // Retain this guard through worker persistence so preview/start cannot
+      // observe the previous mode while the new preference is being saved.
+      if (this.previewing) {
+        this.previewing.controller.abort(new Error('Voice preview stopped.'));
+        await this.previewing.done.catch(() => {});
+      }
+      this.shutdown.signal.throwIfAborted();
+      return await this.platform.workspace.setVoiceSettings(dotId, update);
+    } finally {
+      this.savingSettings = false;
+    }
   }
   private worker(mode: string, settings?: VoiceSettings) {
     return new LocalSpeechWorker({
@@ -87,9 +125,11 @@ export class LocalVoiceService {
     input: unknown,
     requestSignal: AbortSignal,
   ): Promise<Buffer> {
+    if (this.savingSettings)
+      throw Error('Voice settings are being saved. Please retry.');
     if (this.starting || this.previewing || (this.call && !this.call.ended))
       throw Error('End the current audio before previewing a voice.');
-    const settings = voiceSettingsSchema.parse(input);
+    const update = voiceSettingsUpdateSchema.parse(input);
     const controller = new AbortController();
     const signal = AbortSignal.any([
       requestSignal,
@@ -107,9 +147,17 @@ export class LocalVoiceService {
       let release: (() => void) | undefined;
       try {
         signal.throwIfAborted();
-        await this.settings(dotId); // Verify the Dot belongs to this workspace.
+        const saved = await this.settings(dotId);
+        const settings = voiceSettingsSchema.parse({
+          ...update,
+          quality: update.quality ?? saved.quality,
+        });
+        if (saved.quality !== 'medium' || settings.quality !== 'medium')
+          throw Error(
+            'Voice preview is available only in Medium. Save Medium quality to preview a voice.',
+          );
         if (
-          !(await this.status()).ready ||
+          !(await this.status(dotId)).ready ||
           (await this.platform.store.settings()).paused
         )
           throw Error('Local speech is unavailable.');
@@ -147,11 +195,40 @@ export class LocalVoiceService {
     });
     return work.done;
   }
-  async status(): Promise<LocalVoiceStatus> {
-    const unavailable = (reason: string) => ({
+  async status(dotId?: string): Promise<LocalVoiceStatus> {
+    const settings =
+      dotId === undefined ? undefined : await this.settings(dotId);
+    const selectedQuality = settings?.quality ?? 'medium';
+    const settingsRevision = settings
+      ? createHash('sha256').update(JSON.stringify(settings)).digest('hex')
+      : undefined;
+    const mode = (
+      audioOutput: boolean,
+      ready: boolean,
+      reason: string,
+    ): VoiceModeStatus => ({
+      ready,
+      reason,
+      audioInput: true,
+      audioOutput,
+      needsSetup: !ready,
+    });
+    let high = mode(
+      true,
+      false,
+      'Install the pinned High voice runtime and models. High requires Apple Silicon macOS and local SQLite storage.',
+    );
+    const unavailable = (reason: string): LocalVoiceStatus => ({
       enabled: this.config.enabled,
       ready: false,
-      reason,
+      reason: selectedQuality === 'high' ? high.reason : reason,
+      selectedQuality,
+      settingsRevision,
+      modes: {
+        basic: mode(false, false, reason),
+        medium: mode(true, false, reason),
+        high,
+      },
     });
     if (!this.config.enabled)
       return unavailable(
@@ -169,6 +246,8 @@ export class LocalVoiceService {
       );
     if (this.platform.setup().missing.length)
       return unavailable('Finish the chat setup before starting local voice.');
+    let basic: VoiceModeStatus;
+    let medium: VoiceModeStatus;
     try {
       await access(this.config.python, constants.X_OK);
       await access(this.config.worker, constants.R_OK);
@@ -177,40 +256,135 @@ export class LocalVoiceService {
       ) as {
         assets: { id: string; filename: string; installedBytes: number }[];
       };
-      for (const id of ['whisper', 'kokoro', 'voices', 'vad']) {
-        const matches = manifest.assets.filter((asset) => asset.id === id);
-        if (matches.length !== 1) throw Error();
-        const asset = matches[0];
+      const verify = async (ids: string[]) => {
+        for (const id of ids) {
+          const matches = manifest.assets.filter((asset) => asset.id === id);
+          if (matches.length !== 1) throw Error();
+          const asset = matches[0];
+          if (
+            typeof asset.filename !== 'string' ||
+            basename(asset.filename) !== asset.filename ||
+            !Number.isSafeInteger(asset.installedBytes) ||
+            asset.installedBytes <= 0
+          )
+            throw Error();
+          const stat = await lstat(join(this.config.assets, asset.filename));
+          if (!stat.isFile() || stat.size !== asset.installedBytes)
+            throw Error();
+        }
+      };
+      const checkMode = async (
+        audioOutput: boolean,
+      ): Promise<VoiceModeStatus> => {
+        try {
+          await verify(
+            audioOutput
+              ? ['whisper', 'kokoro', 'voices', 'vad']
+              : ['whisper', 'vad'],
+          );
+          return mode(
+            audioOutput,
+            true,
+            audioOutput
+              ? 'Local speech is installed. Models are verified and warmed when you start a call.'
+              : 'Speech recognition is installed. Dot will reply in text.',
+          );
+        } catch {
+          return mode(
+            audioOutput,
+            false,
+            audioOutput
+              ? 'Install the pinned local speech runtime and all four model files. See the local voice setup guide.'
+              : 'Install the pinned recognition runtime, Whisper, and Silero VAD. Basic needs no speech output models.',
+          );
+        }
+      };
+      [basic, medium] = await Promise.all([checkMode(false), checkMode(true)]);
+      try {
         if (
-          typeof asset.filename !== 'string' ||
-          basename(asset.filename) !== asset.filename ||
-          !Number.isSafeInteger(asset.installedBytes) ||
-          asset.installedBytes <= 0
+          !this.platform.nativeVoice ||
+          process.platform !== 'darwin' ||
+          process.arch !== 'arm64' ||
+          !this.config.nativeRoot ||
+          !this.config.nativePython ||
+          !this.config.nativeLauncher ||
+          !this.config.nativeManifest
         )
           throw Error();
-        const stat = await lstat(join(this.config.assets, asset.filename));
-        if (!stat.isFile() || stat.size !== asset.installedBytes) throw Error();
+        await verify(['vad']);
+        await access(this.config.nativePython, constants.X_OK);
+        await access(this.config.nativeLauncher, constants.R_OK);
+        const native = JSON.parse(
+          await readFile(this.config.nativeManifest, 'utf8'),
+        ) as Record<
+          'audio' | 'router',
+          { revision: string; files: { path: string; bytes: number }[] }
+        >;
+        for (const model of [native.audio, native.router]) {
+          if (!/^[a-f0-9]{40}$/.test(model.revision) || !model.files.length)
+            throw Error();
+          for (const file of model.files) {
+            const parts = file.path.split('/');
+            if (
+              parts.some(
+                (part) =>
+                  !/^[a-zA-Z0-9_.-]+$/.test(part) ||
+                  part === '.' ||
+                  part === '..',
+              ) ||
+              !Number.isSafeInteger(file.bytes) ||
+              file.bytes < 1
+            )
+              throw Error();
+            let path = this.config.nativeRoot;
+            for (const part of ['models', model.revision, ...parts]) {
+              if (!(await lstat(path)).isDirectory()) throw Error();
+              path = join(path, part);
+            }
+            const stat = await lstat(path);
+            if (!stat.isFile() || stat.size !== file.bytes) throw Error();
+          }
+        }
+        high = mode(
+          true,
+          true,
+          'Local conversation and speech are installed. Replies use your transcribed words; emotion and background sounds do not guide the answer. Tasks use your subscription and existing approvals.',
+        );
+      } catch {
+        /* Readiness is separate from Basic and Medium. Hashes are checked at warmup. */
       }
     } catch {
       return unavailable(
-        'Install the pinned local speech runtime and all four model files. See the local voice setup guide.',
+        'Install the pinned local speech runtime and asset manifest. See the local voice setup guide.',
       );
     }
+    const modes = { basic, medium, high };
     return {
       enabled: true,
-      ready: true,
+      selectedQuality,
+      settingsRevision,
+      modes,
+      ready: modes[selectedQuality].ready,
       inferenceRuntime:
-        this.config.providerSession &&
-        this.platform.config.llmProvider === 'codex'
-          ? 'persistent-provider'
-          : this.config.inferenceSession
-            ? 'warm-session'
-            : 'per-request',
-      reason:
-        'Local speech is installed. Models are verified and warmed when you start a call.',
+        selectedQuality === 'high'
+          ? 'native-local'
+          : this.config.providerSession &&
+              this.platform.config.llmProvider === 'codex'
+            ? 'persistent-provider'
+            : this.config.inferenceSession
+              ? 'warm-session'
+              : 'per-request',
+      reason: modes[selectedQuality].reason,
     };
   }
-  async start(threadId: string, dotId: string, signal: AbortSignal) {
+  async start(
+    threadId: string,
+    dotId: string,
+    signal: AbortSignal,
+    expectedQuality?: VoiceQuality,
+  ) {
+    if (this.savingSettings)
+      throw Error('Voice settings are being saved. Please retry.');
     if (this.starting || (this.call && !this.call.ended))
       throw Error('A voice call is already active.');
     this.starting = true;
@@ -234,7 +408,15 @@ export class LocalVoiceService {
       }
       // An ended call may still be reaping workers or stopping its owned run.
       if (this.call) await waitForVoiceOperation(this.call.end(), signal);
-      const status = await waitForVoiceOperation(this.status(), signal);
+      const voiceSettings = await this.settings(dotId);
+      if (
+        expectedQuality !== undefined &&
+        expectedQuality !== voiceSettings.quality
+      )
+        throw Error(
+          'Voice quality changed. Refresh the settings and start again.',
+        );
+      const status = await waitForVoiceOperation(this.status(dotId), signal);
       if (!status.ready) throw Error(status.reason);
       this.platform.requireReady();
       const binding = await this.platform.workspace.requireThread(
@@ -254,15 +436,28 @@ export class LocalVoiceService {
         throw Error('Wait for the current response before starting a call.');
       signal.throwIfAborted();
       const receipt = await this.platform.workspace.createCall(threadId);
-      const voiceSettings = await this.settings(dotId);
+      const native =
+        voiceSettings.quality === 'high'
+          ? new NativeVoiceWorker({
+              executable: this.config.nativePython!,
+              args: [
+                this.config.nativeLauncher!,
+                '--runtime-root',
+                this.config.nativeRoot!,
+                '--python',
+                this.config.nativePython!,
+              ],
+            })
+          : undefined;
       const providerSession =
+        !native &&
         this.config.providerSession &&
         this.platform.config.llmProvider === 'codex'
           ? new VoiceProviderSession(receipt.id)
           : undefined;
       const inference =
         providerSession ??
-        (this.config.inferenceSession
+        (!native && this.config.inferenceSession
           ? new VoiceInferenceSession(receipt.id)
           : undefined);
       const call = new LiveVoiceCall(
@@ -271,8 +466,31 @@ export class LocalVoiceService {
           token: randomBytes(32).toString('base64url'),
           threadId,
           dotId,
+          quality: voiceSettings.quality,
         },
         {
+          ...(native
+            ? {
+                nativeContext: () =>
+                  this.platform.nativeVoice!.context({
+                    callId: receipt.id,
+                    threadId,
+                    dotId,
+                  }),
+                nativeTurn: (
+                  turn: Parameters<
+                    NonNullable<import('./live.js').VoiceCallPort['nativeTurn']>
+                  >[0],
+                ) =>
+                  this.platform.nativeVoice!.turn({
+                    ...turn,
+                    callId: receipt.id,
+                    threadId,
+                    dotId,
+                    native,
+                  }),
+              }
+            : {}),
           voiceTurn: (utterance) => {
             if (utterance)
               setVoiceTurn(this.platform.workspace, {
@@ -328,8 +546,12 @@ export class LocalVoiceService {
         },
         () => {
           return {
-            recognition: this.worker('recognition'),
-            synthesis: this.worker('synthesis', voiceSettings),
+            ...(native
+              ? { native }
+              : { recognition: this.worker('recognition') }),
+            ...(voiceSettings.quality === 'medium'
+              ? { synthesis: this.worker('synthesis', voiceSettings) }
+              : {}),
             vad: this.worker('vad'),
             inference,
           };
@@ -338,6 +560,20 @@ export class LocalVoiceService {
       // The call owns admission through worker cleanup and its final receipts.
       release = undefined;
       this.call = call;
+      const detach = native
+        ? this.platform.nativeVoice!.listen((job) => {
+            if (
+              job.dotId === dotId &&
+              job.parentThreadId === threadId &&
+              !call.ended
+            ) {
+              const update = voiceJobReceipt(job);
+              call.nativeUpdate(update.id, update.spoken);
+            }
+          })
+        : undefined;
+      if (detach)
+        call.endSignal.addEventListener('abort', detach, { once: true });
       const abort = () => {
         void call.end('Call startup was cancelled.');
       };
@@ -346,7 +582,11 @@ export class LocalVoiceService {
       try {
         await call.start();
         signal.throwIfAborted();
-        return { id: call.scope.id, token: call.scope.token };
+        return {
+          id: call.scope.id,
+          token: call.scope.token,
+          quality: voiceSettings.quality,
+        };
       } finally {
         signal.removeEventListener('abort', abort);
       }
@@ -383,5 +623,15 @@ export class LocalVoiceService {
     this.shutdown.abort(new Error('The workspace is shutting down.'));
     await this.previewing?.done.catch(() => {});
     await this.call?.end();
+  }
+  async tasks(threadId: string) {
+    return this.platform.nativeVoice
+      ? this.platform.nativeVoice.list(threadId)
+      : [];
+  }
+  async stopTask(id: string) {
+    if (!this.platform.nativeVoice)
+      throw Error('Native tasks require local SQLite storage.');
+    return this.platform.nativeVoice.cancel(id);
   }
 }

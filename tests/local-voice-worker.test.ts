@@ -69,7 +69,11 @@ it('passes selected voice/personality without changing legacy synthesis requests
   const worker = new LocalSpeechWorker({
     executable: '/usr/bin/python3',
     args: ['-B', resolve('tests/fixtures/voice-worker.py'), 'selected-voice'],
-    voiceSettings: { voiceId: 'bm_george', personality: 'calm' },
+    voiceSettings: {
+      voiceId: 'bm_george',
+      personality: 'calm',
+      quality: 'medium',
+    },
   });
   try {
     const signal = new AbortController().signal;

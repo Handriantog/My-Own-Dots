@@ -1,4 +1,6 @@
 interface SpeechOutputOptions {
+  /** A native audio model already generated this bounded span. */
+  preparedPCM?: Buffer;
   text: string;
   signal: AbortSignal;
   synthesize: (text: string, signal: AbortSignal) => Promise<Buffer>;
@@ -70,7 +72,9 @@ export async function playSpeechOutput(
   options: SpeechOutputOptions,
 ): Promise<void> {
   options.signal.throwIfAborted();
-  const chunks = splitSpeechText(options.text);
+  const chunks = options.preparedPCM
+    ? [options.text]
+    : splitSpeechText(options.text);
   if (!chunks.length) return;
   const failed = new AbortController();
   const signal = AbortSignal.any([options.signal, failed.signal]);
@@ -86,7 +90,7 @@ export async function playSpeechOutput(
     Promise.resolve()
       .then(() => {
         signal.throwIfAborted();
-        return options.synthesize(text, signal);
+        return options.preparedPCM ?? options.synthesize(text, signal);
       })
       .then((pcm) => {
         if (!active) signal.throwIfAborted();

@@ -1,0 +1,141 @@
+.folder-approval-surface {
+  height: 100dvh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 16px;
+  background: #f8f7f4;
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.folder-approval-surface > * {
+  flex-shrink: 0;
+}
+.folder-approval-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.folder-approval-titlebar h1 {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  font-weight: 500;
+  color: var(--ink);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.folder-approval-surface button {
+  -webkit-app-region: no-drag;
+  padding: 7px 11px;
+  font-size: 12px;
+}
+.folder-approval-surface .folder-approval-close {
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  padding: 4px;
+  color: var(--muted);
+}
+.folder-access-compact {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.folder-access-target {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.folder-access-target > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--muted);
+}
+.folder-access-target > div {
+  min-width: 0;
+}
+.folder-access-target strong {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.folder-access-target code {
+  display: block;
+  margin-top: 4px;
+  max-height: 54px;
+  overflow-y: auto;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.folder-access-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.folder-access-options select {
+  width: auto;
+  flex: 1;
+  min-width: 0;
+  padding: 7px 9px;
+  font-size: 12px;
+}
+.folder-access-options button {
+  flex-shrink: 0;
+}
+.folder-access-compact footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.folder-access-compact .review-primary {
+  background: var(--blue-dark);
+  border-color: var(--blue-dark);
+  color: #fff;
+}
+.folder-access-compact .review-primary:hover:not(:disabled) {
+  background: var(--blue);
+}
+.folder-approval-surface p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.folder-approval-surface [role='alert'] {
+  color: #9d423b;
+}
+.folder-approval-navigation {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+.folder-approval-navigation button {
+  border: 0;
+  background: transparent;
+  padding: 3px 0 3px 6px;
+}
+.folder-approval-notice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.folder-approval-surface button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}

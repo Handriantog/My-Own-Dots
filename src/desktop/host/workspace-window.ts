@@ -66,11 +66,12 @@ export class WorkspaceWindow {
     private readonly data: string,
     private readonly backend: WorkspaceBackend,
     private readonly preferences: () => void,
+    reviewFolders?: () => void,
   ) {
     this.voice = new CompanionVoiceSession(
       () => this.window,
       () => 'dots://workspace/',
-      { active() {}, ready() {} },
+      { active() {}, ready() {}, reviewFolders },
       'dot:workspace-voice',
     );
     this.folders = new CompanionFolderPicker(

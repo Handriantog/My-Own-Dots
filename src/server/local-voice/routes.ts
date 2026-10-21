@@ -3,7 +3,10 @@ import { streamSSE } from 'hono/streaming';
 import { bodyLimit } from 'hono/body-limit';
 import { z } from 'zod';
 import type { LocalVoiceService } from './service.js';
-import { voiceSettingsSchema } from '../../shared/voice-settings.js';
+import {
+  voiceSettingsUpdateSchema,
+  voiceQualitySchema,
+} from '../../shared/voice-settings.js';
 const control = z.discriminatedUnion('action', [
   z.object({ action: z.literal('heartbeat') }).strict(),
   z.object({ action: z.literal('end') }).strict(),
@@ -40,7 +43,7 @@ export function localVoiceRoutes(service?: LocalVoiceService) {
   app.get('/local-voice/status', async (c) =>
     c.json(
       service
-        ? await service.status()
+        ? await service.status(c.req.query('dotId'))
         : { enabled: false, ready: false, reason: 'Local voice is disabled.' },
     ),
   );
@@ -59,18 +62,26 @@ export function localVoiceRoutes(service?: LocalVoiceService) {
   app.get('/local-voice/dots/:id/settings', async (c) =>
     c.json(await service!.settings(c.req.param('id'))),
   );
+  app.get('/local-voice/tasks', async (c) =>
+    c.json(
+      await service!.tasks(z.string().uuid().parse(c.req.query('threadId'))),
+    ),
+  );
+  app.post('/local-voice/tasks/:id/stop', async (c) =>
+    c.json(await service!.stopTask(z.string().uuid().parse(c.req.param('id')))),
+  );
   app.put('/local-voice/dots/:id/settings', async (c) =>
     c.json(
       await service!.saveSettings(
         c.req.param('id'),
-        voiceSettingsSchema.parse(await c.req.json()),
+        voiceSettingsUpdateSchema.parse(await c.req.json()),
       ),
     ),
   );
   app.post('/local-voice/dots/:id/preview', async (c) => {
     const wav = await service!.preview(
       c.req.param('id'),
-      voiceSettingsSchema.parse(await c.req.json()),
+      voiceSettingsUpdateSchema.parse(await c.req.json()),
       c.req.raw.signal,
     );
     return c.body(new Uint8Array(wav), 200, {
@@ -83,6 +94,7 @@ export function localVoiceRoutes(service?: LocalVoiceService) {
       .object({
         threadId: z.string().uuid(),
         dotId: z.string().min(1).max(100),
+        expectedQuality: voiceQualitySchema.optional(),
       })
       .strict()
       .safeParse(await c.req.json());
@@ -93,6 +105,7 @@ export function localVoiceRoutes(service?: LocalVoiceService) {
         input.data.threadId,
         input.data.dotId,
         c.req.raw.signal,
+        input.data.expectedQuality,
       ),
       201,
     );

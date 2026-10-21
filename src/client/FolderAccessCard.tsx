@@ -17,6 +17,7 @@ type FolderAccessCardProps = {
   respond?: (result: unknown) => Promise<void>;
   threadId: string;
   toolCallId: string;
+  compact?: boolean;
 };
 const permissionLabel = (access: FolderAccess) =>
   access === 'readwrite' ? 'Read and write' : 'Read only';
@@ -44,6 +45,7 @@ function FolderAccessReview({
   toolCallId,
   status,
   respond,
+  compact = false,
 }: FolderAccessCardProps & { requestId: string }) {
   const [detail, setDetail] = useState<FolderRequestDetail>();
   const [access, setAccess] = useState<FolderAccess>('read');
@@ -51,7 +53,10 @@ function FolderAccessReview({
   const [busy, setBusy] = useState(false);
   const [delivered, setDelivered] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [resolving, setResolving] = useState(false);
+  const resolutionRequested = useRef(false);
   const pending = useRef(false);
+  const revision = useRef(0);
   const mounted = useRef(true);
   const base = `/conversations/${encodeURIComponent(threadId)}/folder-requests/${encodeURIComponent(requestId)}`;
   const bridge = typeof window === 'undefined' ? undefined : window.dotFolders;
@@ -73,29 +78,79 @@ function FolderAccessReview({
   useEffect(() => {
     mounted.current = true;
     let active = true;
+    let refreshing = false;
     setError('');
-    void api<FolderRequestDetail>(base)
-      .then(validate)
-      .then((value) => {
-        if (active) setDetail(value);
-      })
-      .catch((cause) => {
-        if (active)
+    const refresh = async () => {
+      if (pending.current || refreshing) return;
+      refreshing = true;
+      const version = revision.current;
+      try {
+        const value = validate(await api<FolderRequestDetail>(base));
+        if (active && version === revision.current) setDetail(value);
+      } catch (cause) {
+        if (active && version === revision.current)
           setError(
             cause instanceof Error
               ? cause.message
               : 'Could not load this folder request.',
           );
-      });
+      } finally {
+        refreshing = false;
+      }
+    };
+    void refresh();
+    // Separate desktop windows do not share DOM events. Reload the owner API
+    // while a card is unresolved, without responding to a saved decision.
+    const timer = !finished
+      ? setInterval(() => void refresh(), 2000)
+      : undefined;
+    window.addEventListener?.('focus', refresh);
     return () => {
       active = false;
       mounted.current = false;
+      clearInterval(timer);
+      window.removeEventListener?.('focus', refresh);
     };
-  }, [base, attempt]);
+  }, [base, attempt, finished]);
+
+  useEffect(() => {
+    if (
+      !compact ||
+      !canDecide ||
+      !bridge ||
+      selection ||
+      expired ||
+      resolutionRequested.current ||
+      pending.current
+    )
+      return;
+    resolutionRequested.current = true;
+    const version = ++revision.current;
+    setResolving(true);
+    // The server resolves the saved hint into a proposal. This never opens
+    // the picker, grants access, or responds to the agent's approval tool.
+    void api<FolderRequestDetail>(`${base}/resolve`, 'POST', {})
+      .then((value) => {
+        const resolved = validate(value);
+        if (mounted.current && version === revision.current) {
+          revision.current++;
+          setDetail((current) =>
+            current?.selection || current?.decision ? current : resolved,
+          );
+        }
+      })
+      .catch(() => {
+        /* An unavailable default simply leaves Choose folder. */
+      })
+      .finally(() => {
+        if (mounted.current) setResolving(false);
+      });
+  }, [base, compact, canDecide, bridge, selection, expired]);
 
   const chooseFolder = async () => {
     if (!bridge || !canDecide || expired || pending.current) return;
     pending.current = true;
+    revision.current++;
     setBusy(true);
     setError('');
     try {
@@ -129,6 +184,7 @@ function FolderAccessReview({
     )
       return;
     pending.current = true;
+    revision.current++;
     setBusy(true);
     setError('');
     let saved: FolderDecision | undefined;
@@ -180,6 +236,107 @@ function FolderAccessReview({
       if (mounted.current) setBusy(false);
     }
   };
+  if (compact)
+    return (
+      <section
+        className="folder-access-compact"
+        aria-label="Review folder access"
+      >
+        <div className="folder-access-target">
+          <FolderOpen size={19} aria-hidden="true" />
+          <div>
+            <strong>
+              {selection?.name || detail?.request.folderHint || 'Folder'}
+            </strong>
+            {selection && <code title={selection.path}>{selection.path}</code>}
+            {!selection && resolving && <p role="status">Finding folder…</p>}
+            {!selection && !resolving && canDecide && !expired && (
+              <p role="status">No folder selected</p>
+            )}
+            {!detail && !error && <p role="status">Loading…</p>}
+          </div>
+        </div>
+        {canDecide && !expired && bridge && (
+          <div className="folder-access-options">
+            <select
+              aria-label="Folder permission"
+              value={access}
+              disabled={busy}
+              onChange={(event) =>
+                setAccess(event.target.value as FolderAccess)
+              }
+            >
+              <option value="read">Read only</option>
+              <option value="readwrite">Read and write</option>
+            </select>
+            <button
+              type="button"
+              aria-label="Choose folder"
+              disabled={busy}
+              onClick={() => void chooseFolder()}
+            >
+              {selection ? 'Change' : 'Choose folder'}
+            </button>
+          </div>
+        )}
+        {canDecide && expired && (
+          <p role="status">Request expired. Ask Dot again.</p>
+        )}
+        {canDecide && !bridge && (
+          <p>Open Dot on your desktop to choose a folder.</p>
+        )}
+        {decision && (
+          <p role="status">{decision.approved ? 'Approved' : 'Declined'}</p>
+        )}
+        {!decision && finished && <p role="status">Request ended.</p>}
+        {error && <p role="alert">{error}</p>}
+        <footer>
+          {!detail && error && (
+            <button
+              type="button"
+              aria-label="Retry folder request"
+              onClick={() => setAttempt((value) => value + 1)}
+            >
+              Retry
+            </button>
+          )}
+          {canDecide && (
+            <>
+              <button
+                type="button"
+                aria-label="Decline folder access"
+                disabled={busy}
+                onClick={() => void decide(false)}
+              >
+                Decline
+              </button>
+              {bridge && (
+                <button
+                  type="button"
+                  aria-label="Approve folder access"
+                  className="review-primary"
+                  disabled={busy || !selection || expired}
+                  onClick={() => void decide(true)}
+                >
+                  Approve
+                </button>
+              )}
+            </>
+          )}
+          {decision && !finished && respond && (
+            <button
+              type="button"
+              aria-label="Continue conversation"
+              className="review-primary"
+              disabled={busy}
+              onClick={() => void decide(decision.approved)}
+            >
+              Continue
+            </button>
+          )}
+        </footer>
+      </section>
+    );
   return (
     <section
       className="page-review-card folder-access-card"

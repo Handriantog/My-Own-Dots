@@ -32,6 +32,7 @@ export class CompanionVoiceSession {
       active(value: boolean): void;
       ready(value: boolean): void;
       state?(value: CompanionVoiceState): void;
+      reviewFolders?(): void;
       error?(message: string): void;
     },
     private readonly channel = 'dot:voice',
@@ -107,9 +108,24 @@ export class CompanionVoiceSession {
       if (this.windowless && this.engaged) this.changed.error?.(value);
       if (this.engaged) this.stop('error');
     });
+    ipcMain.handle(
+      `${this.channel}:review-folders`,
+      (event, value: unknown) => {
+        this.requireTrusted(event);
+        if (!this.callId || value !== this.callId)
+          throw new Error('Invalid active call');
+        this.changed.reviewFolders?.();
+      },
+    );
     ipcMain.handle(`${this.channel}:begin`, (event, value: unknown) => {
       this.requireTrusted(event);
-      const callId = this.validId(value);
+      const data =
+        typeof value === 'object' && value !== null
+          ? (value as { callId?: unknown; quality?: unknown })
+          : undefined;
+      if (data && !['basic', 'medium'].includes(String(data.quality)))
+        throw new Error('Invalid voice quality');
+      const callId = this.validId(data ? data.callId : value);
       if (
         [...CompanionVoiceSession.sessions].some(
           (session) => session !== this && session.engaged,
@@ -128,10 +144,17 @@ export class CompanionVoiceSession {
       if (this.callId || this.endedId === callId)
         throw new Error('Invalid active call');
       this.callId = callId;
+      if (data?.quality === 'basic') {
+        // Reveal this renderer's selected conversation; no cross-window handoff.
+        window.show();
+        window.focus();
+        this.windowless = false;
+      }
       this.talkUntil = 0;
       this.starting = false;
       this.clearDeadline();
       this.changed.active(true);
+      this.changed.reviewFolders?.();
       this.changed.state?.('listening');
     });
     ipcMain.handle(`${this.channel}:end`, (event, value: unknown) => {
@@ -365,6 +388,7 @@ export class CompanionVoiceSession {
       'begin',
       'end',
       'phase',
+      'review-folders',
       'error',
     ])
       ipcMain.removeHandler(`${this.channel}:${name}`);

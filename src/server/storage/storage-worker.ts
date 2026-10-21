@@ -1,6 +1,7 @@
 import { RuntimePolicy } from './runtime-policy.js';
 import { SQLiteSnapshot } from './sqlite-snapshot.js';
 import { bindPortableWorkspace } from './portable-binding.js';
+import { VoiceDelegations } from './voice-delegations.js';
 import { MemoryJobs } from '../memory-jobs.js';
 import { LegacyEvidence, type StorageOptions } from './legacy-evidence.js';
 import { ContextBuilder } from '../context-builder.js';
@@ -37,6 +38,7 @@ const asynchronous = new Set([
   'recall.read',
   'recall.readSource',
   'folders.select',
+  'folders.resolve',
   'folders.decide',
   'folders.listDirectory',
   'folders.readFile',
@@ -114,6 +116,14 @@ export async function serveStorage(
     new MemoryAccess(workspace, store),
   );
   const repositories = {
+    voiceDelegations: new VoiceDelegations(
+      db,
+      ownerId,
+      workspace,
+      new SQLiteConversationRecords(db, ownerId),
+      !legacy,
+      () => store.settings().memoryAllowed,
+    ),
     snapshot: new SQLiteSnapshot(db, ownerId),
     policy: new RuntimePolicy(store, workspace),
     evidence,

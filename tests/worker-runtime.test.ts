@@ -238,100 +238,112 @@ it('persists and flushes setup telemetry through the worker', async () => {
   expect(delivered).toHaveLength(1);
   expect(JSON.parse((await f.store.setupTelemetryState())!).queue).toEqual([]);
 });
-it('holds backup admission until voice delivery and the final call receipt are durable', async () => {
-  const f = await fixture();
-  const { LiveVoiceCall } = await import('../src/server/local-voice/live.js');
-  const thread = await f.platform.createConversation(f.dot.id, 'Voice receipt');
-  const receipt = await f.workspace.createCall(thread.id);
-  const release = await f.platform.maintenance.enterWrite(
-    new AbortController().signal,
-  );
-  const voice = new LiveVoiceCall(
-    {
-      id: receipt.id,
-      token: 'fixture-token',
-      threadId: thread.id,
-      dotId: f.dot.id,
-    },
-    {
-      requireThread: () => f.workspace.requireThread(thread.id, f.dot.id),
-      paused: async () => (await f.store.settings()).paused,
-      foreground: (signal) =>
-        f.platform.memory!.enterForeground(signal, thread.id),
-      snapshot: () => f.platform.localConversations!.getSnapshot(thread.id),
-      stop: async () => {},
-      receipt: async (state, text, error) => {
-        await f.workspace.setCall(receipt.id, state, text, error);
+it.each(['basic', 'medium'] as const)(
+  'holds backup admission until %s voice delivery and the final call receipt are durable',
+  async (quality) => {
+    const f = await fixture();
+    const { LiveVoiceCall } = await import('../src/server/local-voice/live.js');
+    const thread = await f.platform.createConversation(
+      f.dot.id,
+      'Voice receipt',
+    );
+    const receipt = await f.workspace.createCall(thread.id);
+    const release = await f.platform.maintenance.enterWrite(
+      new AbortController().signal,
+    );
+    const voice = new LiveVoiceCall(
+      {
+        id: receipt.id,
+        token: 'fixture-token',
+        threadId: thread.id,
+        dotId: f.dot.id,
+        quality,
       },
-      delivery: async (rows) => {
-        await f.workspace.saveVoiceDelivery(receipt.id, rows);
+      {
+        requireThread: () => f.workspace.requireThread(thread.id, f.dot.id),
+        paused: async () => (await f.store.settings()).paused,
+        foreground: (signal) =>
+          f.platform.memory!.enterForeground(signal, thread.id),
+        snapshot: () => f.platform.localConversations!.getSnapshot(thread.id),
+        stop: async () => {},
+        receipt: async (state, text, error) => {
+          await f.workspace.setCall(receipt.id, state, text, error);
+        },
+        delivery: async (rows) => {
+          await f.workspace.saveVoiceDelivery(receipt.id, rows);
+        },
+        closed: release,
       },
-      closed: release,
-    },
-    () => ({
-      recognition: {
-        warm: async () => {},
-        close: async () => {},
-        transcribe: async () => ({ text: '', language: 'en', segments: [] }),
-      },
-      vad: {
-        warm: async () => {},
-        close: async () => {},
-        detect: async () => 0,
-        reset: async () => {},
-      },
-      synthesis: {
-        warm: async () => {},
-        close: async () => {},
-        synthesize: async () => Buffer.alloc(0),
-      },
-    }),
-  );
-  cleanup.push(() => voice.end());
-  await voice.start();
-  const dispatch = f.storage.call.bind(f.storage);
-  let resume!: () => void, started!: () => void;
-  const held = new Promise<void>((resolve) => {
-    resume = resolve;
-  });
-  const waiting = new Promise<void>((resolve) => {
-    started = resolve;
-  });
-  const spy = vi
-    .spyOn(f.storage, 'call')
-    .mockImplementation(async (method, args, options) => {
-      if (method === 'workspace.setCall' && args[1] === 'ended') {
-        started();
-        await held;
-      }
-      return dispatch(method, args, options);
+      () => ({
+        recognition: {
+          warm: async () => {},
+          close: async () => {},
+          transcribe: async () => ({ text: '', language: 'en', segments: [] }),
+        },
+        vad: {
+          warm: async () => {},
+          close: async () => {},
+          detect: async () => 0,
+          reset: async () => {},
+        },
+        ...(quality === 'medium'
+          ? {
+              synthesis: {
+                warm: async () => {},
+                close: async () => {},
+                synthesize: async () => Buffer.alloc(0),
+              },
+            }
+          : {}),
+      }),
+    );
+    cleanup.push(() => voice.end());
+    await voice.start();
+    const dispatch = f.storage.call.bind(f.storage);
+    let resume!: () => void, started!: () => void;
+    const held = new Promise<void>((resolve) => {
+      resume = resolve;
     });
-  const ending = voice.end();
-  await waiting;
-  let acquired = false;
-  const backup = f.platform.maintenance
-    .acquire({ origin: 'automatic', signal: new AbortController().signal })
-    .then((lease) => {
-      acquired = true;
-      return lease;
+    const waiting = new Promise<void>((resolve) => {
+      started = resolve;
     });
-  try {
-    await new Promise((resolve) => setImmediate(resolve));
-    expect(acquired).toBe(false);
+    const spy = vi
+      .spyOn(f.storage, 'call')
+      .mockImplementation(async (method, args, options) => {
+        if (method === 'workspace.setCall' && args[1] === 'ended') {
+          started();
+          await held;
+        }
+        return dispatch(method, args, options);
+      });
+    const ending = voice.end();
+    await waiting;
+    let acquired = false;
+    const backup = f.platform.maintenance
+      .acquire({ origin: 'automatic', signal: new AbortController().signal })
+      .then((lease) => {
+        acquired = true;
+        return lease;
+      });
+    try {
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(acquired).toBe(false);
+      expect(
+        (await f.workspace.calls()).find((call) => call.id === receipt.id)
+          ?.status,
+      ).toBe('active');
+    } finally {
+      resume();
+      await ending;
+      (await backup).release();
+      spy.mockRestore();
+    }
     expect(
       (await f.workspace.calls()).find((call) => call.id === receipt.id)
         ?.status,
-    ).toBe('active');
-  } finally {
-    resume();
-    await ending;
-    (await backup).release();
-    spy.mockRestore();
-  }
-  expect(
-    (await f.workspace.calls()).find((call) => call.id === receipt.id)?.status,
-  ).toBe('ended');
-});
+    ).toBe('ended');
+  },
+);
 it.each([false, true])(
   'publishes or cancels a queued Dream publication through the worker (cancel=%s)',
   async (cancel) => {

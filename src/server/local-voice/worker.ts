@@ -227,13 +227,16 @@ export class LocalSpeechWorker implements SpeechEngine {
   async synthesize(text: string, signal: AbortSignal): Promise<Buffer> {
     if (!text.trim() || text.length > 400)
       throw new Error('Invalid speech text');
+    const settings = this.launch.voiceSettings
+      ? voiceSettingsSchema.parse(this.launch.voiceSettings)
+      : undefined;
     const result = z.object({ pcm: z.string().min(4).max(1920000) }).parse(
       await this.request(
         'synthesize',
         {
           text,
-          ...(this.launch.voiceSettings
-            ? voiceSettingsSchema.parse(this.launch.voiceSettings)
+          ...(settings
+            ? { voiceId: settings.voiceId, personality: settings.personality }
             : {}),
         },
         signal,

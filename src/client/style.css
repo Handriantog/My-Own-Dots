@@ -2191,6 +2191,9 @@ h3 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
+.voice-quality-field {
+  grid-column: 1 / -1;
+}
 .voice-settings-fields label {
   min-width: 0;
   display: grid;
@@ -4587,4 +4590,26 @@ h3 {
 .folder-access-panel button:disabled {
   opacity: 0.55;
   cursor: default;
+}
+.voice-tasks {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0;
+}
+.voice-task {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid var(--border, #ddd);
+  border-radius: 12px;
+}
+.voice-task p {
+  margin: 5px 0;
+  max-width: 60ch;
+  overflow-wrap: anywhere;
+}
+.voice-task button {
+  flex-shrink: 0;
 }

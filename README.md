@@ -74,7 +74,7 @@ These tools act on real accounts. Start with a read-only request and use a test 
 
 A continuous conversation keeps the Dot's avatar and status above the messages, with text and call controls close at hand. Work updates, source links, and call receipts appear in the timeline; a side panel shows results or the agent's computer.
 
-Local calls use Whisper, Silero and Kokoro for speech while final transcripts run through the existing chat agent, including its tool approvals and memory. The call screen includes a timer, captions, microphone and speaker mute, interruption, and a minimized view. Local speech requires the pinned runtime/models and explicit opt-in; see [local voice setup](docs/desktop/local-voice-calls.md). The separate paid Realtime feature remains available when configured and local voice is disabled.
+Local calls offer per-Dot quality settings: **Basic** uses Whisper/Silero for voice input and replies in text; **Medium** also generates Kokoro speech. Both use the existing chat agent, tool approvals and memory. **High** runs conversation and speech locally on Apple Silicon Macs: Qwen writes replies from transcribed speech and LFM generates the audio. This hybrid does not use vocal emotion or background sounds to choose its words. Task requests go to the existing subscription agent in linked conversations with the same approvals. High requires its separate pinned runtime and SQLite storage. Settings are accessible before model setup. Basic reveals readable chat; Medium retains speaker controls and windowless calls. See [local voice setup](docs/desktop/local-voice-calls.md). The separate paid Realtime feature remains eligible for Medium when configured and local voice is disabled.
 
 <div align="center">
 
