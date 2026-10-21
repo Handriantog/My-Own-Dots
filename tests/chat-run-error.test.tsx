@@ -87,7 +87,12 @@ const harness = vi.hoisted(() => {
   };
 });
 
-vi.mock('../src/client/api', () => ({ api: harness.api }));
+vi.mock('../src/client/api', () => ({
+  api: (path: string, ...args: unknown[]) =>
+    path === '/message-marks'
+      ? Promise.resolve([])
+      : harness.api(path, ...args),
+}));
 vi.mock('@copilotkit/react-core/v2', () => ({
   CopilotChatToolCallsView: () => null,
   useRenderTool: vi.fn(),
@@ -675,6 +680,8 @@ it('runs local Dream as an app command and preserves its draft on server failure
   await act(async () => {
     root = create(createElement(Chat, { ...props, localMemory: true }));
   });
+  const settings = () => root.root.findByProps({ className: 'chat-settings' });
+  expect(settings().props.hidden).toBe(true);
   const composer = () => root.root.findByProps({ className: 'chat-composer' });
   const draft = () => composer().findByType('textarea');
   await act(async () =>
@@ -685,6 +692,7 @@ it('runs local Dream as an app command and preserves its draft on server failure
     return { jobs: [], changes: [], coverage: { complete: true } };
   });
   await act(async () => composer().props.onSubmit({ preventDefault() {} }));
+  expect(settings().props.hidden).toBe(false);
   expect(draft().props.value).toBe('/dream');
   expect(harness.agent.addMessage).not.toHaveBeenCalled();
   expect(harness.copilotkit.runAgent).not.toHaveBeenCalled();

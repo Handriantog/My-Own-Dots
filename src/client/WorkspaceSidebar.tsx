@@ -8,7 +8,12 @@ import {
   Plus,
   Settings2,
 } from 'lucide-react';
-import type { Dot, State, WorkspaceState } from '../shared/types';
+import type {
+  ConversationUpdate,
+  Dot,
+  State,
+  WorkspaceState,
+} from '../shared/types';
 import type {
   WorkspaceDestination,
   WorkspaceStatus,
@@ -37,6 +42,9 @@ interface Props {
   setView: (view: WorkspaceView) => boolean;
   setSelectedDot: (id: string) => void;
   mutate: (path: string, method: string, body?: unknown) => Promise<boolean>;
+  updateConversation: (id: string, patch: ConversationUpdate) => Promise<void>;
+  deleteConversation: (id: string) => Promise<void>;
+  restoreConversation: (id: string) => Promise<void>;
 }
 export function WorkspaceSidebar({
   view,
@@ -57,12 +65,20 @@ export function WorkspaceSidebar({
   setView,
   setSelectedDot,
   mutate,
+  updateConversation,
+  deleteConversation,
+  restoreConversation,
 }: Props) {
   return (
-    <aside id="workspace-sidebar" className="sidebar workspace-sidebar">
+    <aside
+      id="workspace-sidebar"
+      className={`sidebar workspace-sidebar${view === 'chat' ? ' chat-sidebar' : ''}`}
+    >
       <div className="sidebar-heading">
         <div>
-          <span className="sidebar-kicker">MY OWN DOTS</span>
+          {view !== 'chat' && (
+            <span className="sidebar-kicker">MY OWN DOTS</span>
+          )}
           <h2>
             {
               {
@@ -75,21 +91,23 @@ export function WorkspaceSidebar({
             }
           </h2>
         </div>
+        {view === 'chat' && (
+          <button
+            className="chat-new-button"
+            aria-label="New conversation"
+            title="New chat (⌘N)"
+            disabled={!configured || busy}
+            onClick={() => void newConversation()}
+          >
+            <Plus size={19} />
+          </button>
+        )}
       </div>
       <div className="sidebar-scroll">
         {view === 'chat' && (
           <>
-            <button
-              className="new-chat nav-item"
-              disabled={!configured || busy}
-              onClick={() => void newConversation()}
-            >
-              <Plus size={17} />
-              <span>New conversation</span>
-              <kbd>⌘ N</kbd>
-            </button>
             <div className="spaces-heading nav-label">
-              YOUR DOTS
+              DOTS
               <button
                 className="icon-button"
                 aria-label="Create Dot"
@@ -136,12 +154,14 @@ export function WorkspaceSidebar({
             </nav>
             {configured ? (
               <ThreadList
-                dotId={dot.id}
                 dots={workspace.dots}
                 local={workspace.conversations}
                 selected={selectedThread}
                 onSelect={(id) => navigateDestination({ threadId: id })}
-                onNew={() => void newConversation()}
+                onUpdate={updateConversation}
+                deleted={workspace.deletedConversations ?? []}
+                onDelete={deleteConversation}
+                onRestore={restoreConversation}
               />
             ) : (
               <p className="sidebar-empty">

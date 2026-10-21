@@ -37,6 +37,208 @@ async function fixture() {
   const dot = (await workspace.dots())[0];
   return { storage, store, workspace, platform, config, dot };
 }
+it('moves chats to Trash, denies old links, and restores them without losing history', async () => {
+  const f = await fixture();
+  const thread = await f.platform.createConversation(f.dot.id, 'Delete test');
+  const config = { mode: 'sample' as const, baseUrl: '' };
+  const app = createApp({
+    store: f.store,
+    runner: new Runner(f.store, config),
+    config,
+    platform: f.platform,
+    ownerToken: 'owner',
+  });
+  const path = `/api/conversations/${thread.id}`;
+  const request = (url: string, method = 'GET') =>
+    app.request(url, {
+      method,
+      headers: {
+        authorization: 'Bearer owner',
+        'content-type': 'application/json',
+      },
+    });
+  expect((await app.request(path, { method: 'DELETE' })).status).toBe(401);
+  const lease = (await f.platform.localConversations!.acquireThread(
+    thread.id,
+  ))!;
+  const messages = [
+    { id: 'message', role: 'user' as const, content: 'Recover this history' },
+  ];
+  try {
+    expect((await request(path, 'DELETE')).status).toBe(409);
+    await lease.beginRun({
+      threadId: thread.id,
+      runId: 'delete-test',
+      messages,
+      state: {},
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    });
+    await lease.finishRun(messages, {}, 'finished');
+  } finally {
+    await lease.release();
+  }
+  const task = await f.store.createTask('Linked task');
+  await f.workspace.bindTask(task.id, thread.id);
+  expect((await request(path, 'DELETE')).status).toBe(409);
+  await f.store.action(task.id, 'cancel');
+  const call = await f.workspace.createCall(thread.id);
+  expect((await request(path, 'DELETE')).status).toBe(409);
+  await f.workspace.setCall(call.id, 'ended', '');
+  expect((await request(path, 'DELETE')).status).toBe(200);
+  expect(
+    (await f.workspace.conversations()).some((item) => item.id === thread.id),
+  ).toBe(false);
+  expect((await request(`${path}/capture`)).status).toBe(404);
+  expect(
+    (await request(`/api/copilotkit/threads/${thread.id}/messages`)).status,
+  ).toBeGreaterThanOrEqual(400);
+  const trash = (await (await request('/api/workspace')).json())
+    .deletedConversations;
+  expect(trash).toMatchObject([
+    { id: thread.id, deletedAt: expect.any(Number) },
+  ]);
+  expect(
+    (await app.request(`${path}/restore`, { method: 'POST' })).status,
+  ).toBe(401);
+  expect((await request(`${path}/restore`, 'POST')).status).toBe(200);
+  expect(
+    (await f.platform.localConversations!.getSnapshot(thread.id)).messages,
+  ).toEqual(messages);
+  expect(await f.workspace.deletedConversations()).toEqual([]);
+});
+it('authenticates and validates chat renames and pins through worker storage', async () => {
+  const f = await fixture();
+  const thread = await f.platform.createConversation(f.dot.id, 'Original chat');
+  const config = { mode: 'sample' as const, baseUrl: '' };
+  const app = createApp({
+    store: f.store,
+    runner: new Runner(f.store, config),
+    config,
+    platform: f.platform,
+    ownerToken: 'owner',
+  });
+  const path = `/api/conversations/${thread.id}`;
+  const patch = (body: unknown, url = path) =>
+    app.request(url, {
+      method: 'PATCH',
+      headers: {
+        authorization: 'Bearer owner',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  expect(
+    (await app.request(path, { method: 'PATCH', body: '{}' })).status,
+  ).toBe(401);
+  for (const invalid of [
+    {},
+    { title: ' ' },
+    { title: 'x'.repeat(121) },
+    { pinned: 'true' },
+    { title: 'New name', ownerId: 'someone' },
+  ]) {
+    expect((await patch(invalid)).status).toBe(400);
+  }
+  expect(
+    (await patch({ pinned: true }, '/api/conversations/missing')).status,
+  ).toBe(404);
+  const pin = await patch({ pinned: true });
+  expect(pin.status).toBe(200);
+  const pinned = await pin.json();
+  expect(pinned).toMatchObject({
+    title: 'Original chat',
+    pinnedAt: expect.any(Number),
+  });
+  const renamed = await patch({ title: '  Useful name  ' });
+  expect(renamed.status).toBe(200);
+  expect(await renamed.json()).toMatchObject({
+    title: 'Useful name',
+    pinnedAt: pinned.pinnedAt,
+  });
+  const workspace = await app.request('/api/workspace', {
+    headers: { authorization: 'Bearer owner' },
+  });
+  expect((await workspace.json()).conversations).toMatchObject([
+    { id: thread.id, title: 'Useful name', pinnedAt: pinned.pinnedAt },
+  ]);
+  expect(await (await patch({ pinned: false })).json()).toMatchObject({
+    title: 'Useful name',
+    pinnedAt: null,
+  });
+});
+it('saves only canonical message text through authenticated pin and bookmark routes', async () => {
+  const f = await fixture();
+  const thread = await f.platform.createConversation(
+    f.dot.id,
+    'Saved messages',
+  );
+  const messages = [
+    { id: 'message', role: 'user' as const, content: 'Canonical saved text' },
+  ];
+  const lease = (await f.platform.localConversations!.acquireThread(
+    thread.id,
+  ))!;
+  try {
+    await lease.beginRun({
+      threadId: thread.id,
+      runId: 'marks-test',
+      messages,
+      state: {},
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    });
+    await lease.finishRun(messages, {}, 'finished');
+  } finally {
+    await lease.release();
+  }
+  const config = { mode: 'sample' as const, baseUrl: '' };
+  const app = createApp({
+    store: f.store,
+    runner: new Runner(f.store, config),
+    config,
+    platform: f.platform,
+    ownerToken: 'owner',
+  });
+  const path = `/api/conversations/${thread.id}/messages/message/marks`;
+  const put = (url: string, body: unknown) =>
+    app.request(url, {
+      method: 'PUT',
+      headers: {
+        authorization: 'Bearer owner',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  expect((await app.request('/api/message-marks')).status).toBe(401);
+  expect(
+    (await put(path, { kind: 'pin', active: true, content: 'Forged' })).status,
+  ).toBe(400);
+  expect(
+    (
+      await put(path.replace('/message/', '/missing/'), {
+        kind: 'pin',
+        active: true,
+      })
+    ).status,
+  ).toBe(404);
+  const pin = await put(path, { kind: 'pin', active: true });
+  expect(pin.status).toBe(200);
+  expect(await pin.json()).toMatchObject({
+    content: 'Canonical saved text',
+    pinnedAt: expect.any(Number),
+    bookmarkedAt: null,
+  });
+  await put(path, { kind: 'bookmark', active: true });
+  await put(path, { kind: 'pin', active: false });
+  expect(await f.workspace.messageMarks()).toMatchObject([
+    { pinnedAt: null, bookmarkedAt: expect.any(Number) },
+  ]);
+  await put(path, { kind: 'bookmark', active: false });
+  expect(await f.workspace.messageMarks()).toEqual([]);
+});
 it('runs local chat and durable page writes through the worker without PostgreSQL', async () => {
   vi.stubEnv(
     'AGENT_COMMAND_JSON',

@@ -34,6 +34,7 @@ import { CompanionSimulation } from './core/simulation.js';
 import { CompanionVisibility } from './core/visibility.js';
 import { hitTestRig } from './core/rig-model.js';
 import { buildWorld } from './core/world.js';
+import { avatarHeight } from './shared/accessories.js';
 import { HelperSupervisor } from './host/helper.js';
 import { DesktopDiagnostics } from './host/diagnostics.js';
 import { CompanionChatWindow } from './host/chat-window.js';
@@ -158,12 +159,16 @@ async function start(): Promise<void> {
       );
     },
   });
+  const store = new PreferenceStore(app.getPath('userData'));
+  let preferences = await store.load();
   const workspace = new WorkspaceWindow(
     __dirname,
     app.getPath('userData'),
     backend,
     () => openSettings(),
     () => folderApprovals.review(false),
+    () => preferences.color,
+    () => preferences.accessories,
   );
   protocol.handle(
     'dots',
@@ -180,8 +185,6 @@ async function start(): Promise<void> {
     pid: process.pid,
     accessibility: systemPreferences.isTrustedAccessibilityClient(false),
   });
-  const store = new PreferenceStore(app.getPath('userData'));
-  let preferences = await store.load();
   const displays = (): DesktopDisplay[] =>
     screen.getAllDisplays().map((d) => ({
       id: String(d.id),
@@ -227,6 +230,7 @@ async function start(): Promise<void> {
       reviewFolders: () => folderApprovals.review(false),
     },
     workspace,
+    () => preferences.accessories,
   );
   const clickGesture = new CompanionClick();
   let dismissMenuClick = false;
@@ -355,7 +359,11 @@ async function start(): Promise<void> {
       shortcutError = '';
     }
     preferences = { ...preferences, ...change };
-    if (change.color) chat.updateAppearance();
+    if (change.accessories) refreshWorld(helper.current(performance.now()));
+    if (change.color || change.accessories) {
+      chat.updateAppearance();
+      workspace.updateAppearance();
+    }
     updateOptions();
     rebuildMenu();
     void savePreferences();
@@ -463,7 +471,7 @@ async function start(): Promise<void> {
     );
   }
   function refreshWorld(snapshot: GeometrySnapshot | null): void {
-    const key = `${snapshot?.helperSession ?? 'none'}:${snapshot?.seq ?? 0}:${displayRevision}`;
+    const key = `${snapshot?.helperSession ?? 'none'}:${snapshot?.seq ?? 0}:${displayRevision}:${avatarHeight(preferences.accessories)}`;
     if (key === worldKey) return;
     worldKey = key;
     if (!snapshot && capturing) cancelCapture();
@@ -472,6 +480,7 @@ async function start(): Promise<void> {
       currentDisplays,
       performance.now(),
       new Set([process.pid]),
+      avatarHeight(preferences.accessories),
     );
     simulation.setWorld(world);
     if (snapshot && !assetError)
@@ -711,7 +720,12 @@ async function start(): Promise<void> {
     return {
       sequence: ++sequence,
       sentAtMs: performance.now(),
-      origin: overlayOrigin(state.root, display, !!state.grip),
+      origin: overlayOrigin(
+        state.root,
+        display,
+        !!state.grip,
+        avatarHeight(preferences.accessories),
+      ),
       simulation: state,
       events: simulation.drainEvents(),
       preferences: { ...preferences },
@@ -794,12 +808,12 @@ async function start(): Promise<void> {
       return;
     }
     settingsWindow = new BrowserWindow({
-      width: 430,
-      height: Math.min(730, screen.getPrimaryDisplay().workArea.height),
+      width: 500,
+      height: Math.min(480, screen.getPrimaryDisplay().workArea.height),
       resizable: false,
       minimizable: false,
       maximizable: false,
-      backgroundColor: '#202632',
+      backgroundColor: '#1c1c1f',
       title: 'Customize Dot',
       webPreferences: {
         preload: path.join(__dirname, 'settings-preload.cjs'),

@@ -19,6 +19,11 @@ import {
 import type { Point, SimulationFrame } from '../shared/contracts.js';
 import type { VisibilityPose } from '../core/visibility.js';
 import { rigPointToWorld } from '../core/pose.js';
+import {
+  DEFAULT_ACCESSORIES,
+  type Accessories,
+} from '../shared/accessories.js';
+import { Wearables } from './wearables.js';
 
 type Part = keyof RigDefinition['layers'];
 export class PlushRig {
@@ -30,6 +35,7 @@ export class PlushRig {
   private popCenter: Point = { x: 0, y: 0 };
   private morphFade = new AlphaFilter({ alpha: 1 });
   private headphones = new Container();
+  private wearables = new Wearables();
   private sprites = {} as Record<Part, Sprite>;
   private body: MeshPlane;
   private restVertices: Float32Array;
@@ -175,6 +181,7 @@ export class PlushRig {
     this.sleepingEyes.stroke({ color: 0x46332c, width: 1.7, cap: 'round' });
     this.cheeks.fill({ color: 0xf3a3b7, alpha: 0.48 });
     this.torso.addChild(this.happyEyes, this.sleepingEyes, this.cheeks);
+    this.torso.addChild(this.wearables.container);
     this.container.addChild(this.hearts);
   }
   static async create(assetBase: string): Promise<PlushRig> {
@@ -201,8 +208,14 @@ export class PlushRig {
     }
     return new PlushRig(definition, textures);
   }
-  update(frame: SimulationFrame, color: string): void {
+  update(
+    frame: SimulationFrame,
+    color: string,
+    accessories: Accessories = DEFAULT_ACCESSORIES,
+  ): void {
     const p = frame.pose;
+    this.headphones.visible = accessories.headwear === 'headphones';
+    this.wearables.update(accessories, p);
     this.container.position.set(frame.root.x, frame.root.y);
     this.popCenter = rigPointToWorld(this.bodyCenter, frame.root, p);
     this.orb.position.set(

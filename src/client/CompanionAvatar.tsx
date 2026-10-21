@@ -1,35 +1,55 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useState } from 'react';
+import {
+  accessoriesKey,
+  DEFAULT_ACCESSORIES,
+  type Accessories,
+} from '../desktop/shared/accessories';
 
-/** Uses the same plush rig and body tint as the desktop companion. */
-export function CompanionAvatar({ color }: { color: string }) {
-  const container = useRef<HTMLSpanElement>(null);
+// Chat history can show hundreds of avatars. Share a raster per color instead
+// of allocating a WebGL context for every message, and bound the color cache.
+const images = new Map<string, Promise<string>>();
+function avatarImage(color: string, accessories: Accessories) {
+  const key = `${color}:${accessoriesKey(accessories)}`;
+  let image = images.get(key);
+  if (!image) {
+    image = import('./companion-avatar-renderer').then(
+      ({ renderCompanionAvatar }) => renderCompanionAvatar(color, accessories),
+    );
+    images.set(key, image);
+    if (images.size > 32) images.delete(images.keys().next().value!);
+    const current = image;
+    void image.catch(() => {
+      if (images.get(key) === current) images.delete(key);
+    });
+  }
+  return image;
+}
+
+/** Uses the desktop companion's exact plush rig and body tint. */
+export function CompanionAvatar({
+  color,
+  accessories = DEFAULT_ACCESSORIES,
+}: {
+  color: string;
+  accessories?: Accessories;
+}) {
+  const [src, setSrc] = useState('/dots/blue.png');
   useEffect(() => {
     let cancelled = false;
-    let dispose: (() => void) | undefined;
-    void import('./companion-avatar-renderer')
-      .then(async ({ renderCompanionAvatar }) => {
-        if (cancelled) return;
-        const avatar = await renderCompanionAvatar(color);
-        if (cancelled) avatar.destroy();
-        else {
-          dispose = avatar.destroy;
-          container.current?.append(avatar.canvas);
-        }
+    void avatarImage(color, accessories)
+      .then((image) => {
+        if (!cancelled) setSrc(image);
       })
       .catch((error: unknown) => {
-        // Keep the neutral placeholder, and make graphics failures diagnosable.
         console.warn('Companion avatar unavailable:', error);
       });
     return () => {
       cancelled = true;
-      dispose?.();
     };
-  }, [color]);
+  }, [color, accessories]);
   return (
-    <span className="companion-avatar" ref={container} data-color={color}>
-      <span className="companion-avatar-placeholder" aria-hidden="true">
-        ◌
-      </span>
+    <span className="companion-avatar" data-color={color}>
+      <img src={src} alt="" width={128} height={128} draggable={false} />
     </span>
   );
 }

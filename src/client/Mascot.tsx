@@ -1,4 +1,8 @@
 import { CompanionAvatar } from './CompanionAvatar';
+import {
+  useCompanionAccessories,
+  useCompanionColor,
+} from './companion-appearance';
 
 const characters = ['blue', 'mint', 'orange', 'purple'] as const;
 
@@ -26,14 +30,17 @@ export function Mascot({
   decorative?: boolean;
   companionColor?: string;
 }) {
+  const savedColor = useCompanionColor();
+  const accessories = useCompanionAccessories();
+  const color = companionColor ?? savedColor;
   return (
     <span className={`mascot ${state} ${small ? 'small' : ''}`}>
-      {companionColor ? (
+      {color ? (
         <span
           role={decorative ? undefined : 'img'}
           aria-label={decorative ? undefined : `${name} is ${state}`}
         >
-          <CompanionAvatar color={companionColor} />
+          <CompanionAvatar color={color} accessories={accessories} />
         </span>
       ) : (
         <img

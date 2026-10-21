@@ -31,6 +31,8 @@ export interface VoiceSettingsProps {
   status?: LocalVoiceStatus;
   onSaved?: () => void;
   initiallyOpen?: boolean;
+  standalone?: boolean;
+  active?: boolean;
   ref?: Ref<VoiceSettingsHandle>;
 }
 
@@ -101,6 +103,8 @@ function DotVoiceSettings({
   status,
   onSaved,
   initiallyOpen = false,
+  standalone = false,
+  active = true,
   ref,
 }: VoiceSettingsProps) {
   const id = useId();
@@ -129,8 +133,8 @@ function DotVoiceSettings({
   }, []);
   useImperativeHandle(ref, () => ({ stopPreview }), [stopPreview]);
   useEffect(() => {
-    if (callActive || !previewReady) stopPreview();
-  }, [callActive, previewReady, stopPreview]);
+    if (callActive || !previewReady || !active) stopPreview();
+  }, [callActive, previewReady, active, stopPreview]);
   useEffect(
     () => () => {
       const current = preview.current;
@@ -312,26 +316,28 @@ function DotVoiceSettings({
 
   return (
     <section className="voice-settings">
-      <button
-        type="button"
-        className="voice-settings-toggle"
-        aria-label="Voice & personality"
-        aria-expanded={open}
-        aria-controls={`${id}-panel`}
-        onClick={() => {
-          if (open) {
-            stopPreview();
-            saveRequest.current?.abort();
-            saveRequest.current = null;
-            setSaving(false);
-          }
-          setOpen(!open);
-        }}
-      >
-        <SlidersHorizontal size={14} aria-hidden="true" />
-        Voice &amp; personality
-        <ChevronDown size={14} aria-hidden="true" />
-      </button>
+      {!standalone && (
+        <button
+          type="button"
+          className="voice-settings-toggle"
+          aria-label="Voice & personality"
+          aria-expanded={open}
+          aria-controls={`${id}-panel`}
+          onClick={() => {
+            if (open) {
+              stopPreview();
+              saveRequest.current?.abort();
+              saveRequest.current = null;
+              setSaving(false);
+            }
+            setOpen(!open);
+          }}
+        >
+          <SlidersHorizontal size={14} aria-hidden="true" />
+          Voice &amp; personality
+          <ChevronDown size={14} aria-hidden="true" />
+        </button>
+      )}
       {open && (
         <div
           id={`${id}-panel`}
@@ -443,11 +449,15 @@ function DotVoiceSettings({
             personality applies to future replies.
           </p>
           {callActive && <p>End the call to change these settings.</p>}
-          {!previewReady && (
-            <p>
-              {unavailableReason || 'Set up local voice to preview voices.'}
-            </p>
-          )}
+          {!previewReady &&
+            !(
+              draft.quality === 'high' &&
+              unavailableReason === status?.modes?.high.reason
+            ) && (
+              <p>
+                {unavailableReason || 'Set up local voice to preview voices.'}
+              </p>
+            )}
           <div className="voice-settings-actions">
             <button
               type="button"
@@ -474,7 +484,7 @@ function DotVoiceSettings({
               disabled={disabled || !dirty}
               onClick={save}
             >
-              {saving ? 'Saving…' : 'Save'}
+              {saving ? 'Saving…' : standalone ? 'Save voice settings' : 'Save'}
             </button>
             <span role="status">
               {loading

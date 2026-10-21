@@ -7,6 +7,11 @@ import {
 } from '../shared/talk-shortcut.js';
 import { DEFAULT_CATEGORY_VOLUMES } from '../core/sound-categories.js';
 import {
+  ACCESSORIES,
+  DEFAULT_ACCESSORIES,
+  avatarHeight,
+} from '../shared/accessories.js';
+import {
   BODY,
   type DesktopDisplay,
   type Point,
@@ -16,6 +21,7 @@ import {
 export const DEFAULT_PREFERENCES: Preferences = {
   version: 1,
   color: '#45a7ff',
+  accessories: { ...DEFAULT_ACCESSORIES },
   volume: 0.4,
   categoryVolumes: { ...DEFAULT_CATEGORY_VOLUMES },
   muted: false,
@@ -34,9 +40,17 @@ const categoryVolumeSchema = z
     rest: z.number().min(0).max(1),
   })
   .strict();
+const accessorySchema = z
+  .object({
+    headwear: z.enum(ACCESSORIES.headwear.map((item) => item.id)),
+    eyewear: z.enum(ACCESSORIES.eyewear.map((item) => item.id)),
+    neckwear: z.enum(ACCESSORIES.neckwear.map((item) => item.id)),
+  })
+  .strict();
 const schema = z.object({
   version: z.literal(1),
   color: z.string().regex(/^#[\da-f]{6}$/i),
+  accessories: accessorySchema.catch(() => ({ ...DEFAULT_ACCESSORIES })),
   volume: z.number().min(0).max(1),
   categoryVolumes: categoryVolumeSchema.default(() => ({
     ...DEFAULT_CATEGORY_VOLUMES,
@@ -70,6 +84,7 @@ const changeSchema = schema
     talkShortcut: true,
   })
   .extend({
+    accessories: accessorySchema.optional(),
     categoryVolumes: categoryVolumeSchema.optional(),
     talkShortcut: schema.shape.talkShortcut.removeDefault().optional(),
   })
@@ -96,7 +111,9 @@ export function restorePlacement(
   if (
     point.x < area.x + BODY.width / 2 - 0.01 ||
     point.x > area.x + area.width - BODY.width / 2 + 0.01 ||
-    point.y < Math.max(area.y, display.workArea.y) + BODY.height ||
+    point.y <
+      Math.max(area.y, display.workArea.y) +
+        avatarHeight(preferences.accessories) ||
     point.y > area.y + area.height
   )
     return undefined;

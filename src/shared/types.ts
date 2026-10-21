@@ -99,8 +99,14 @@ export interface Conversation {
   ownerId: string;
   title: string;
   createdAt: number;
+  pinnedAt?: number | null;
+  deletedAt?: number | null;
   /** Frozen at creation; null means this conversation does not participate. */
   learningContainerId?: string | null;
+}
+export interface ConversationUpdate {
+  title?: string;
+  pinned?: boolean;
 }
 export interface CallReceipt {
   anchorMessageId?: string | null;
@@ -128,6 +134,7 @@ export interface WorkspaceState {
   spaces: Space[];
   dots: Dot[];
   conversations: Conversation[];
+  deletedConversations?: Conversation[];
   setup: SetupStatus;
   calls: CallReceipt[];
 }

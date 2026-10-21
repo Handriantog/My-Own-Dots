@@ -4,6 +4,13 @@ import {
   type SoundCategory,
 } from '../core/sound-categories.js';
 import type { Preferences } from '../shared/contracts.js';
+import {
+  ACCESSORIES,
+  ACCESSORY_SLOTS,
+  accessoriesFromKey,
+  DEFAULT_ACCESSORIES,
+  type Accessories,
+} from '../shared/accessories.js';
 import './settings.css';
 import {
   DEFAULT_TALK_SHORTCUT,
@@ -23,6 +30,67 @@ declare global {
   }
 }
 const color = document.querySelector<HTMLInputElement>('#color')!;
+const colorValue = document.querySelector<HTMLOutputElement>('#color-value')!;
+const preview = document.querySelector<HTMLImageElement>('#dot-preview')!;
+const swatches = document.querySelectorAll<HTMLButtonElement>('[data-color]');
+let selectedAccessories: Accessories = { ...DEFAULT_ACCESSORIES };
+const accessoryInputs = {
+  headwear: document.querySelector<HTMLSelectElement>('#headwear')!,
+  eyewear: document.querySelector<HTMLSelectElement>('#eyewear')!,
+  neckwear: document.querySelector<HTMLSelectElement>('#neckwear')!,
+};
+for (const slot of ACCESSORY_SLOTS) {
+  const select = accessoryInputs[slot];
+  for (const item of ACCESSORIES[slot]) {
+    const option = document.createElement('option');
+    option.value = item.id;
+    option.textContent = item.label;
+    select.append(option);
+  }
+  select.value = selectedAccessories[slot];
+  select.addEventListener('change', () => {
+    renderAccessories(
+      accessoriesFromKey(
+        ACCESSORY_SLOTS.map((name) => accessoryInputs[name].value).join('.'),
+      ),
+    );
+    renderPreview();
+    void update({ accessories: selectedAccessories });
+  });
+}
+function renderAccessories(value: Accessories): void {
+  selectedAccessories = { ...value };
+  for (const slot of ACCESSORY_SLOTS) accessoryInputs[slot].value = value[slot];
+}
+let previewRequest = 0;
+function renderPreview(): void {
+  const request = ++previewRequest;
+  const value = color.value;
+  const accessories = selectedAccessories;
+  void import('./avatar')
+    .then(({ renderCompanionAvatar }) =>
+      renderCompanionAvatar(value, accessories),
+    )
+    .then((image) => {
+      if (request !== previewRequest) return;
+      preview.src = image;
+      preview.alt = 'Your Dot';
+    })
+    .catch(() => {
+      if (request === previewRequest) preview.alt = 'Dot preview unavailable';
+    });
+}
+function renderColor(value: string): void {
+  color.value = value;
+  colorValue.textContent = value.toUpperCase();
+  for (const swatch of swatches)
+    swatch.setAttribute('aria-pressed', String(swatch.dataset.color === value));
+  renderPreview();
+}
+function changeColor(value: string): void {
+  renderColor(value);
+  void update({ color: value });
+}
 const volume = document.querySelector<HTMLInputElement>('#volume')!;
 const label = document.querySelector<HTMLOutputElement>('#volume-label')!;
 const category = document.querySelector<HTMLSelectElement>('#sound-category')!;
@@ -49,7 +117,8 @@ function render(preferences: Preferences): void {
   renderShortcut();
   categoryVolumes = { ...preferences.categoryVolumes };
   renderCategory();
-  color.value = preferences.color;
+  renderAccessories(preferences.accessories);
+  renderColor(preferences.color);
   volume.value = String(Math.round(preferences.volume * 100));
   label.value = `${volume.value}%`;
   for (const name of switches)
@@ -64,6 +133,18 @@ let savedShortcut = DEFAULT_TALK_SHORTCUT;
 let recording = false;
 let recordingRequest = 0;
 let savingShortcut = false;
+for (const name of ['appearance', 'behavior'] as const) {
+  document.querySelector(`#${name}-tab`)!.addEventListener('click', () => {
+    for (const section of ['appearance', 'behavior'] as const) {
+      document.querySelector<HTMLElement>(`#${section}-panel`)!.hidden =
+        section !== name;
+      document
+        .querySelector(`#${section}-tab`)!
+        .setAttribute('aria-pressed', String(section === name));
+    }
+    if (name === 'appearance') void stopRecording();
+  });
+}
 function renderShortcut(): void {
   shortcutButton.textContent = recording
     ? 'Press your shortcut… Esc to cancel'
@@ -171,7 +252,9 @@ async function update(change: Partial<Preferences>): Promise<void> {
     error.textContent = 'Could not save changes. Please try again.';
   }
 }
-color.addEventListener('input', () => void update({ color: color.value }));
+color.addEventListener('input', () => changeColor(color.value));
+for (const swatch of swatches)
+  swatch.addEventListener('click', () => changeColor(swatch.dataset.color!));
 volume.addEventListener('input', () => {
   label.value = `${volume.value}%`;
   void update({ volume: Number(volume.value) / 100 });

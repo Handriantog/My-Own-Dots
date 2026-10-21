@@ -38,6 +38,7 @@ import { Chat } from '../src/client/Chat';
 import { SpaceWorkspace } from '../src/client/SpaceWorkspace';
 import { WorkspaceDialog } from '../src/client/WorkspaceDialog';
 import { WorkspaceRail } from '../src/client/WorkspaceShell';
+import { ThreadList } from '../src/client/ThreadList';
 import { VoiceSettings } from '../src/client/local-voice/VoiceSettings';
 import type {
   WorkspaceDestination,
@@ -166,6 +167,100 @@ const createdCalls = () =>
   harness.api.mock.calls.filter(
     ([path, method]) => path === '/conversations' && method === 'POST',
   );
+it('keeps a successful rename and pin when an older workspace poll finishes late', async () => {
+  await mount();
+  const normal = harness.api.getMockImplementation()!;
+  let release!: (value: unknown) => void;
+  const updated = { ...thread('first'), title: 'Saved title', pinnedAt: 10 };
+  harness.api.mockImplementation((path: string, method?: string) => {
+    if (path === '/state')
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    if (path === '/conversations/first' && method === 'PATCH')
+      return Promise.resolve(updated);
+    return normal(path, method);
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3000);
+  });
+  await act(async () => {
+    await root.root
+      .findByType(ThreadList)
+      .props.onUpdate('first', { title: 'Saved title', pinned: true });
+  });
+  expect(root.root.findByType(ThreadList).props.local[0]).toEqual(updated);
+  await act(async () => release(await normal('/state')));
+  expect(root.root.findByType(ThreadList).props.local[0]).toEqual(updated);
+});
+it('clears the selected deleted chat without resurrecting it from an older poll', async () => {
+  location.hash = '#/chat/dot/selected?message=old';
+  await mount();
+  const normal = harness.api.getMockImplementation()!;
+  let release!: (value: unknown) => void;
+  harness.api.mockImplementation((path: string, method?: string) => {
+    if (path === '/state')
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    if (path === '/conversations/selected' && method === 'DELETE')
+      return Promise.resolve({ ...thread('selected'), deletedAt: 10 });
+    return normal(path, method);
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3000);
+  });
+  await act(async () =>
+    root.root.findByType(ThreadList).props.onDelete('selected'),
+  );
+  expect(root.root.findAllByType(Chat)).toHaveLength(0);
+  expect(storage.get('workspace-thread')).toBe('');
+  await act(async () => release(await normal('/state')));
+  expect(
+    root.root
+      .findByType(ThreadList)
+      .props.local.map((item: Conversation) => item.id),
+  ).toEqual(['first']);
+  expect(root.root.findByType(ThreadList).props.deleted).toMatchObject([
+    { id: 'selected' },
+  ]);
+});
+it('keeps a newly selected chat open when another deletion completes late', async () => {
+  location.hash = '#/chat/dot/selected';
+  await mount();
+  const normal = harness.api.getMockImplementation()!;
+  let release!: (value: unknown) => void;
+  let deleting!: Promise<void>;
+  harness.api.mockImplementation((path: string, method?: string) =>
+    path === '/conversations/selected' && method === 'DELETE'
+      ? new Promise((resolve) => {
+          release = resolve;
+        })
+      : normal(path, method),
+  );
+  await act(async () => {
+    deleting = root.root.findByType(ThreadList).props.onDelete('selected');
+  });
+  await act(async () => navigate({ threadId: 'first' }));
+  await act(async () => {
+    release({ ...thread('selected'), deletedAt: 10 });
+    await deleting;
+  });
+  expect(root.root.findByType(Chat).props.thread.id).toBe('first');
+});
+it('opens the original conversation and target message from a bookmark link', async () => {
+  location.hash = '#/chat/dot/selected?message=saved%2Fmessage';
+  await mount();
+  const chat = root.root.findByType(Chat);
+  expect(chat.props.thread.id).toBe('selected');
+  expect(chat.props.messageTarget).toEqual({
+    threadId: 'selected',
+    messageId: 'saved/message',
+  });
+  await act(async () => navigate({ dotId: 'dot', threadId: 'first' }));
+  await act(async () => navigate({ dotId: 'dot', threadId: 'selected' }));
+  expect(root.root.findByType(Chat).props.messageTarget).toBeUndefined();
+});
 it('ignores late readiness from the previous Dot after native navigation', async () => {
   conversations = [];
   const normal = harness.api.getMockImplementation()!;

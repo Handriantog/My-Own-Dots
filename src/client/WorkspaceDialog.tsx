@@ -1,10 +1,8 @@
-import { LocalLearningSettings } from './LocalLearningSettings';
+import { DotConfiguration } from './DotConfiguration';
 import { useEffect, useRef, useState } from 'react';
 import { Archive, Plug, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
 import type { Dot, Memory, State, WorkspaceState } from '../shared/types';
-import { ConnectionsSection } from './ConnectionsSection';
 import { StorageSettings } from './StorageSettings';
-import { VoiceSettings } from './local-voice/VoiceSettings';
 import type { LocalVoiceStatus } from '../shared/local-voice';
 import {
   setThemePreference,
@@ -17,16 +15,26 @@ export type Dialog =
   | { type: 'settings' }
   | { type: 'memory'; memory?: Memory }
   | { type: 'schedule'; threadId: string };
-export function WorkspaceDialog({
+export function WorkspaceDialog(
+  props: Parameters<typeof WorkspaceFormDialog>[0],
+) {
+  return props.dialog.type === 'dot' ? (
+    <DotConfiguration
+      key={props.dialog.dot?.id ?? 'new-dot'}
+      {...props}
+      dialog={props.dialog}
+    />
+  ) : (
+    <WorkspaceFormDialog {...props} dialog={props.dialog} />
+  );
+}
+function WorkspaceFormDialog({
   dialog,
   state,
   workspace,
   onClose,
   mutate,
   embedded = false,
-  voiceStatus,
-  voiceActive = false,
-  onVoiceSettingsSaved,
 }: {
   dialog: Dialog;
   embedded?: boolean;
@@ -38,49 +46,14 @@ export function WorkspaceDialog({
   onClose: () => void;
   mutate: (path: string, method: string, body?: unknown) => Promise<boolean>;
 }) {
-  const [name, setName] = useState(
-    dialog.type === 'dot' ? (dialog.dot?.name ?? '') : '',
-  );
+  const [name, setName] = useState('');
   const [text, setText] = useState(
-    dialog.type === 'dot'
-      ? (dialog.dot?.instructions ?? '')
-      : dialog.type === 'memory'
-        ? (dialog.memory?.text ?? '')
-        : '',
+    dialog.type === 'memory' ? (dialog.memory?.text ?? '') : '',
   );
-  const [research, setResearch] = useState(
-    dialog.type === 'dot'
-      ? (dialog.dot?.researchAllowed ?? true)
-      : state.settings.researchAllowed,
-  );
-  const [memory, setMemory] = useState(
-    dialog.type === 'dot'
-      ? (dialog.dot?.memoryAllowed ?? true)
-      : state.settings.memoryAllowed,
-  );
-  const [apps, setApps] = useState(
-    dialog.type === 'dot'
-      ? (dialog.dot?.appsAllowed ?? false)
-      : state.settings.appsAllowed,
-  );
-  const [composioToolkits, setComposioToolkits] = useState(
-    dialog.type === 'dot'
-      ? (dialog.dot?.composioToolkits ?? []).join(', ')
-      : '',
-  );
-  const [spaceIds, setSpaceIds] = useState(
-    dialog.type === 'dot' ? (dialog.dot?.spaceIds ?? [dialog.spaceId]) : [],
-  );
-  const [defaultSpace, setDefaultSpace] = useState(
-    dialog.type === 'dot' ? (dialog.dot?.spaceId ?? dialog.spaceId) : '',
-  );
+  const [research, setResearch] = useState(state.settings.researchAllowed);
+  const [memory, setMemory] = useState(state.settings.memoryAllowed);
+  const [apps, setApps] = useState(state.settings.appsAllowed);
   const [interval, setInterval] = useState('86400');
-  const [learningContainer, setLearningContainer] = useState(
-    dialog.type === 'dot' ? (dialog.dot?.learningContainerId ?? '') : '',
-  );
-  const [skillDelivery, setSkillDelivery] = useState(
-    dialog.type === 'dot' ? (dialog.dot?.skillDeliveryEnabled ?? false) : false,
-  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [settingsSection, setSettingsSection] = useState('general');
@@ -121,15 +94,11 @@ export function WorkspaceDialog({
   const title =
     dialog.type === 'space'
       ? 'New Space'
-      : dialog.type === 'dot'
-        ? dialog.dot
-          ? 'Edit Dot'
-          : 'New Dot'
-        : dialog.type === 'settings'
-          ? 'Settings'
-          : dialog.type === 'memory'
-            ? 'Edit memory'
-            : 'Schedule a task';
+      : dialog.type === 'settings'
+        ? 'Settings'
+        : dialog.type === 'memory'
+          ? 'Edit memory'
+          : 'Schedule a task';
   const nativeAction = async (action: () => Promise<void>) => {
     try {
       await action();
@@ -202,25 +171,6 @@ export function WorkspaceDialog({
               path = '/spaces';
               body = { name, description: text };
             }
-            if (dialog.type === 'dot') {
-              path = dialog.dot ? `/dots/${dialog.dot.id}` : '/dots';
-              method = dialog.dot ? 'PUT' : 'POST';
-              body = {
-                spaceId: defaultSpace,
-                spaceIds,
-                name,
-                instructions: text,
-                researchAllowed: research,
-                memoryAllowed: memory,
-                appsAllowed: apps,
-                composioToolkits: composioToolkits
-                  .split(',')
-                  .map((slug) => slug.trim())
-                  .filter(Boolean),
-                learningContainerId: learningContainer.trim() || null,
-                skillDeliveryEnabled: skillDelivery,
-              };
-            }
             if (dialog.type === 'settings') {
               path = '/settings';
               method = 'PATCH';
@@ -251,7 +201,7 @@ export function WorkspaceDialog({
             setBusy(false);
           }}
         >
-          {(dialog.type === 'space' || dialog.type === 'dot') && (
+          {dialog.type === 'space' && (
             <>
               <label className="field-label" htmlFor="entity-name">
                 Name
@@ -268,13 +218,11 @@ export function WorkspaceDialog({
           {dialog.type !== 'settings' && (
             <>
               <label className="field-label" htmlFor="entity-text">
-                {dialog.type === 'dot'
-                  ? 'Role instructions'
-                  : dialog.type === 'space'
-                    ? 'What belongs here?'
-                    : dialog.type === 'memory'
-                      ? 'Preference or context'
-                      : 'Task to revisit'}
+                {dialog.type === 'space'
+                  ? 'What belongs here?'
+                  : dialog.type === 'memory'
+                    ? 'Preference or context'
+                    : 'Task to revisit'}
               </label>
               <textarea
                 id="entity-text"
@@ -283,87 +231,11 @@ export function WorkspaceDialog({
                 required={dialog.type !== 'space'}
                 value={text}
                 onChange={(e) => setText(e.target.value)}
-                placeholder={
-                  dialog.type === 'dot'
-                    ? 'You are a thoughtful research partner. Compare evidence and be clear about uncertainty.'
-                    : ''
-                }
               />
             </>
           )}
-          {dialog.type === 'dot' && (
-            <fieldset className="space-access-fields">
-              <legend>Space access</legend>
-              <p className="muted">
-                Choose where this Dot can read and edit pages.
-              </p>
-              {workspace.spaces.map((space) => (
-                <label className="permission-row" key={space.id}>
-                  <input
-                    type="checkbox"
-                    checked={spaceIds.includes(space.id)}
-                    onChange={(event) => {
-                      const next = event.target.checked
-                        ? [...spaceIds, space.id]
-                        : spaceIds.filter((id) => id !== space.id);
-                      setSpaceIds(next);
-                      if (!next.includes(defaultSpace))
-                        setDefaultSpace(next[0] ?? '');
-                    }}
-                  />
-                  <span>{space.name}</span>
-                </label>
-              ))}
-              <label className="field-label" htmlFor="default-space">
-                Default destination for saved pages
-              </label>
-              <select
-                id="default-space"
-                value={defaultSpace}
-                required
-                onChange={(event) => setDefaultSpace(event.target.value)}
-              >
-                <option value="" disabled>
-                  Choose a Space
-                </option>
-                {workspace.spaces
-                  .filter((space) => spaceIds.includes(space.id))
-                  .map((space) => (
-                    <option key={space.id} value={space.id}>
-                      {space.name}
-                    </option>
-                  ))}
-              </select>
-            </fieldset>
-          )}
-          {dialog.type === 'dot' && dialog.dot && (
-            <VoiceSettings
-              dotId={dialog.dot.id}
-              initiallyOpen
-              callActive={voiceActive}
-              previewReady={
-                voiceStatus?.modes?.medium.ready ??
-                (voiceStatus?.selectedQuality !== 'basic' &&
-                  !!voiceStatus?.ready)
-              }
-              status={voiceStatus}
-              unavailableReason={voiceStatus?.reason}
-              onSaved={onVoiceSettingsSaved}
-            />
-          )}
-          {dialog.type === 'dot' && !dialog.dot && (
-            <p>Create this Dot to choose its voice chat quality.</p>
-          )}
-          {(dialog.type === 'dot' ||
-            (dialog.type === 'settings' &&
-              settingsSection === 'permissions')) && (
-            <div
-              className={
-                dialog.type === 'settings'
-                  ? 'settings-permission-group'
-                  : undefined
-              }
-            >
+          {dialog.type === 'settings' && settingsSection === 'permissions' && (
+            <div className="settings-permission-group">
               <label className="permission-row">
                 <input
                   type="checkbox"
@@ -372,11 +244,7 @@ export function WorkspaceDialog({
                 />
                 <span>
                   <strong>Public-page research</strong>
-                  <small>
-                    {dialog.type === 'settings'
-                      ? 'Read public web pages.'
-                      : 'Allow the server-side read-only browser tool. Global settings always take precedence.'}
-                  </small>
+                  <small>Read public web pages.</small>
                 </span>
               </label>
               <label className="permission-row">
@@ -387,11 +255,7 @@ export function WorkspaceDialog({
                 />
                 <span>
                   <strong>Use saved memories</strong>
-                  <small>
-                    {dialog.type === 'settings'
-                      ? 'Recall saved preferences and context.'
-                      : 'Allow essential preferences and on-demand recall. Changing permission stops active work.'}
-                  </small>
+                  <small>Recall saved preferences and context.</small>
                 </span>
               </label>
               <label className="permission-row">
@@ -402,11 +266,7 @@ export function WorkspaceDialog({
                 />
                 <span>
                   <strong>Connected apps</strong>
-                  <small>
-                    {dialog.type === 'settings'
-                      ? 'Use your connected services.'
-                      : 'Allow access to the owner’s apps through Composio. Global settings always take precedence.'}
-                  </small>
+                  <small>Use your connected services.</small>
                 </span>
               </label>
               {dialog.type === 'settings' && (
@@ -415,89 +275,6 @@ export function WorkspaceDialog({
                 </p>
               )}
             </div>
-          )}
-          {dialog.type === 'dot' &&
-            dialog.dot &&
-            workspace.setup.conversationBackend === 'local' &&
-            workspace.setup.llmBackend === 'subscription' && (
-              <LocalLearningSettings
-                dotId={dialog.dot.id}
-                onChanged={() => {}}
-              />
-            )}
-          {dialog.type === 'dot' && (
-            <fieldset className="space-access-fields">
-              <legend>Connected apps</legend>
-              <label className="field-label" htmlFor="composio-toolkits">
-                Toolkit slugs
-              </label>
-              <input
-                id="composio-toolkits"
-                value={composioToolkits}
-                pattern="[a-z0-9_]+(, *[a-z0-9_]+)*"
-                placeholder="gmail, google_calendar"
-                aria-describedby="composio-toolkits-help"
-                onChange={(event) => setComposioToolkits(event.target.value)}
-              />
-              <p className="muted" id="composio-toolkits-help">
-                Optional comma-separated Composio toolkit slugs. Leave blank to
-                let the Dot search all available toolkits.
-              </p>
-            </fieldset>
-          )}
-          {dialog.type === 'dot' &&
-            workspace.setup.conversationBackend !== 'local' && (
-              <fieldset className="space-access-fields">
-                <legend>Automatic Learning</legend>
-                <label className="field-label" htmlFor="learning-container">
-                  Learning container ID
-                </label>
-                <input
-                  id="learning-container"
-                  value={learningContainer}
-                  maxLength={64}
-                  pattern="[a-z0-9]+(-[a-z0-9]+)*"
-                  placeholder="research-workflow"
-                  aria-describedby="learning-help"
-                  onChange={(event) => {
-                    setLearningContainer(event.target.value);
-                    if (!event.target.value.trim()) setSkillDelivery(false);
-                  }}
-                />
-                <p className="muted" id="learning-help">
-                  Create this container in your Intelligence project first. New
-                  conversations will contribute evidence to it. Leave blank to
-                  keep new conversations out of Learning. Existing conversations
-                  retain their original assignment.
-                </p>
-                <label className="permission-row">
-                  <input
-                    type="checkbox"
-                    checked={skillDelivery}
-                    disabled={!learningContainer.trim()}
-                    onChange={(event) => setSkillDelivery(event.target.checked)}
-                  />
-                  <span>
-                    <strong>Use published skills</strong>
-                    <small>
-                      Load reviewed skills from each conversation’s assigned
-                      container. Enable delivery in Intelligence too. Turning
-                      this off stops skill loading; it does not stop evidence
-                      collection.
-                    </small>
-                  </span>
-                </label>
-                <a
-                  href="https://docs.copilotkit.ai/learning"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Set up Learning and review skills ↗
-                </a>
-              </fieldset>
-            )}
-          {dialog.type === 'dot' && dialog.dot && (
-            <ConnectionsSection dotId={dialog.dot.id} />
           )}
           {dialog.type === 'schedule' && (
             <>

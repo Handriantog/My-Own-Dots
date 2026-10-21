@@ -14,6 +14,13 @@ import { isWorkspacePage } from './workspace-protocol.js';
 import { destinationFromUrl } from './workspace-navigation.js';
 import type { WorkspaceDestination } from '../shared/workspace-contract.js';
 import type { CompanionVoiceState } from '../shared/voice-contract.js';
+import {
+  accessoriesKey,
+  accessoriesQuery,
+  DEFAULT_ACCESSORIES,
+  DEFAULT_ACCESSORIES_KEY,
+  type Accessories,
+} from '../shared/accessories.js';
 
 const connectionPage = 'dots://app/chat.html';
 
@@ -49,6 +56,8 @@ export class CompanionChatWindow {
       recover(): Promise<void>;
       open(destination?: WorkspaceDestination): Promise<void>;
     },
+    private readonly getAccessories: () => Accessories = () =>
+      DEFAULT_ACCESSORIES,
   ) {
     if (workspace) this.address = 'dots://workspace/';
     this.voice = new CompanionVoiceSession(
@@ -309,7 +318,7 @@ export class CompanionChatWindow {
         await this.workspace.ready();
         if (!window.isDestroyed())
           await window.loadURL(
-            `dots://workspace/?surface=companion&dotColor=${encodeURIComponent(this.getColor())}`,
+            `dots://workspace/?surface=companion&dotColor=${encodeURIComponent(this.getColor())}${accessoriesQuery(this.getAccessories())}`,
           );
         this.error = '';
         return;
@@ -338,6 +347,10 @@ export class CompanionChatWindow {
         const url = new URL(address);
         url.searchParams.set('desktop', '1');
         url.searchParams.set('dotColor', this.getColor());
+        const accessories = accessoriesKey(this.getAccessories());
+        if (accessories !== DEFAULT_ACCESSORIES_KEY)
+          url.searchParams.set('dotAccessories', accessories);
+        else url.searchParams.delete('dotAccessories');
         await window.loadURL(url.href);
         this.updateAppearance();
       }
@@ -382,13 +395,30 @@ export class CompanionChatWindow {
     )
       return;
     const color = this.getColor();
-    if (url.searchParams.get('dotColor') === color) return;
-    url.searchParams.set('dotColor', color);
+    const accessories = accessoriesKey(this.getAccessories());
     // Appearance-only data; the voice bridge grants no generic desktop access.
     // Updating the URL also preserves the chosen color on a normal reload.
     void window.webContents
       .executeJavaScript(
-        `history.replaceState(history.state, '', ${JSON.stringify(url.href)}); window.dispatchEvent(new Event('dot:appearance'));`,
+        `(() => {
+          const url = new URL(location.href);
+          if (url.protocol !== ${JSON.stringify(url.protocol)} ||
+              url.host !== ${JSON.stringify(url.host)} ||
+              url.pathname !== ${JSON.stringify(url.pathname)} ||
+              url.username || url.password ||
+              url.searchParams.get(${JSON.stringify(this.workspace ? 'surface' : 'desktop')}) !==
+                ${JSON.stringify(url.searchParams.get(this.workspace ? 'surface' : 'desktop'))}) return;
+          const color = ${JSON.stringify(color)};
+          const accessories = ${JSON.stringify(accessories)};
+          const defaultAccessories = ${JSON.stringify(DEFAULT_ACCESSORIES_KEY)};
+          if (url.searchParams.get('dotColor') === color &&
+              (url.searchParams.get('dotAccessories') || defaultAccessories) === accessories) return;
+          url.searchParams.set('dotColor', color);
+          if (accessories === defaultAccessories) url.searchParams.delete('dotAccessories');
+          else url.searchParams.set('dotAccessories', accessories);
+          history.replaceState(history.state, '', url.href);
+          window.dispatchEvent(new Event('dot:appearance'));
+        })();`,
       )
       .catch(() => {});
   }

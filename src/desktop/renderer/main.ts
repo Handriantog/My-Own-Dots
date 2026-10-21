@@ -139,7 +139,7 @@ try {
       local.pose.eyeOpen *= frame.appearance.eyeOpen;
       local.pose.love *= frame.appearance.eyeOpen;
     }
-    rig.update(local, frame.preferences.color);
+    rig.update(local, frame.preferences.color, frame.preferences.accessories);
     let popCenter = local.root;
     if (frame.appearance) {
       // Fade the finished canvas as one image: fading each plush layer makes

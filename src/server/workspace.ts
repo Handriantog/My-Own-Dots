@@ -1,4 +1,9 @@
 import { beginSQLiteTransaction } from './storage/sqlite-transaction.js';
+import type {
+  MarkableMessage,
+  MessageMark,
+  MessageMarkKind,
+} from '../shared/message-marks.js';
 import { MemoryStore } from './memory-store.js';
 import { ComputerStore } from './computer-store.js';
 import { ConnectionStore } from './connection-store.js';
@@ -16,7 +21,13 @@ import {
   type VoiceSettings,
 } from '../shared/voice-settings.js';
 import { validateLearningSettings } from '../shared/learning.js';
-import type { CallReceipt, Conversation, Dot, Space } from '../shared/types.js';
+import type {
+  CallReceipt,
+  Conversation,
+  ConversationUpdate,
+  Dot,
+  Space,
+} from '../shared/types.js';
 export class WorkspaceStore {
   private db: DatabaseSync;
   private ownsDatabase: boolean;
@@ -44,6 +55,10 @@ export class WorkspaceStore {
       CREATE TABLE IF NOT EXISTS local_voice_delivery(callId TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS dot_voice_settings(dotId TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS captures(threadId TEXT PRIMARY KEY, value TEXT NOT NULL);`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS message_marks(
+      threadId TEXT NOT NULL, messageId TEXT NOT NULL, role TEXT NOT NULL,
+      content TEXT NOT NULL, pinnedAt INTEGER, bookmarkedAt INTEGER,
+      PRIMARY KEY(threadId, messageId));`);
     for (const [table, column, definition] of [
       ['dots', 'learningContainerId', 'TEXT'],
       ['dots', 'skillDeliveryEnabled', 'INTEGER NOT NULL DEFAULT 0'],
@@ -52,6 +67,8 @@ export class WorkspaceStore {
       ['dots', 'composioSessionId', 'TEXT'],
       ['dots', 'composioPolicyHash', 'TEXT'],
       ['thread_bindings', 'learningContainerId', 'TEXT'],
+      ['thread_bindings', 'pinnedAt', 'INTEGER'],
+      ['thread_bindings', 'deletedAt', 'INTEGER'],
     ]) {
       if (
         !this.db
@@ -312,7 +329,7 @@ export class WorkspaceStore {
   conversations(): Conversation[] {
     return this.db
       .prepare(
-        'SELECT * FROM thread_bindings WHERE ownerId=? ORDER BY createdAt DESC',
+        'SELECT * FROM thread_bindings WHERE ownerId=? AND deletedAt IS NULL ORDER BY createdAt DESC',
       )
       .all(this.ownerId) as unknown as Conversation[];
   }
@@ -341,17 +358,174 @@ export class WorkspaceStore {
       );
     return value;
   }
+  deletedConversations(): Conversation[] {
+    return this.db
+      .prepare(
+        'SELECT * FROM thread_bindings WHERE ownerId=? AND deletedAt IS NOT NULL ORDER BY deletedAt DESC',
+      )
+      .all(this.ownerId) as unknown as Conversation[];
+  }
+  deleteConversation(id: string): Conversation {
+    const transaction = beginSQLiteTransaction(this.db);
+    try {
+      const thread = this.requireThread(id);
+      if (
+        this.db
+          .prepare(
+            "SELECT 1 FROM calls WHERE threadId=? AND status IN ('connecting','active')",
+          )
+          .get(id)
+      )
+        throw new Error(
+          'Conversation is busy. End its call before deleting it.',
+        );
+      const hasTable = (name: string) =>
+        !!this.db
+          .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
+          .get(name);
+      if (
+        hasTable('conversation_threads') &&
+        this.db
+          .prepare(
+            'SELECT 1 FROM conversation_threads WHERE owner_id=? AND id=? AND lease_token IS NOT NULL AND lease_until>?',
+          )
+          .get(this.ownerId, id, Date.now())
+      )
+        throw new Error(
+          'Conversation is busy. Stop its response before deleting it.',
+        );
+      if (
+        hasTable('tasks') &&
+        this.db
+          .prepare(
+            "SELECT 1 FROM task_threads b JOIN tasks t ON t.id=b.taskId WHERE b.threadId=? AND t.status<>'cancelled'",
+          )
+          .get(id)
+      )
+        throw new Error(
+          'Conversation has scheduled tasks. Cancel them in Activity before deleting it.',
+        );
+      if (
+        hasTable('voice_delegations') &&
+        this.db
+          .prepare(
+            "SELECT 1 FROM voice_delegations WHERE owner_id=? AND (parent_thread_id=? OR worker_thread_id=?) AND status IN ('queued','running','approval')",
+          )
+          .get(this.ownerId, id, id)
+      )
+        throw new Error(
+          'Conversation is busy. Finish its voice task before deleting it.',
+        );
+      const deletedAt = Date.now();
+      this.db
+        .prepare(
+          'UPDATE thread_bindings SET deletedAt=? WHERE id=? AND ownerId=?',
+        )
+        .run(deletedAt, id, this.ownerId);
+      // A page can start a fresh chat; the old binding/history remains in Trash.
+      this.db.prepare('DELETE FROM page_threads WHERE threadId=?').run(id);
+      transaction.commit();
+      return { ...thread, deletedAt };
+    } catch (error) {
+      transaction.rollback();
+      throw error;
+    }
+  }
+  restoreConversation(id: string): Conversation {
+    const thread = this.db
+      .prepare('SELECT 1 FROM thread_bindings WHERE id=? AND ownerId=?')
+      .get(id, this.ownerId);
+    if (!thread)
+      throw new Error('Conversation does not belong to this Dot and owner.');
+    this.db
+      .prepare(
+        'UPDATE thread_bindings SET deletedAt=NULL WHERE id=? AND ownerId=?',
+      )
+      .run(id, this.ownerId);
+    return this.requireThread(id);
+  }
   requireThread(id: string, dotId?: string): Conversation {
     const thread = this.conversations().find((thread) => thread.id === id);
     if (!thread || (dotId && thread.dotId !== dotId))
       throw new Error('Conversation does not belong to this Dot and owner.');
     return thread;
   }
+  updateConversation(id: string, patch: ConversationUpdate): Conversation {
+    this.requireThread(id);
+    this.db
+      .prepare(
+        `UPDATE thread_bindings SET
+      title=COALESCE(?, title),
+      pinnedAt=CASE WHEN ? IS NULL THEN pinnedAt WHEN ?=1 THEN COALESCE(pinnedAt, ?) ELSE NULL END
+      WHERE id=? AND ownerId=?`,
+      )
+      .run(
+        patch.title ?? null,
+        patch.pinned === undefined ? null : Number(patch.pinned),
+        Number(patch.pinned ?? false),
+        Date.now(),
+        id,
+        this.ownerId,
+      );
+    return this.requireThread(id);
+  }
   bindTask(taskId: string, threadId: string) {
     this.requireThread(threadId);
     this.db
       .prepare('INSERT INTO task_threads VALUES (?, ?)')
       .run(taskId, threadId);
+  }
+  messageMarks(threadId?: string): MessageMark[] {
+    if (threadId !== undefined) this.requireThread(threadId);
+    return this.db
+      .prepare(
+        `
+      SELECT m.*, t.title AS threadTitle, t.dotId, d.name AS dotName
+      FROM message_marks m JOIN thread_bindings t ON t.id=m.threadId
+      JOIN dots d ON d.id=t.dotId
+      WHERE t.ownerId=? AND t.deletedAt IS NULL ${threadId === undefined ? '' : 'AND t.id=?'}
+      ORDER BY MAX(COALESCE(m.pinnedAt,0),COALESCE(m.bookmarkedAt,0)) DESC, m.messageId
+    `,
+      )
+      .all(
+        this.ownerId,
+        ...(threadId === undefined ? [] : [threadId]),
+      ) as unknown as MessageMark[];
+  }
+  setMessageMark(
+    threadId: string,
+    message: MarkableMessage,
+    kind: MessageMarkKind,
+    active: boolean,
+  ): MessageMark | null {
+    this.requireThread(threadId);
+    const column = kind === 'pin' ? 'pinnedAt' : 'bookmarkedAt';
+    if (active) {
+      this.db
+        .prepare(
+          `INSERT INTO message_marks(threadId,messageId,role,content,${column})
+        VALUES (?,?,?,?,?) ON CONFLICT(threadId,messageId) DO UPDATE SET
+        role=excluded.role, content=excluded.content, ${column}=COALESCE(message_marks.${column},excluded.${column})
+      `,
+        )
+        .run(threadId, message.id, message.role, message.content, Date.now());
+    } else {
+      this.db
+        .prepare(
+          `UPDATE message_marks SET ${column}=NULL WHERE threadId=? AND messageId=?`,
+        )
+        .run(threadId, message.id);
+      this.db
+        .prepare(
+          'DELETE FROM message_marks WHERE threadId=? AND messageId=? AND pinnedAt IS NULL AND bookmarkedAt IS NULL',
+        )
+        .run(threadId, message.id);
+    }
+    return (
+      this.messageMarks(threadId).find(
+        (mark) => mark.messageId === message.id,
+      ) ?? null
+    );
   }
   taskThread(taskId: string): string | undefined {
     const row = this.db
