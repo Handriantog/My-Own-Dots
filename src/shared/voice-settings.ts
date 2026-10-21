@@ -248,16 +248,46 @@ export const PERSONALITIES = [
       'Hello. I am your Dot. Let us review the facts, identify the priorities, and decide what to do next.',
   },
 ] as const;
-export const voiceSettingsSchema = z
+export const voiceQualitySchema = z.enum(['basic', 'medium', 'high']);
+export type VoiceQuality = z.infer<typeof voiceQualitySchema>;
+export const VOICE_QUALITIES = [
+  {
+    id: 'basic',
+    name: 'Basic',
+    description: 'Speak to Dot; receive text replies. Lowest local processing.',
+  },
+  {
+    id: 'medium',
+    name: 'Medium',
+    description:
+      'Speak to Dot; receive spoken replies. Current voice experience.',
+  },
+  {
+    id: 'high',
+    name: 'High',
+    description:
+      'Conversation and speech run locally. Requires more memory and processing.',
+  },
+] as const;
+export function usesSpeechOutput(quality: VoiceQuality): boolean {
+  return quality !== 'basic';
+}
+/** Updates keep omission intact until the storage worker merges the saved value. */
+export const voiceSettingsUpdateSchema = z
   .object({
     voiceId: z.enum(VOICES.map((voice) => voice.id)),
     personality: z.enum(PERSONALITIES.map((personality) => personality.id)),
+    quality: voiceQualitySchema.optional(),
   })
   .strict();
+export const voiceSettingsSchema = voiceSettingsUpdateSchema.extend({
+  quality: voiceQualitySchema.default('medium'),
+});
 export type VoiceSettings = z.infer<typeof voiceSettingsSchema>;
 export const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
   voiceId: 'af_heart',
   personality: 'natural',
+  quality: 'medium',
 };
 export function personalityFor(settings: VoiceSettings) {
   return PERSONALITIES.find(

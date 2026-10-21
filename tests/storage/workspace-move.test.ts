@@ -48,7 +48,7 @@ async function fixture() {
     id,
     ownerId,
     storage: 'sqlite',
-    schema: 2,
+    schema: 3,
   });
   await writeFile(
     join(directory, '.env'),

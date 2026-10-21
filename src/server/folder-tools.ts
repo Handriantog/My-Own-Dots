@@ -13,6 +13,7 @@ export function folderTools(
   threadId: string,
   check: () => void | Promise<void>,
   signal: AbortSignal,
+  queueApproval?: (requestId: string) => void,
 ) {
   const verify = async () => {
     signal.throwIfAborted();
@@ -25,15 +26,19 @@ export function folderTools(
     defineTool({
       name: 'request_local_folder_access',
       description:
-        'Request owner permission for a local folder when the user asks you to work with it. This creates a request only. The owner must choose the actual folder and approve its access. Never claim access until approval succeeds; do not request again after a decline unless the owner asks.',
+        'Request owner permission for a local folder when the user asks you to work with it. Put the exact owner-provided folder name or path in folderHint; use an empty hint if none was given, without filler or invented paths. This creates a request only. The owner reviews the suggested folder (or chooses one) and approves its access. Never claim access until approval succeeds; do not request again after a decline unless the owner asks.',
       parameters: folderRequestSchema,
       execute: async (input) => {
         await verify();
         const request = await folders.request(dotId, threadId, input);
+        await verify();
+        queueApproval?.(request.id);
         return {
           status: 'approval_required',
           requestId: request.id,
-          instruction: `Call ${folderApprovalTool.name} with this requestId, then wait for the owner to choose and approve a folder. Do not grant permission yourself.`,
+          instruction: queueApproval
+            ? 'The owner approval is queued. Wait for the owner to review and approve a folder. Do not grant permission yourself.'
+            : `Call ${folderApprovalTool.name} with this requestId, then wait for the owner to review and approve a folder. Do not grant permission yourself.`,
         };
       },
     }),

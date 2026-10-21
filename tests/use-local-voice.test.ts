@@ -3,6 +3,7 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, beforeEach, expect, it, vi, type Mock } from 'vitest';
 import type { LocalVoiceEvent } from '../src/shared/local-voice';
 import { useLocalVoice } from '../src/client/local-voice/useLocalVoice';
+import type { VoiceQuality } from '../src/shared/voice-settings';
 
 const audio = vi.hoisted(() => ({ instances: [] as FakeAudio[] }));
 vi.mock('../src/client/api', () => ({
@@ -50,6 +51,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 let voice: ReturnType<typeof useLocalVoice>;
+let quality: VoiceQuality = 'medium';
 let root: ReactTestRenderer;
 let fetchMock: ReturnType<typeof vi.fn>;
 let stream: ReadableStreamDefaultController<Uint8Array>;
@@ -64,6 +66,7 @@ let documentEvents: EventTarget & { visibilityState: string };
 let bridge: {
   begin: ReturnType<typeof vi.fn>;
   end: ReturnType<typeof vi.fn>;
+  reviewFolders: ReturnType<typeof vi.fn>;
   onStop: ReturnType<typeof vi.fn>;
 };
 const json = (body: unknown, status = 200) =>
@@ -81,6 +84,7 @@ function Hook() {
   voice = useLocalVoice({
     threadId: 'thread',
     dotId: 'dot',
+    quality,
     onTranscript,
     onCancelTranscript,
     onSaved,
@@ -100,6 +104,7 @@ async function emit(event: LocalVoiceEvent, fragmented = false) {
   });
 }
 beforeEach(async () => {
+  quality = 'medium';
   vi.useFakeTimers();
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   audio.instances.length = 0;
@@ -113,6 +118,7 @@ beforeEach(async () => {
   bridge = {
     begin: vi.fn(async () => {}),
     end: vi.fn(async () => {}),
+    reviewFolders: vi.fn(async () => {}),
     onStop: vi.fn((callback: (reason: string) => void) => {
       nativeStop = callback;
       return () => {};
@@ -146,6 +152,30 @@ beforeEach(async () => {
   await act(async () => {
     root = create(createElement(Hook));
   });
+});
+it('captures Basic input and displays text without initializing playback or accepting audio', async () => {
+  quality = 'basic';
+  await act(async () => root.update(createElement(Hook)));
+  fetchMock.mockImplementationOnce(async () =>
+    json({ id: 'call', token: 'capability', quality: 'basic' }),
+  );
+  await act(async () => {
+    await voice.start();
+  });
+  expect(audio.instances[0].startPlayback).not.toHaveBeenCalled();
+  expect(audio.instances[0].startCapture).toHaveBeenCalledOnce();
+  expect(bridge.begin).toHaveBeenCalledWith('call', 'basic');
+  await emit({ type: 'caption', text: 'Your answer is in chat.' });
+  expect(voice.caption).toBe('Your answer is in chat.');
+  await emit({ type: 'audio', generation: 0, sequence: 0, pcm: btoa('\0\0') });
+  await act(async () => voice.toggleSpeaker());
+  expect(audio.instances[0].play).not.toHaveBeenCalled();
+  expect(controls('played')).toHaveLength(0);
+  expect(controls('speaker')).toHaveLength(0);
+  expect(voice.quality).toBe('basic');
+  await act(async () => voice.toggleMute());
+  expect(voice.muted).toBe(true);
+  expect(controls('mute')).toHaveLength(1);
 });
 afterEach(async () => {
   await act(async () => {
@@ -713,4 +743,28 @@ it('releases the native starting state when the user ends before a call handle a
     await starting;
   });
   expect(audio.instances[0].startCapture).not.toHaveBeenCalled();
+});
+
+it('shows High captions without submitting a second subscription turn', async () => {
+  quality = 'high';
+  await act(async () => root.update(createElement(Hook)));
+  fetchMock.mockImplementationOnce(async () =>
+    json({ id: 'call', token: 'capability', quality: 'high' }),
+  );
+  await act(async () => {
+    await voice.start();
+  });
+  await emit({
+    type: 'native-transcript',
+    generation: 0,
+    messageId: 'saved-native',
+    text: 'Hello locally',
+  });
+  expect(voice.userCaption).toBe('Hello locally');
+  await emit({ type: 'review-folders' });
+  expect(bridge.reviewFolders).toHaveBeenCalledWith('call');
+  expect(voice.error).toBe('');
+  expect(onTranscript).not.toHaveBeenCalled();
+  expect(controls('answer')).toHaveLength(0);
+  expect(onSaved).toHaveBeenCalled();
 });

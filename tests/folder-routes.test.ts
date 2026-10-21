@@ -257,3 +257,60 @@ it('rejects invalid input, missing grants, foreign conversations and oversized s
     404,
   );
 });
+
+it('resolves only the stored hint on explicit owner POST and keeps detail GET read-only', async () => {
+  const f = await fixture('owner-secret');
+  const request = f.workspace.folders.request(f.dot.id, f.thread.id, {
+    reason: 'Read this folder',
+    folderHint: f.folder,
+    access: 'read',
+  });
+  const path = `/api/conversations/${f.thread.id}/folder-requests/${request.id}`;
+  const owner = { Authorization: 'Bearer owner-secret' };
+  expect(
+    await (await f.app.request(path, { headers: owner })).json(),
+  ).not.toHaveProperty('selection');
+  expect((await f.app.request(`${path}/resolve`, json({}))).status).toBe(401);
+  const post = (body: unknown, extra: Record<string, string> = {}) =>
+    f.app.request(`${path}/resolve`, {
+      ...json(body),
+      headers: { ...json(body).headers, ...owner, ...extra },
+    });
+  expect((await post({ path: f.folder })).status).toBe(400);
+  expect((await post({}, { Origin: 'https://evil.example' })).status).toBe(403);
+  expect(
+    (
+      await f.app.request(`http://remote.example${path}/resolve`, {
+        ...json({}),
+        headers: { ...json({}).headers, ...owner },
+      })
+    ).status,
+  ).toBe(403);
+  expect(
+    (
+      await f.app.request(
+        `${path}/resolve`,
+        { ...json({}), headers: { ...json({}).headers, ...owner } },
+        { incoming: { socket: { remoteAddress: '192.0.2.5' } } },
+      )
+    ).status,
+  ).toBe(403);
+  const resolved = await post({});
+  expect(resolved.status).toBe(200);
+  const detail = await resolved.json();
+  expect(detail).toMatchObject({
+    request: { status: 'pending' },
+    selection: { name: 'approved-folder' },
+  });
+  expect(f.workspace.folders.list(f.dot.id)).toEqual([]);
+  expect(await (await post({})).json()).toEqual(detail);
+  const other = f.workspace.bindThread(randomUUID(), f.dot.id, 'Other');
+  expect(
+    (
+      await f.app.request(
+        `/api/conversations/${other.id}/folder-requests/${request.id}/resolve`,
+        { ...json({}), headers: { ...json({}).headers, ...owner } },
+      )
+    ).status,
+  ).toBe(404);
+});

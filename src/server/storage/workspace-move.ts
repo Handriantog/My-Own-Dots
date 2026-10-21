@@ -16,6 +16,7 @@ import {
   createWorkspaceManifest,
   readWorkspaceManifest,
   sqliteStorageSchema,
+  supportedSQLiteStorageSchema,
 } from '../../shared/workspace-manifest.js';
 import { claimWorkspaceDatabase } from '../workspace-identity.js';
 import { validateArchivePaths } from './archive-paths.js';
@@ -58,7 +59,7 @@ export class WorkspaceMoveService {
     const manifest = await readWorkspaceManifest(directory);
     if (
       manifest?.storage !== 'sqlite' ||
-      manifest.schema !== sqliteStorageSchema
+      !supportedSQLiteStorageSchema(manifest.schema)
     )
       throw new Error('Migrate this workspace to SQLite before moving it');
     return { directory, database, databasePath, manifest };
@@ -210,6 +211,7 @@ export class WorkspaceMoveService {
           original.manifest.ownerId,
           signal,
           'sqlite',
+          original.manifest.schema as 2 | 3,
         );
         for (const file of artifacts)
           await copy(
@@ -217,7 +219,10 @@ export class WorkspaceMoveService {
             join(destination, file.target),
             file.sha256,
           );
-        await createWorkspaceManifest(destination, original.manifest);
+        await createWorkspaceManifest(destination, {
+          ...original.manifest,
+          schema: sqliteStorageSchema,
+        });
         const configuration = await readFile(
           join(original.directory, '.env'),
           'utf8',

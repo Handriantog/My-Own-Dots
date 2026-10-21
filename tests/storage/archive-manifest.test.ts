@@ -32,6 +32,14 @@ describe('archive manifest', () => {
       storage: { engine: 'sqlite', schema: 2 },
     };
     expect(parseArchiveManifest(JSON.stringify(unified))).toEqual(unified);
+    expect(
+      parseArchiveManifest(
+        JSON.stringify({
+          ...unified,
+          storage: { engine: 'sqlite', schema: 3 },
+        }),
+      ),
+    ).toMatchObject({ storage: { schema: 3 } });
     for (const storage of [
       undefined,
       { engine: 'postgres', schema: 2 },

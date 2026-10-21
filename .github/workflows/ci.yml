@@ -40,4 +40,8 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      - name: Speech worker protocol checks (no models or audio devices)
+        run: |
+          python3 -I -S -B scripts/local-voice/test_worker.py
+          python3 -I -S -B scripts/local-voice/test_native_worker.py
       - run: npm run build

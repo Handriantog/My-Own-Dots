@@ -6,6 +6,90 @@ auto-download, or worker-managed restart. The live call supervisor may replace a
 reasoning/tool/history path. Live calls use a separate process for each engine,
 so cancelling synthesis does not unload recognition or VAD.
 
+Basic live calls create only recognition and VAD workers. Their warmup verifies
+the `recognition` and `vad` dependency groups from `runtime-lock.json`; it does
+not require or import Kokoro, phonemizer or espeak. Medium additionally creates
+the synthesis worker, which verifies its own locked dependency group.
+
+For a Basic-only installation, use `requirements-basic.txt` with the same
+Python 3.12/arm64 environment and hash checks described below, and download only
+the manifest's `whisper` and `vad` assets. An existing complete Medium
+installation also supports Basic without reinstalling anything. Switching to
+Medium requires the complete `requirements.txt`, `kokoro` and `voices` assets.
+Selecting a quality never installs packages or downloads models automatically.
+
+## Explicit native High setup
+
+`setup_native.py` prepares the selected **LFM2.5 Audio 1.5B 4-bit** audio model
+and **Qwen3-4B-Instruct-2507 4-bit** conversation/task model. Qwen chooses words
+from the recognized caption and bounded conversation context; LFM receives the
+original audio while generating speech constrained to that reply. Audio cues
+do not determine Qwen's wording. The task classifier does not execute work.
+This owner-approved hybrid replaces the unreliable LFM small-talk generator. This setup targets
+**English, Apple Silicon, macOS 26+, ordinary-GIL CPython 3.14**. It reuses an
+explicit installed Python and the reviewed **uv 0.11.6** CLI; neither is downloaded.
+The pinned MLX wheels require macOS 26, even if another MLX version supports an
+older release.
+
+From the repository root, after choosing this installation explicitly:
+
+```sh
+python3 -I -S scripts/local-voice/setup_native.py \
+  --python /Library/Frameworks/Python.framework/Versions/3.14/bin/python3
+```
+
+The default destination is
+`~/Library/Application Support/My Own Dots/native-voice`; `--runtime-root` selects
+another dedicated absolute directory. `--uv /absolute/path/to/uv` selects an
+existing reviewed CLI when it is not on PATH. No owner configuration is changed.
+Model data totals **3,682,006,015 bytes (3.682 GB)** and the 36 retained wheel
+archives total **131,988,574 bytes**; the installed venv and runtime caches need
+additional disk space. Keep several GB free. Installation does not establish
+acceptable memory use or latency: GPU contention, call length and desktop load
+still matter. See the [native evaluation and package-safety limits](../../docs/desktop/native-voice-evaluation.md).
+
+When upgrading the earlier Qwen 1.7B runtime, use a fresh directory, for example
+`--runtime-root "$HOME/Library/Application Support/My Own Dots/native-voice-qwen4"`.
+The installer deliberately rejects an existing receipt or unlisted model files
+from a different manifest. After verification, set `LOCAL_VOICE_NATIVE_ROOT` in
+the selected workspace to the new absolute path, update any explicit
+`LOCAL_VOICE_NATIVE_PYTHON` to its `venv/bin/python`, and restart the app.
+The previous directory can remain available; do not delete it during an upgrade.
+
+For predownloaded data, pass `--offline --wheel-source /absolute/wheelhouse
+--model-source /absolute/models`. The wheel directory must contain the exact
+filenames in `native-wheels.json`; the model directory contains the two revision
+subdirectories from `native-models.json`. Missing offline data fails without a
+network request. Public downloads use credential-free `curl -q`, HTTPS-only
+redirects, explicit system CA data and byte/SHA-256 checks before atomic publication.
+Symlinks, unlisted model files and mismatched existing artifacts are rejected.
+
+Installation creates only this runtime's venv, without pip seed packages, then
+uses offline `uv pip sync --no-index --require-hashes --only-binary :all:`.
+`--only-binary :all:` prohibits source distributions and builds; the reviewed
+uv 0.11.6 rejects combining it with `--no-build`.
+The subprocess sandbox denies network during installation, Keychain contents and
+unrelated home-directory file contents/writes. Metadata reads remain available
+for canonicalizing allowed interpreter and runtime paths. No model, tokenizer configuration, package
+build script or installed package is executed by setup. The wheels contain native
+binaries that were identified and hashed, not fully audited; pins and a clean
+advisory query do not establish safety. No inference or audio device is opened.
+
+Repeat the command to verify and reuse a completed installation, or add
+`--verify-only --offline` to prohibit installation and downloads. Verification
+checks the artifacts and recorded installed-file hashes without importing packages.
+Stop native calls before setup. Handled installation failures remove only the new
+venv; verified downloads remain reusable. An abruptly interrupted, unmarked venv
+is rejected—inspect it and choose a fresh runtime directory rather than treating
+partial setup as ready. Successful setup alone does not enable High or replace
+the application's native-runtime acceptance checks.
+
+Run setup tests without network, installations or inference:
+
+```sh
+python3 -I -S -B scripts/local-voice/test_setup_native.py
+```
+
 ## Reviewable setup choice
 
 Metadata was checked on October 18, 2026. The owner subsequently authorized

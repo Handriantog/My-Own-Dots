@@ -27,6 +27,25 @@ def load_worker():
 
 
 class WorkerTests(unittest.TestCase):
+    def test_recognition_verifies_only_its_pinned_dependencies_without_tts(self):
+        lock = json.loads((HERE / "runtime-lock.json").read_text())
+        versions = {p["name"]: p["version"] for p in lock["packages"]}
+        recognition = {"pywhispercpp", "numpy", "requests", "tqdm", "platformdirs",
+                       "charset-normalizer", "idna", "urllib3", "certifi"}
+        checked = []
+        def version(name):
+            checked.append(name)
+            if name not in recognition:
+                raise self.worker.importlib.metadata.PackageNotFoundError(name)
+            return versions[name]
+        with patch.object(self.worker.sys, "version_info", (3, 12)), \
+                patch.object(self.worker.platform, "system", return_value="Darwin"), \
+                patch.object(self.worker.platform, "machine", return_value="arm64"), \
+                patch.object(self.worker.importlib.metadata, "version", side_effect=version), \
+                patch.object(self.worker, "load_recognition", return_value="recognition"):
+            self.assertEqual(self.worker.load_engines({"whisper": "local.bin"}), ("recognition", None))
+        self.assertEqual(set(checked), recognition)
+
     def setUp(self):
         self.assertTrue(WORKER.is_file(), "The bounded local speech worker is missing")
         self.worker = load_worker()

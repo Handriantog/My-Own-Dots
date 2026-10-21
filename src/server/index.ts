@@ -1,5 +1,8 @@
 import './local-defaults.js';
-import { readWorkspaceManifest } from '../shared/workspace-manifest.js';
+import {
+  readWorkspaceManifest,
+  updateWorkspaceManifestSchema,
+} from '../shared/workspace-manifest.js';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { LegacySnapshotSource } from './storage/legacy-snapshot.js';
@@ -69,6 +72,11 @@ const storage = await StorageClient.open({
   pinnedTokenLimit: localAi.memoryPinnedTokenLimit,
 });
 const { store, workspace } = storage.repositories;
+if (manifest?.storage === 'sqlite')
+  await updateWorkspaceManifestSchema(
+    dirname(resolve(process.env.DOTS_WORKSPACE_ENV || '.env')),
+    workspace.ownerId,
+  );
 const config: PlatformConfig = {
   ...localAi,
   intelligenceKey: intelligenceApiKeyFromEnv(process.env),

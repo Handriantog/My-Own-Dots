@@ -13,9 +13,11 @@ import { Mascot } from './Mascot';
 import type { Dot } from '../shared/types';
 import type { useVoice } from './useVoice';
 import type { VoicePhase } from '../shared/local-voice';
+import type { VoiceQuality } from '../shared/voice-settings';
 
 export type VoiceControls = Omit<ReturnType<typeof useVoice>, 'phase'> & {
   phase: VoicePhase;
+  quality?: VoiceQuality;
   notice?: string;
   interrupt?: () => void | Promise<void>;
 };
@@ -30,7 +32,8 @@ export function CallView({
   companionColor?: string;
 }) {
   const [collapsed, setMinimized] = useState(false);
-  const minimized = collapsed || voice.phase === 'approval';
+  const basic = voice.quality === 'basic';
+  const minimized = basic || collapsed || voice.phase === 'approval';
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (voice.status !== 'active') return;
@@ -63,13 +66,14 @@ export function CallView({
     >
       <div className="call-heading">
         <span>
-          <span className="call-live-dot" /> Voice call
+          <span className="call-live-dot" />{' '}
+          {basic ? 'Basic · Text replies' : 'Voice call'}
         </span>
         <button
           className="call-minimize"
           aria-label={minimized ? 'Expand call view' : 'Minimize call view'}
           onClick={() => setMinimized(!minimized)}
-          disabled={voice.phase === 'approval'}
+          disabled={basic || voice.phase === 'approval'}
         >
           {minimized ? <Maximize2 size={18} /> : <ChevronDown size={20} />}
         </button>
@@ -123,17 +127,19 @@ export function CallView({
             <small>Interrupt</small>
           </button>
         )}
-        <button
-          aria-label={
-            voice.speakerMuted ? 'Enable call audio' : 'Mute call audio'
-          }
-          aria-pressed={voice.speakerMuted}
-          onClick={voice.toggleSpeaker}
-          disabled={voice.status !== 'active'}
-        >
-          <span>{voice.speakerMuted ? <VolumeX /> : <Volume2 />}</span>
-          <small>Speaker</small>
-        </button>
+        {!basic && (
+          <button
+            aria-label={
+              voice.speakerMuted ? 'Enable call audio' : 'Mute call audio'
+            }
+            aria-pressed={voice.speakerMuted}
+            onClick={voice.toggleSpeaker}
+            disabled={voice.status !== 'active'}
+          >
+            <span>{voice.speakerMuted ? <VolumeX /> : <Volume2 />}</span>
+            <small>Speaker</small>
+          </button>
+        )}
         <button
           className="call-end"
           aria-label="End voice call"

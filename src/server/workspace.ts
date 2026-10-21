@@ -12,6 +12,7 @@ import type { VoiceDelivery } from '../shared/local-voice.js';
 import {
   DEFAULT_VOICE_SETTINGS,
   voiceSettingsSchema,
+  voiceSettingsUpdateSchema,
   type VoiceSettings,
 } from '../shared/voice-settings.js';
 import { validateLearningSettings } from '../shared/learning.js';
@@ -160,7 +161,11 @@ export class WorkspaceStore {
   }
   setVoiceSettings(dotId: string, input: unknown): VoiceSettings {
     if (!this.dot(dotId)) throw new Error('Dot not found.');
-    const settings = voiceSettingsSchema.parse(input);
+    const update = voiceSettingsUpdateSchema.parse(input);
+    const settings = voiceSettingsSchema.parse({
+      ...update,
+      quality: update.quality ?? this.voiceSettings(dotId).quality,
+    });
     this.db
       .prepare(
         'INSERT OR REPLACE INTO dot_voice_settings(dotId,value) VALUES (?,?)',

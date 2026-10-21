@@ -192,6 +192,7 @@ export class RestoreService {
             manifest.ownerId,
             signal,
             unified ? 'sqlite' : 'legacy-postgres',
+            manifest.version === 2 ? manifest.storage.schema : undefined,
           );
       const postgres = unified
         ? undefined

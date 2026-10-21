@@ -1,4 +1,5 @@
 import type { RuntimePolicy } from './runtime-policy.js';
+import type { VoiceDelegations } from './voice-delegations.js';
 import type { MemoryJobRepository } from '../memory-jobs.js';
 import type { SQLiteSnapshot } from './sqlite-snapshot.js';
 import type { MemoryAccess } from '../memory-access.js';
@@ -41,9 +42,25 @@ interface Repositories {
   publication: DreamPublication;
   context: ContextBuilder;
   policy: RuntimePolicy;
+  voiceDelegations: VoiceDelegations;
 }
 // Explicit names are the wire protocol. Never dispatch arbitrary paths/prototype properties.
 export const repositoryMethods = {
+  voiceDelegations: [
+    'threadContext',
+    'interrupt',
+    'enqueue',
+    'get',
+    'forThread',
+    'list',
+    'claim',
+    'renew',
+    'settle',
+    'cancel',
+    'expireApprovals',
+    'recover',
+    'markDelivered',
+  ],
   snapshot: ['capture'],
   policy: [
     'turnState',
@@ -231,6 +248,8 @@ export const repositoryMethods = {
   folders: [
     'request',
     'getRequest',
+    'reviewRequests',
+    'resolve',
     'select',
     'decide',
     'list',
@@ -296,6 +315,7 @@ export type AsyncWorkspace = AsyncRepository<'workspace'> & {
   folders: AsyncRepository<'folders'>;
 };
 export interface AsyncRepositories {
+  voiceDelegations: AsyncRepository<'voiceDelegations'>;
   evidence: AsyncRepository<'evidence'> & {
     indexRun(runId: string): Promise<void>;
   };

@@ -56,6 +56,11 @@ async function mount(next = props) {
     root = create(createElement(FolderAccessCard, next));
   });
 }
+async function mountCompact() {
+  await act(async () => {
+    root = create(createElement(FolderAccessCard, { ...props, compact: true }));
+  });
+}
 function text() {
   return JSON.stringify(root!.toJSON());
 }
@@ -125,6 +130,111 @@ it('requires an owner picker gesture and a separate approval of the verified fol
     },
   ]);
   expect(props.respond).toHaveBeenCalledExactlyOnceWith(approved);
+});
+
+it('preselects a resolved folder in the compact panel but waits for approval', async () => {
+  const original = api.getMockImplementation()!;
+  api.mockImplementation(async (path, ...args) =>
+    path === `${base}/resolve`
+      ? { request: pendingRequest, selection }
+      : original(path, ...args),
+  );
+  await mountCompact();
+  expect(mutations()).toEqual([[`${base}/resolve`, 'POST', {}]]);
+  expect(choose).not.toHaveBeenCalled();
+  expect(props.respond).not.toHaveBeenCalled();
+  expect(text()).toContain(selection.path);
+  expect(text()).not.toContain(pendingRequest.reason);
+  expect(text()).not.toContain('Suggested folder:');
+  expect(text()).not.toContain('Only the selected folder');
+  expect(button('Approve folder access').props.disabled).toBe(false);
+  expect(button('Choose folder').props.children).toBe('Change');
+  await click('Approve folder access');
+  expect(mutations().at(-1)).toEqual([
+    `${base}/decision`,
+    'POST',
+    {
+      toolCallId: 'call',
+      approve: true,
+      selectionId,
+      access: 'read',
+    },
+  ]);
+  expect(props.respond).toHaveBeenCalledExactlyOnceWith(approved);
+});
+
+it('falls back to choosing a folder when default lookup cannot find one', async () => {
+  const original = api.getMockImplementation()!;
+  api.mockImplementation(async (path, ...args) =>
+    path === `${base}/resolve`
+      ? { request: pendingRequest }
+      : original(path, ...args),
+  );
+  await mountCompact();
+  expect(button('Approve folder access').props.disabled).toBe(true);
+  expect(button('Choose folder').props.children).toBe('Choose folder');
+  expect(text()).toContain(pendingRequest.folderHint);
+  await click('Choose folder');
+  expect(choose).toHaveBeenCalledOnce();
+  expect(button('Approve folder access').props.disabled).toBe(false);
+});
+
+it('does not replace a manual choice with a late default lookup', async () => {
+  let resolve!: (value: unknown) => void;
+  const original = api.getMockImplementation()!;
+  api.mockImplementation(async (path, ...args) =>
+    path === `${base}/resolve`
+      ? new Promise((done) => {
+          resolve = done;
+        })
+      : original(path, ...args),
+  );
+  await mountCompact();
+  await click('Choose folder');
+  await act(async () =>
+    resolve({
+      request: pendingRequest,
+      selection: {
+        ...selection,
+        id: 'late',
+        path: '/late/default',
+        name: 'Late default',
+      },
+    }),
+  );
+  expect(text()).toContain(selection.path);
+  expect(text()).not.toContain('/late/default');
+  await click('Approve folder access');
+  expect(mutations().at(-1)?.[2].selectionId).toBe(selection.id);
+});
+
+it('keeps the resolved folder when an older refresh arrives later', async () => {
+  let resolve!: (value: unknown) => void;
+  let refresh!: (value: unknown) => void;
+  const events = Object.assign(new EventTarget(), { dotFolders: { choose } });
+  vi.stubGlobal('window', events);
+  const original = api.getMockImplementation()!;
+  api.mockImplementation(async (path, ...args) =>
+    path === `${base}/resolve`
+      ? new Promise((done) => {
+          resolve = done;
+        })
+      : original(path, ...args),
+  );
+  await mountCompact();
+  api.mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        refresh = done;
+      }),
+  );
+  await act(async () => {
+    events.dispatchEvent(new Event('focus'));
+  });
+  await act(async () => resolve({ request: pendingRequest, selection }));
+  await act(async () => refresh({ request: pendingRequest }));
+  expect(text()).toContain(selection.path);
+  expect(button('Approve folder access').props.disabled).toBe(false);
 });
 
 it('lets the owner explicitly choose read and write access', async () => {
@@ -383,4 +493,55 @@ it('does not respond with a cached approval when the server rejects its tool cal
   expect(props.respond).not.toHaveBeenCalled();
   expect(text()).toContain('already decided by another tool call');
   expect(button('Continue conversation').props.disabled).toBe(false);
+});
+
+it.each([approved, declined])(
+  'reloads a decision made in another window without automatically resuming: $approved',
+  async (decision) => {
+    vi.useFakeTimers();
+    try {
+      await mount();
+      detail = {
+        request: {
+          ...pendingRequest,
+          status: decision.approved ? 'approved' : 'declined',
+        },
+        decision,
+      };
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(
+        root!.root.findAllByProps({ 'aria-label': 'Choose folder' }),
+      ).toHaveLength(0);
+      expect(button('Continue conversation').props.disabled).toBe(false);
+      expect(props.respond).not.toHaveBeenCalled();
+      await click('Continue conversation');
+      expect(props.respond).toHaveBeenCalledExactlyOnceWith(decision);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it('does not let an old refresh overwrite the folder selected by the owner', async () => {
+  vi.useFakeTimers();
+  try {
+    await mount();
+    let resolve!: (value: unknown) => void;
+    api.mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    await click('Choose folder');
+    await act(async () => resolve({ request: pendingRequest }));
+    expect(button('Approve folder access').props.disabled).toBe(false);
+    expect(text()).toContain('/approved/Project notes');
+  } finally {
+    vi.useRealTimers();
+  }
 });

@@ -1,5 +1,34 @@
 {
   "schemaVersion": 1,
+  "modes": {
+    "recognition": [
+      "pywhispercpp",
+      "numpy",
+      "requests",
+      "tqdm",
+      "platformdirs",
+      "charset-normalizer",
+      "idna",
+      "urllib3",
+      "certifi"
+    ],
+    "vad": ["onnxruntime", "numpy", "flatbuffers", "packaging", "protobuf"],
+    "synthesis": [
+      "kokoro-onnx",
+      "espeakng-loader",
+      "numpy",
+      "onnxruntime",
+      "flatbuffers",
+      "packaging",
+      "protobuf",
+      "phonemizer",
+      "joblib",
+      "cloudpickle",
+      "attrs",
+      "dlinfo",
+      "typing-extensions"
+    ]
+  },
   "resolvedAt": "2026-10-18",
   "target": {
     "python": "3.12",

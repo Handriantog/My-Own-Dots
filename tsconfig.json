@@ -16,6 +16,7 @@
     "src",
     "tests",
     "vite.config.ts",
+    "vitest.config.ts",
     "vite.desktop.config.ts",
     "vite.workspace.config.ts"
   ]

@@ -28,10 +28,29 @@ import {
 import {
   mergeInputMessages,
   replayRun,
+  type ConversationSnapshot,
   type LocalConversationStore,
   type ThreadLease,
 } from './local-conversations.js';
 
+export interface RunLifecycle {
+  begin(request: {
+    agentId: string;
+    input: RunAgentInput;
+    signal: AbortSignal;
+    abort(): void;
+  }): Promise<
+    | {
+        settle(outcome: {
+          input: RunAgentInput;
+          failed: boolean;
+          stopped: boolean;
+          snapshot?: ConversationSnapshot;
+        }): Promise<void>;
+      }
+    | undefined
+  >;
+}
 interface EvidenceAgent extends AbstractAgent {
   evidenceGuard?(threadId: string): EvidenceGuard | Promise<EvidenceGuard>;
   setEvidenceRecorder?(record?: (guard: EvidenceGuard) => Promise<void>): void;
@@ -79,6 +98,7 @@ export class LocalAgentRunner extends AgentRunner {
       ): Promise<() => void>;
     },
     private maintenance?: MaintenanceGate,
+    private lifecycle?: RunLifecycle,
   ) {
     super();
   }
@@ -207,6 +227,8 @@ export class LocalAgentRunner extends AgentRunner {
       void active.agent.detachActiveRun();
     };
     let canonicalInput = request.input;
+    let lifecycle: Awaited<ReturnType<RunLifecycle['begin']>> = undefined;
+    let finalSnapshot: ConversationSnapshot | undefined;
     try {
       if (request.threadId !== request.input.threadId)
         throw new Error('Conversation scope mismatch.');
@@ -245,6 +267,12 @@ export class LocalAgentRunner extends AgentRunner {
       );
       const input = { ...request.input, messages, state: snapshot.state };
       canonicalInput = input;
+      lifecycle = await this.lifecycle?.begin({
+        agentId: request.agent.agentId ?? 'default',
+        input,
+        signal: active.activityController.signal,
+        abort: onStorageLost,
+      });
       const evidenceAgent = request.agent as EvidenceAgent;
       await lease.beginRun(
         input,
@@ -256,6 +284,8 @@ export class LocalAgentRunner extends AgentRunner {
         await lease.addEvidenceGuard(guard);
       });
       begun = true;
+      if (active.storageFailed)
+        throw new Error('Execution ownership was lost.');
       if (active.stopRequested) throw new Error('Run stopped by user.');
       request.agent.threadId = request.threadId;
       request.agent.setMessages(messages);
@@ -325,6 +355,7 @@ export class LocalAgentRunner extends AgentRunner {
         active.stopRequested ? 'stopped' : failed ? 'failed' : 'finished',
         active.events.at(-1),
       );
+      finalSnapshot = await lease.read();
     } catch (error) {
       failure = error;
       // Input/connection errors never start a provider. Storage failures leave
@@ -359,6 +390,7 @@ export class LocalAgentRunner extends AgentRunner {
             'stopped',
             active.events.at(-1),
           );
+          finalSnapshot = await lease.read();
           failure = undefined;
         } catch {
           failure = new Error('Conversation storage failed while stopping.');
@@ -377,6 +409,20 @@ export class LocalAgentRunner extends AgentRunner {
         failure ??= new Error(
           'Conversation storage connection could not be released.',
         );
+      }
+      try {
+        await lifecycle?.settle({
+          input: canonicalInput,
+          failed: Boolean(
+            failure ||
+            active.storageFailed ||
+            active.events.some((event) => event.type === EventType.RUN_ERROR),
+          ),
+          stopped: active.stopRequested,
+          snapshot: finalSnapshot,
+        });
+      } catch {
+        failure ??= new Error('Delegated task state could not be saved.');
       }
       releaseForeground?.();
       memoryMetrics.observe('turn', performance.now() - turnStarted, false);

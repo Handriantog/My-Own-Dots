@@ -13,9 +13,11 @@ import {
   DEFAULT_VOICE_SETTINGS,
   PERSONALITIES,
   VOICES,
+  VOICE_QUALITIES,
   voiceSettingsSchema,
   type VoiceSettings as Settings,
 } from '../../shared/voice-settings';
+import type { LocalVoiceStatus } from '../../shared/local-voice';
 
 export interface VoiceSettingsHandle {
   stopPreview(): void;
@@ -26,6 +28,9 @@ export interface VoiceSettingsProps {
   callActive: boolean;
   previewReady: boolean;
   unavailableReason?: string;
+  status?: LocalVoiceStatus;
+  onSaved?: () => void;
+  initiallyOpen?: boolean;
   ref?: Ref<VoiceSettingsHandle>;
 }
 
@@ -93,10 +98,13 @@ function DotVoiceSettings({
   callActive,
   previewReady,
   unavailableReason,
+  status,
+  onSaved,
+  initiallyOpen = false,
   ref,
 }: VoiceSettingsProps) {
   const id = useId();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initiallyOpen);
   const [draft, setDraft] = useState<Settings>(DEFAULT_VOICE_SETTINGS);
   const [saved, setSaved] = useState<Settings | null>(null);
   const [loading, setLoading] = useState(false);
@@ -109,6 +117,8 @@ function DotVoiceSettings({
   >('idle');
   const preview = useRef<Preview | null>(null);
   const saveRequest = useRef<AbortController | null>(null);
+  const lastSettingsRevision = useRef<string | undefined>(undefined);
+  const settingsRevision = status?.settingsRevision ?? status?.selectedQuality;
   const path = `/api/local-voice/dots/${encodeURIComponent(dotId)}`;
 
   const stopPreview = useCallback(() => {
@@ -134,12 +144,19 @@ function DotVoiceSettings({
 
   useEffect(() => {
     if (!open) return;
+    const changed =
+      lastSettingsRevision.current !== undefined &&
+      lastSettingsRevision.current !== settingsRevision;
+    lastSettingsRevision.current = settingsRevision;
+    stopPreview();
     const controller = new AbortController();
     let current = true;
     setLoading(true);
     setSaved(null);
     setError('');
-    setNotice('');
+    setNotice(
+      changed ? 'Voice settings refreshed. Review the current choices.' : '',
+    );
     void bounded(controller, async (signal) => {
       const response = await fetch(`${path}/settings`, {
         method: 'GET',
@@ -169,15 +186,18 @@ function DotVoiceSettings({
       current = false;
       controller.abort();
     };
-  }, [open, path, attempt]);
+  }, [open, path, attempt, settingsRevision, stopPreview]);
 
   const disabled = callActive || loading || saving || !saved;
   const dirty =
+    saved?.quality !== draft.quality ||
     saved?.voiceId !== draft.voiceId ||
     saved?.personality !== draft.personality;
   const personality = PERSONALITIES.find(
     (item) => item.id === draft.personality,
   )!;
+  const canPreview =
+    previewReady && draft.quality === 'medium' && saved?.quality === 'medium';
   const update = (settings: Settings) => {
     stopPreview();
     setDraft(settings);
@@ -206,6 +226,7 @@ function DotVoiceSettings({
         setSaved(settings);
         setDraft(settings);
         setNotice('Saved');
+        onSaved?.();
       })
       .catch((failure: unknown) => {
         if (saveRequest.current === controller)
@@ -222,7 +243,7 @@ function DotVoiceSettings({
       });
   };
   const startPreview = () => {
-    if (disabled || !previewReady) return;
+    if (disabled || !canPreview) return;
     stopPreview();
     setError('');
     setNotice('');
@@ -318,13 +339,35 @@ function DotVoiceSettings({
           aria-busy={loading || saving}
         >
           <div className="voice-settings-fields">
+            <label htmlFor={`${id}-quality`} className="voice-quality-field">
+              Voice chat quality
+              <select
+                id={`${id}-quality`}
+                aria-label="Voice chat quality"
+                aria-describedby={`${id}-quality-description`}
+                value={draft.quality}
+                disabled={disabled}
+                onChange={(event) =>
+                  update({
+                    ...draft,
+                    quality: event.target.value as Settings['quality'],
+                  })
+                }
+              >
+                {VOICE_QUALITIES.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label htmlFor={`${id}-voice`}>
               Voice
               <select
                 id={`${id}-voice`}
                 aria-label="Voice"
                 value={draft.voiceId}
-                disabled={disabled}
+                disabled={disabled || draft.quality !== 'medium'}
                 onChange={(event) =>
                   update({
                     ...draft,
@@ -374,6 +417,27 @@ function DotVoiceSettings({
               </select>
             </label>
           </div>
+          <p id={`${id}-quality-description`}>
+            {
+              VOICE_QUALITIES.find((item) => item.id === draft.quality)!
+                .description
+            }
+          </p>
+          {draft.quality === 'high' && (
+            <p role="status">
+              {status?.modes?.high.reason ||
+                'High is not available yet. A local native audio runtime and task delegation must be validated first.'}
+            </p>
+          )}
+          {draft.quality === 'basic' && (
+            <p>
+              Text replies appear in chat. Voice preview and speaker output are
+              off.
+            </p>
+          )}
+          {draft.quality === 'medium' && saved?.quality !== 'medium' && (
+            <p>Save Medium quality to preview a voice.</p>
+          )}
           <p id={`${id}-description`}>
             {personality.description}. Voice applies to your next call;
             personality applies to future replies.
@@ -390,7 +454,7 @@ function DotVoiceSettings({
               aria-label={
                 previewState === 'idle' ? 'Preview voice' : 'Stop voice preview'
               }
-              disabled={disabled || !previewReady}
+              disabled={disabled || !canPreview}
               onClick={previewState === 'idle' ? startPreview : stopPreview}
             >
               {previewState === 'idle' ? (

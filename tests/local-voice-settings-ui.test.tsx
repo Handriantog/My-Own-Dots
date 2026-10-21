@@ -6,9 +6,15 @@ import {
   type VoiceSettingsHandle,
   type VoiceSettingsProps,
 } from '../src/client/local-voice/VoiceSettings';
+import { WorkspaceDialog } from '../src/client/WorkspaceDialog';
+import type { Dot, State, WorkspaceState } from '../src/shared/types';
 
 vi.mock('../src/client/api', () => ({
   authHeaders: () => ({ Authorization: 'Bearer owner-token' }),
+  api: vi.fn(async () => []),
+}));
+vi.mock('../src/client/LocalLearningSettings', () => ({
+  LocalLearningSettings: () => null,
 }));
 
 function deferred<T>() {
@@ -125,10 +131,82 @@ it('loads the Dot settings on expansion and saves edits only after explicit Save
   expect(JSON.parse(String(init!.body))).toEqual({
     voiceId: 'bm_george',
     personality: 'calm',
+    quality: 'medium',
   });
   expect(init!.headers).toMatchObject({ Authorization: 'Bearer owner-token' });
   expect(button('Save voice settings').props.disabled).toBe(true);
   expect(JSON.stringify(root!.toJSON())).toContain('Saved');
+});
+
+it('saves all three quality choices before setup, refreshes readiness, and never previews Basic or High', async () => {
+  const onSaved = vi.fn();
+  await mount({ ...props, previewReady: false, onSaved });
+  expect(
+    select('Voice chat quality')
+      .findAllByType('option')
+      .map((option) => option.props.value),
+  ).toEqual(['basic', 'medium', 'high']);
+  await change('Voice chat quality', 'basic');
+  expect(select('Voice').props.disabled).toBe(true);
+  await click('Preview voice');
+  expect(FakeAudioContext.instances).toHaveLength(0);
+  await click('Save voice settings');
+  expect(JSON.parse(String(settingsCalls('PUT')[0][1]!.body))).toEqual({
+    ...defaults,
+    quality: 'basic',
+  });
+  expect(onSaved).toHaveBeenCalledOnce();
+  await change('Voice chat quality', 'high');
+  expect(JSON.stringify(root!.toJSON())).toContain('not available yet');
+  await click('Save voice settings');
+  expect(JSON.parse(String(settingsCalls('PUT')[1][1]!.body)).quality).toBe(
+    'high',
+  );
+  expect(FakeAudioContext.instances).toHaveLength(0);
+  await change('Voice chat quality', 'medium');
+  expect(select('Voice').props.value).toBe('af_heart');
+});
+
+it('makes the persisted quality selector available directly in the existing Dot settings before setup', async () => {
+  const dot = {
+    id: 'dot-a',
+    name: 'Dot',
+    spaceId: 'space',
+    spaceIds: ['space'],
+  } as Dot;
+  const onSaved = vi.fn();
+  await act(async () => {
+    root = create(
+      <WorkspaceDialog
+        embedded
+        dialog={{ type: 'dot', dot, spaceId: 'space' }}
+        state={{ settings: {} } as State}
+        workspace={
+          {
+            spaces: [{ id: 'space', name: 'Space' }],
+            setup: { conversationBackend: 'local', llmBackend: 'subscription' },
+          } as WorkspaceState
+        }
+        voiceStatus={{
+          enabled: false,
+          ready: false,
+          reason: 'Speech models need setup.',
+        }}
+        onVoiceSettingsSaved={onSaved}
+        onClose={() => {}}
+        mutate={vi.fn()}
+      />,
+    );
+  });
+  expect(select('Voice chat quality').props.disabled).toBe(false);
+  await change('Voice chat quality', 'basic');
+  await click('Save voice settings');
+  expect(settingsCalls('PUT')[0][0]).toBe(
+    '/api/local-voice/dots/dot-a/settings',
+  );
+  expect(onSaved).toHaveBeenCalledOnce();
+  expect(root!.root.findAllByType('form')).toHaveLength(1);
+  expect(FakeAudioContext.instances).toHaveLength(0);
 });
 
 it('keeps unsaved choices and allows retry after a failed save', async () => {
@@ -145,6 +223,59 @@ it('keeps unsaved choices and allows retry after a failed save', async () => {
   expect(button('Save voice settings').props.disabled).toBe(false);
   await click('Save voice settings');
   expect(button('Save voice settings').props.disabled).toBe(true);
+});
+
+it('refreshes both settings surfaces and stops preview when one saves a different quality', async () => {
+  let persisted = { ...defaults, quality: 'medium' };
+  fetchMock.mockImplementation(async (_url, init) => {
+    if (init?.method === 'POST') return wav();
+    if (init?.method === 'PUT') persisted = JSON.parse(String(init.body));
+    return Response.json(persisted);
+  });
+  const views = () => (
+    <div>
+      {[0, 1].map((key) => (
+        <VoiceSettings
+          key={key}
+          {...props}
+          initiallyOpen
+          status={{
+            enabled: true,
+            ready: true,
+            reason: '',
+            selectedQuality: persisted.quality as 'basic' | 'medium',
+            settingsRevision: JSON.stringify(persisted),
+          }}
+          onSaved={() => root!.update(views())}
+        />
+      ))}
+    </div>
+  );
+  await act(async () => {
+    root = create(views());
+  });
+  const control = (index: number, label: string) => {
+    const panel = root!.root.findAllByType(VoiceSettings)[index];
+    return panel.findByProps({ 'aria-label': label });
+  };
+  await act(async () => control(1, 'Preview voice').props.onClick());
+  const context = FakeAudioContext.instances[0];
+  expect(context.source.start).toHaveBeenCalledOnce();
+  await act(async () =>
+    control(0, 'Voice chat quality').props.onChange({
+      target: { value: 'basic' },
+    }),
+  );
+  await act(async () => control(0, 'Save voice settings').props.onClick());
+  expect(control(1, 'Voice chat quality').props.value).toBe('basic');
+  expect(control(1, 'Preview voice').props.disabled).toBe(true);
+  expect(context.close).toHaveBeenCalledOnce();
+  await act(async () =>
+    control(1, 'Personality').props.onChange({ target: { value: 'calm' } }),
+  );
+  await act(async () => control(1, 'Save voice settings').props.onClick());
+  expect(persisted).toMatchObject({ quality: 'basic', personality: 'calm' });
+  expect(control(0, 'Personality').props.value).toBe('calm');
 });
 
 it('aborts an old Dot save and ignores its response after switching Dots', async () => {
@@ -185,6 +316,7 @@ it('unlocks audio in the Preview gesture, previews unsaved choices, and releases
   expect(JSON.parse(String(settingsCalls('POST')[0][1]!.body))).toEqual({
     voiceId: 'bf_emma',
     personality: 'natural',
+    quality: 'medium',
   });
   const context = FakeAudioContext.instances[0];
   expect(context.source.start).not.toHaveBeenCalled();

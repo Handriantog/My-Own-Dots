@@ -1,5 +1,6 @@
 /** Content-free diagnostics. All durations use the server's monotonic clock. */
 import { recognitionReasons } from './recognition-diagnostics.js';
+import type { VoiceQuality } from '../../shared/voice-settings.js';
 
 const stages = [
   'speech_end_detected',
@@ -23,6 +24,7 @@ const stages = [
   'adapter_cancelled',
   'text_saved',
   'canonical_answer_ready',
+  'text_reply_complete',
   'synthesis_started',
   'synthesis_restarting',
   'synthesis_ready',
@@ -70,6 +72,7 @@ export class VoiceTurnTiming {
   private readonly enabled: boolean;
   private readonly now: () => number;
   private readonly write: (row: string) => void;
+  private readonly quality: VoiceQuality;
   private readonly seen = new Set<string>();
   private readonly first = new Map<Stage, number>();
   private rows = 0;
@@ -82,11 +85,13 @@ export class VoiceTurnTiming {
       enabled?: boolean;
       now?: () => number;
       write?: (row: string) => void;
+      quality?: VoiceQuality;
     } = {},
   ) {
     this.enabled =
       options.enabled ?? process.env.LOCAL_VOICE_TIMING_LOG === '1';
     this.now = options.now ?? (() => performance.now());
+    this.quality = options.quality ?? 'medium';
     this.write =
       options.write ?? ((row) => console.info('[voice-timing]', row));
   }
@@ -161,7 +166,7 @@ export class VoiceTurnTiming {
     const elapsedMs = Math.max(0, this.now() - this.origin);
     if (!this.first.has(stage)) this.first.set(stage, elapsedMs);
     this.emit({ event: 'stage', stage, step, elapsedMs: round(elapsedMs) });
-    if (stage === 'first_playback_ack') {
+    if (stage === 'first_playback_ack' || stage === 'text_reply_complete') {
       const durations: Record<string, number> = {};
       for (const [name, from, to] of intervals) {
         const start = from ? this.first.get(from) : 0;
@@ -170,7 +175,8 @@ export class VoiceTurnTiming {
           durations[name] = round(end - start);
       }
       this.emit({
-        event: 'first_playback',
+        event:
+          stage === 'text_reply_complete' ? 'text_reply' : 'first_playback',
         elapsedMs: round(elapsedMs),
         durations,
       });
@@ -259,6 +265,7 @@ export class VoiceTurnTiming {
           at: new Date().toISOString(),
           callId: this.callId,
           messageId: this.messageId,
+          quality: this.quality,
           ...data,
         }),
       );

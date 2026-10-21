@@ -24,11 +24,12 @@ export async function copyValidatedSQLite(
   ownerId: string,
   signal: AbortSignal,
   engine: 'legacy-postgres' | 'sqlite' = 'legacy-postgres',
+  expectedSchema?: 2 | 3,
 ) {
   const baselineDirectory = await mkdtemp(
     join(dirname(destination), '.schema-'),
   );
-  let expected: ReturnType<typeof inventory>;
+  const supported = new Map<number, ReturnType<typeof inventory>>();
   try {
     const baselinePath = join(baselineDirectory, 'baseline.sqlite');
     const store = new Store(baselinePath);
@@ -38,14 +39,17 @@ export async function copyValidatedSQLite(
     if (engine === 'sqlite') {
       const schema = new DatabaseSync(baselinePath);
       try {
+        initializeSQLiteSchema(schema, 2);
+        supported.set(2, inventory(schema));
         initializeSQLiteSchema(schema);
+        supported.set(sqliteStorageSchema, inventory(schema));
       } finally {
         schema.close();
       }
     }
     const baseline = new DatabaseSync(baselinePath, { readOnly: true });
     try {
-      expected = inventory(baseline);
+      if (engine !== 'sqlite') supported.set(0, inventory(baseline));
     } finally {
       baseline.close();
     }
@@ -55,8 +59,12 @@ export async function copyValidatedSQLite(
   const original = new DatabaseSync(source, { readOnly: true });
   try {
     original.exec('PRAGMA trusted_schema=OFF');
-    if (JSON.stringify(inventory(original)) !== JSON.stringify(expected))
-      throw new Error('Unsupported SQLite restore schema');
+    const actual = JSON.stringify(inventory(original));
+    const match = [...supported.entries()].find(
+      ([, expected]) => actual === JSON.stringify(expected),
+    );
+    if (!match) throw new Error('Unsupported SQLite restore schema');
+    const [version, expected] = match;
     if (
       engine === 'sqlite' &&
       Number(
@@ -65,9 +73,11 @@ export async function copyValidatedSQLite(
             'SELECT max(version) AS version FROM workspace_storage_schema',
           )
           .get()!.version,
-      ) !== sqliteStorageSchema
+      ) !== version
     )
       throw new Error('Unsupported SQLite storage version');
+    if (expectedSchema !== undefined && expectedSchema !== version)
+      throw new Error('SQLite archive schema does not match its manifest');
     const check = original.prepare('PRAGMA integrity_check').all();
     if (check.length !== 1 || check[0].integrity_check !== 'ok')
       throw new Error('SQLite integrity check failed');
@@ -89,7 +99,7 @@ export async function copyValidatedSQLite(
           throw new Error('Invalid SQLite owner');
     }
     if (engine === 'sqlite')
-      await validateUnifiedGraph(original, ownerId, signal);
+      await validateUnifiedGraph(original, ownerId, signal, version);
   } finally {
     original.close();
     // These sidecars belong to the private extracted snapshot, not the source workspace.
@@ -106,11 +116,20 @@ export async function restoreSQLite(
   ownerId: string,
   signal: AbortSignal,
   engine: 'legacy-postgres' | 'sqlite' = 'legacy-postgres',
+  expectedSchema?: 2 | 3,
 ) {
-  await copyValidatedSQLite(source, destination, ownerId, signal, engine);
+  await copyValidatedSQLite(
+    source,
+    destination,
+    ownerId,
+    signal,
+    engine,
+    expectedSchema,
+  );
   const db = new DatabaseSync(destination);
   const counts: Record<string, number> = {};
   try {
+    if (engine === 'sqlite') initializeSQLiteSchema(db);
     db.exec(
       'PRAGMA trusted_schema=OFF; PRAGMA synchronous=FULL; BEGIN IMMEDIATE',
     );
@@ -133,6 +152,7 @@ export async function restoreSQLite(
             'memory_jobs',
             'memory_evidence',
             'memory_checkpoints',
+            'voice_delegations',
           ]
         : []),
     ])
@@ -161,7 +181,7 @@ export async function restoreSQLite(
         'memory_restore_previews',
         'memory_settings',
         'setup_telemetry',
-        ...(engine === 'sqlite' ? ['memory_jobs'] : []),
+        ...(engine === 'sqlite' ? ['memory_jobs', 'voice_delegations'] : []),
       ])
         for (const row of db.prepare(`SELECT * FROM "${table}"`).iterate()) {
           signal.throwIfAborted();
@@ -212,6 +232,7 @@ export async function restoreSQLite(
       UPDATE memory_evidence SET workflow_complete=0 WHERE EXISTS(SELECT 1 FROM conversation_runs r WHERE r.owner_id=memory_evidence.owner_id AND r.thread_id=memory_evidence.thread_id AND r.run_id=memory_evidence.run_id AND r.status='running');
       UPDATE conversation_runs SET status='interrupted' WHERE status='running';
       UPDATE memory_jobs SET state='cancelled',error='Interrupted by workspace recovery',lease_token=NULL,lease_until=NULL,call_started_at=NULL WHERE state IN ('queued','running');
+      UPDATE voice_delegations SET status='interrupted',error='Interrupted by workspace recovery; approve a fresh task to retry.',lease_token=NULL,lease_until=NULL,lease_generation=lease_generation+1,receipt_message_id=NULL,delivered_at=NULL,updated_at=${Date.now()} WHERE status IN ('queued','running','approval');
     `);
     for (const row of db
       .prepare('SELECT ownerId,dotId,value FROM memory_settings')

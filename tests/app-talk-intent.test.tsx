@@ -83,7 +83,8 @@ beforeEach(() => {
           llmBackend: 'subscription',
         },
       };
-    if (path === '/local-voice/status') return { enabled: true, ready: true };
+    if (path.startsWith('/local-voice/status'))
+      return { enabled: true, ready: true };
     if (path === '/conversations' && method === 'POST') {
       const created = thread('created');
       conversations = [...conversations, created];
@@ -147,6 +148,49 @@ it('offers voice and personality settings before the first conversation', async 
   });
   expect(createdCalls()).toHaveLength(0);
 });
+it('offers quality settings while local speech is disabled and forwards the selected mode to chat', async () => {
+  conversations = [];
+  const normal = harness.api.getMockImplementation()!;
+  harness.api.mockImplementation((path: string, method?: string) =>
+    path.startsWith('/local-voice/status')
+      ? Promise.resolve({
+          enabled: false,
+          ready: false,
+          selectedQuality: 'basic',
+          reason: 'Needs setup',
+        })
+      : normal(path, method),
+  );
+  await mount();
+  expect(root.root.findByType(VoiceSettings).props.dotId).toBe('dot');
+  expect(
+    harness.api.mock.calls.some(
+      ([path]) => path === '/local-voice/status?dotId=dot',
+    ),
+  ).toBe(true);
+});
+
+it.each(['basic', 'medium', 'high'] as const)(
+  'only allows the legacy hosted voice transport for Medium when %s is selected',
+  async (quality) => {
+    storage.set('workspace-dot', 'dot');
+    storage.set('workspace-thread', 'selected');
+    const normal = harness.api.getMockImplementation()!;
+    harness.api.mockImplementation(async (path: string, method?: string) => {
+      if (path.startsWith('/local-voice/status'))
+        return { enabled: false, ready: false, selectedQuality: quality };
+      const result = await normal(path, method);
+      if (path === '/workspace') result.setup.voice = true;
+      return result;
+    });
+    await act(async () => {
+      root = create(createElement(App));
+    });
+    const props = root.root.findByType(Chat).props;
+    expect(props.localVoiceQuality).toBe(quality);
+    expect(props.voiceReady).toBe(quality === 'medium');
+  },
+);
 
 it('keeps native readiness through a transient status failure but revokes on confirmed unavailable', async () => {
   await mount();
@@ -154,7 +198,7 @@ it('keeps native readiness through a transient status failure but revokes on con
   bridge.setReady.mockClear();
   const normal = harness.api.getMockImplementation()!;
   harness.api.mockImplementation((path: string, method?: string) =>
-    path === '/local-voice/status'
+    path.startsWith('/local-voice/status')
       ? Promise.reject(new Error('Temporary connection failure'))
       : normal(path, method),
   );
@@ -163,7 +207,7 @@ it('keeps native readiness through a transient status failure but revokes on con
   });
   expect(bridge.setReady).not.toHaveBeenCalled();
   harness.api.mockImplementation((path: string, method?: string) =>
-    path === '/local-voice/status'
+    path.startsWith('/local-voice/status')
       ? Promise.resolve({
           enabled: true,
           ready: false,
@@ -250,7 +294,7 @@ it('reports unavailable voice setup to the desktop before consuming a hidden Tal
   Object.assign(window.dotVoice!, { isWindowless: () => true, reportError });
   const normal = harness.api.getMockImplementation()!;
   harness.api.mockImplementation((path: string, method?: string) =>
-    path === '/local-voice/status'
+    path.startsWith('/local-voice/status')
       ? Promise.resolve({
           enabled: false,
           ready: false,

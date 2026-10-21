@@ -4,6 +4,8 @@ import { Archive, Plug, ShieldCheck, SlidersHorizontal, X } from 'lucide-react';
 import type { Dot, Memory, State, WorkspaceState } from '../shared/types';
 import { ConnectionsSection } from './ConnectionsSection';
 import { StorageSettings } from './StorageSettings';
+import { VoiceSettings } from './local-voice/VoiceSettings';
+import type { LocalVoiceStatus } from '../shared/local-voice';
 import {
   setThemePreference,
   themePreference,
@@ -22,9 +24,15 @@ export function WorkspaceDialog({
   onClose,
   mutate,
   embedded = false,
+  voiceStatus,
+  voiceActive = false,
+  onVoiceSettingsSaved,
 }: {
   dialog: Dialog;
   embedded?: boolean;
+  voiceStatus?: LocalVoiceStatus;
+  voiceActive?: boolean;
+  onVoiceSettingsSaved?: () => void;
   state: State;
   workspace: WorkspaceState;
   onClose: () => void;
@@ -327,6 +335,24 @@ export function WorkspaceDialog({
                   ))}
               </select>
             </fieldset>
+          )}
+          {dialog.type === 'dot' && dialog.dot && (
+            <VoiceSettings
+              dotId={dialog.dot.id}
+              initiallyOpen
+              callActive={voiceActive}
+              previewReady={
+                voiceStatus?.modes?.medium.ready ??
+                (voiceStatus?.selectedQuality !== 'basic' &&
+                  !!voiceStatus?.ready)
+              }
+              status={voiceStatus}
+              unavailableReason={voiceStatus?.reason}
+              onSaved={onVoiceSettingsSaved}
+            />
+          )}
+          {dialog.type === 'dot' && !dialog.dot && (
+            <p>Create this Dot to choose its voice chat quality.</p>
           )}
           {(dialog.type === 'dot' ||
             (dialog.type === 'settings' &&

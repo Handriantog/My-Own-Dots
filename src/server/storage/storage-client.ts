@@ -153,6 +153,7 @@ export class StorageClient {
       signal?: AbortSignal,
     ) => this.call('jobs.publishDream', [input], { signal });
     this.repositories = {
+      voiceDelegations: groups.voiceDelegations,
       evidence: groups.evidence,
       jobs: groups.jobs,
       recall: groups.recall,

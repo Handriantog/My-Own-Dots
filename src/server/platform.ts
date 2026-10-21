@@ -34,6 +34,8 @@ import { validateRuntimeScope } from './runtime-scope.js';
 import { learningSelector } from './learning.js';
 import { SetupTelemetry } from './setup-telemetry.js';
 import { VoiceService } from './voice.js';
+import { VoiceDelegationCoordinator } from './local-voice/delegation.js';
+import { NativeVoiceRuntime } from './local-voice/native-runtime.js';
 export class Platform {
   readonly maintenance = new MaintenanceGate();
   readonly voice = new VoiceService(this);
@@ -45,6 +47,11 @@ export class Platform {
   intelligence?: CopilotKitIntelligence;
   localConversations?: ConversationRepository;
   memory?: MemoryMaintenance;
+  nativeVoice?: NativeVoiceRuntime;
+  private delegations?: VoiceDelegationCoordinator;
+  get voiceDelegations() {
+    return this.delegations?.jobs;
+  }
   private localRunner?: LocalAgentRunner;
   handler?: CopilotHonoApp;
   private constructor(
@@ -106,11 +113,23 @@ export class Platform {
           maintenance: this.maintenance,
           repositories: options.storage?.repositories,
         });
+      if (options.storage?.engine === 'sqlite')
+        this.delegations = new VoiceDelegationCoordinator(
+          options.storage.repositories.voiceDelegations,
+          this.localConversations,
+        );
       this.localRunner = new LocalAgentRunner(
         this.localConversations,
         this.memory,
         this.maintenance,
+        this.delegations,
       );
+      if (this.delegations && this.memory)
+        this.nativeVoice = new NativeVoiceRuntime(
+          this,
+          this.localRunner,
+          this.delegations,
+        );
     } else {
       if (!config.intelligenceKey) return;
       this.intelligence = new CopilotKitIntelligence({
@@ -165,6 +184,7 @@ export class Platform {
               false,
               this.setupTelemetry,
               this.memory,
+              this.delegations?.jobs,
             ),
           ]),
         ),
@@ -207,6 +227,7 @@ export class Platform {
       new AbortController().signal,
       async () => {
         await this.localConversations?.initialize();
+        await this.nativeVoice?.start();
       },
       { background: true },
     );
@@ -231,7 +252,11 @@ export class Platform {
     this.maintenance.close();
     this.memory?.pause();
     try {
-      await Promise.all([this.voice.close(), this.localRunner?.close()]);
+      await Promise.all([
+        this.voice.close(),
+        this.nativeVoice?.close(),
+        this.localRunner?.close(),
+      ]);
     } finally {
       await this.memory?.stop();
       await this.setupTelemetry.stop();

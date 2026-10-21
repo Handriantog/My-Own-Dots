@@ -1,8 +1,12 @@
 import { constants } from 'node:fs';
-import { open, rm } from 'node:fs/promises';
+import { open, rename, rm } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { z } from 'zod';
-export const sqliteStorageSchema = 2;
+export const sqliteStorageSchema = 3;
+export function supportedSQLiteStorageSchema(value: number): value is 2 | 3 {
+  return value === 2 || value === sqliteStorageSchema;
+}
 
 export const workspaceManifestSchema = z
   .object({
@@ -71,4 +75,45 @@ export async function createWorkspaceManifest(
     }
   }
   return manifest;
+}
+
+/** Called only after the owned runtime has successfully upgraded its SQLite database. */
+export async function updateWorkspaceManifestSchema(
+  directory: string,
+  ownerId: string,
+): Promise<void> {
+  const manifest = await readWorkspaceManifest(directory);
+  if (!manifest) return;
+  if (manifest.ownerId !== ownerId)
+    throw new Error('Workspace manifest owner changed.');
+  if (manifest.storage !== 'sqlite') return;
+  if (!supportedSQLiteStorageSchema(manifest.schema))
+    throw new Error('Unsupported SQLite workspace schema.');
+  if (manifest.schema === sqliteStorageSchema) return;
+  const temporary = join(directory, `.workspace-schema-${randomUUID()}`);
+  const file = await open(temporary, 'wx', 0o600);
+  try {
+    await file.writeFile(
+      JSON.stringify({ ...manifest, schema: sqliteStorageSchema }) + '\n',
+    );
+    await file.sync();
+    await file.close();
+    if (
+      JSON.stringify(await readWorkspaceManifest(directory)) !==
+      JSON.stringify(manifest)
+    )
+      throw new Error('Workspace manifest changed during schema upgrade.');
+    await rename(temporary, join(directory, 'workspace.json'));
+    if (process.platform !== 'win32') {
+      const parent = await open(directory, 'r');
+      try {
+        await parent.sync();
+      } finally {
+        await parent.close();
+      }
+    }
+  } finally {
+    await file.close();
+    await rm(temporary, { force: true });
+  }
 }

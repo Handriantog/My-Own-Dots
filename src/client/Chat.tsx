@@ -62,6 +62,10 @@ export function Chat({
   localVoiceEnabled = false,
   localVoiceReason,
   localVoicePending = false,
+  localVoiceQuality = 'medium',
+  localVoiceStatus,
+  onVoiceSettingsSaved,
+  onVoiceActive,
   voiceIntent = 0,
   onVoiceConsumed,
   localMemory = false,
@@ -81,6 +85,10 @@ export function Chat({
   localVoiceEnabled?: boolean;
   localVoiceReason?: string;
   localVoicePending?: boolean;
+  localVoiceQuality?: import('../shared/voice-settings').VoiceQuality;
+  localVoiceStatus?: import('../shared/local-voice').LocalVoiceStatus;
+  onVoiceSettingsSaved?: () => void;
+  onVoiceActive?: (dotId: string, active: boolean) => void;
   voiceIntent?: number;
   onVoiceConsumed?: () => void;
   localMemory?: boolean;
@@ -141,7 +149,11 @@ export function Chat({
   const localVoice = useLocalVoice({
     threadId: thread.id,
     dotId: dot.id,
+    quality: localVoiceQuality,
     onSaved,
+    onCanonicalSaved: async () => {
+      await copilotkit.connectAgent({ agent });
+    },
     onTranscript: ({ messageId, text }) => send(text, messageId),
     onCancelTranscript: async (messageId) => {
       const current = voiceRun.current;
@@ -151,6 +163,10 @@ export function Chat({
       await current.done?.catch(() => {});
     },
   });
+  useEffect(() => {
+    onVoiceActive?.(dot.id, localVoice.status !== 'idle');
+    return () => onVoiceActive?.(dot.id, false);
+  }, [dot.id, localVoice.status, onVoiceActive]);
   const [talkError, setTalkError] = useState('');
   const [completedIntent, setCompletedIntent] = useState(0);
   const consumedIntent = useRef(0);
@@ -174,7 +190,10 @@ export function Chat({
     onVoiceConsumed?.();
   };
   const transport =
-    localVoiceEnabled || localVoiceReady || localVoice.status !== 'idle'
+    localVoiceEnabled ||
+    localVoiceReady ||
+    localVoiceQuality !== 'medium' ||
+    localVoice.status !== 'idle'
       ? localVoice
       : paidVoice;
   const voice = waitingForTalk
@@ -587,15 +606,19 @@ export function Chat({
         </div>
       </header>
       <FolderAccessSettings dotId={dot.id} />
-      {(localVoiceEnabled || localVoiceReady) && (
+      {
         <VoiceSettings
           ref={voiceSettings}
           dotId={dot.id}
           callActive={voice.status !== 'idle'}
-          previewReady={localVoiceReady}
+          previewReady={
+            localVoiceStatus?.modes?.medium.ready ?? localVoiceReady
+          }
+          status={localVoiceStatus}
+          onSaved={onVoiceSettingsSaved}
           unavailableReason={localVoiceReason}
         />
-      )}
+      }
       {pageContext && (
         <div className="page-chat-context">
           Working on{' '}
@@ -612,6 +635,14 @@ export function Chat({
         />
       )}
       <div className="chat-transcript">
+        <VoiceTasks
+          threadId={thread.id}
+          onUpdated={() => {
+            onSaved();
+            if (!running)
+              void copilotkit.connectAgent({ agent }).catch(() => {});
+          }}
+        />
         {!visible.length && (
           <div className="chat-welcome">
             <span className="eyebrow">A LITTLE SPACE TO THINK</span>
@@ -771,3 +802,4 @@ export function Chat({
     </div>
   );
 }
+import { VoiceTasks } from './local-voice/VoiceTasks';

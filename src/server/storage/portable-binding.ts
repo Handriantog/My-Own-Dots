@@ -21,6 +21,7 @@ export function bindPortableWorkspace(db: DatabaseSync, machineId: string) {
     'folder_requests',
     'memory_pending_operations',
     'memory_settings',
+    'voice_delegations',
   ]) {
     const rows = db.prepare(`SELECT * FROM "${table}"`);
     rows.setReadBigInts(true);
@@ -55,6 +56,7 @@ export function bindPortableWorkspace(db: DatabaseSync, machineId: string) {
     DELETE FROM folder_grants; DELETE FROM folder_requests; DELETE FROM memory_pending_operations;
     DELETE FROM memory_restore_previews; DELETE FROM setup_telemetry;
     UPDATE memory_jobs SET state='cancelled',lease_token=NULL,lease_until=NULL,call_started_at=NULL,error='Portable workspace host changed' WHERE state IN ('queued','running');
+    UPDATE voice_delegations SET status='interrupted',lease_token=NULL,lease_until=NULL,lease_generation=lease_generation+1,receipt_message_id=NULL,delivered_at=NULL,updated_at=${Date.now()},error='Portable workspace host changed; approve a fresh task to retry.' WHERE status IN ('queued','running','approval');
     UPDATE conversation_threads SET lease_token=NULL,lease_until=0;
     UPDATE memory_evidence SET workflow_complete=0 WHERE EXISTS(SELECT 1 FROM conversation_runs r WHERE r.owner_id=memory_evidence.owner_id AND r.thread_id=memory_evidence.thread_id AND r.run_id=memory_evidence.run_id AND r.status='running');
     UPDATE conversation_runs SET status='interrupted' WHERE status='running';`);

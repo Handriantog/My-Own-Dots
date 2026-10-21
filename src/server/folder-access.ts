@@ -6,6 +6,11 @@ import { fileURLToPath } from 'node:url';
 import type { DatabaseSync } from 'node:sqlite';
 import { z } from 'zod';
 import {
+  folderHintCandidate,
+  withinHome,
+  type FolderResolutionOptions,
+} from './folder-hint.js';
+import {
   folderDecisionSchema,
   folderRequestSchema,
   type FolderDecision,
@@ -183,11 +188,13 @@ export class FolderAccessService {
   private inFlight = new Map<string, Set<AbortController>>();
   private helpers = new Set<AbortController>();
   private writes = new Map<string, Promise<unknown>>();
+  private resolutions = new Map<string, Promise<FolderRequestDetail>>();
   private closed = false;
   constructor(
     private db: DatabaseSync,
     readonly ownerId: string,
     private scope: Scope,
+    private resolutionOptions: FolderResolutionOptions = {},
   ) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS folder_requests (id TEXT NOT NULL, ownerId TEXT NOT NULL, threadId TEXT NOT NULL, dotId TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(ownerId,id));
@@ -348,6 +355,51 @@ export class FolderAccessService {
       ...(value.decision ? { decision: this.currentDecision(value) } : {}),
     };
   }
+  /** Metadata discovery only; canonical conversation messages determine pending reviews. */
+  reviewRequests(): {
+    requestId: string;
+    threadId: string;
+    dotId: string;
+    toolCallId?: string;
+  }[] {
+    if (this.closed)
+      throw new FolderAccessError('Folder service is closed.', 503);
+    const threads = new Map<string, string | undefined>();
+    // Include expired requests and saved decisions: the owner can still decline,
+    // or deliver an already-saved decision through the original client tool.
+    return this.db
+      .prepare(
+        `SELECT id, threadId, dotId, json_extract(value, '$.toolCallId') AS toolCallId
+         FROM folder_requests WHERE ownerId=? AND json_valid(value)
+         AND json_extract(value, '$.request.id')=id
+         AND json_extract(value, '$.request.threadId')=threadId
+         AND json_extract(value, '$.request.dotId')=dotId
+         ORDER BY rowid DESC`,
+      )
+      .all(this.ownerId)
+      .flatMap((row) => {
+        const threadId = String(row.threadId);
+        const dotId = String(row.dotId);
+        if (!threads.has(threadId)) {
+          try {
+            threads.set(threadId, this.requireThread(threadId).dotId);
+          } catch {
+            threads.set(threadId, undefined);
+          }
+        }
+        if (threads.get(threadId) !== dotId) return [];
+        return [
+          {
+            requestId: String(row.id),
+            threadId,
+            dotId,
+            ...(typeof row.toolCallId === 'string'
+              ? { toolCallId: row.toolCallId }
+              : {}),
+          },
+        ];
+      });
+  }
   async select(
     threadId: string,
     requestId: string,
@@ -364,6 +416,71 @@ export class FolderAccessService {
     current.selection = { id: randomUUID(), ...inspection };
     this.saveRequest(current);
     return this.publicSelection(current.selection);
+  }
+  /** Propose a verified folder from the immutable request, without granting access. */
+  async resolve(
+    threadId: string,
+    requestId: string,
+  ): Promise<FolderRequestDetail> {
+    const value = this.storedRequest(threadId, requestId);
+    if (!this.canResolve(value)) return this.getRequest(threadId, requestId);
+    const previous = this.resolutions.get(requestId);
+    if (previous) return previous;
+    const pending = this.resolveHint(
+      threadId,
+      requestId,
+      value.request.folderHint,
+    );
+    this.resolutions.set(requestId, pending);
+    try {
+      return await pending;
+    } finally {
+      this.resolutions.delete(requestId);
+    }
+  }
+  private canResolve(value: StoredRequest) {
+    return (
+      value.request.status === 'pending' &&
+      !value.decision &&
+      !value.selection &&
+      value.request.expiresAt > Date.now()
+    );
+  }
+  private async resolveHint(threadId: string, requestId: string, hint: string) {
+    const controller = new AbortController();
+    this.helpers.add(controller);
+    let inspection: z.infer<typeof inspectionSchema> | undefined;
+    try {
+      const candidate = await folderHintCandidate(
+        hint,
+        this.resolutionOptions,
+        controller.signal,
+      );
+      if (
+        candidate &&
+        this.canResolve(this.storedRequest(threadId, requestId))
+      ) {
+        const result = inspectionSchema.parse(
+          await this.runHelper(
+            { action: 'inspect', root: candidate.path },
+            controller.signal,
+          ),
+        );
+        // A named/home-relative match must stay inside home after symlink canonicalization.
+        if (!candidate.home || withinHome(result.path, candidate.home))
+          inspection = result;
+      }
+    } catch {
+      // A missing folder, unavailable metadata index or failed inspection uses the chooser.
+    } finally {
+      this.helpers.delete(controller);
+    }
+    const current = this.storedRequest(threadId, requestId);
+    if (inspection && this.canResolve(current)) {
+      current.selection = { id: randomUUID(), ...inspection };
+      this.saveRequest(current);
+    }
+    return this.getRequest(threadId, requestId);
   }
   async decide(
     threadId: string,

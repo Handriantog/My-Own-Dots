@@ -47,12 +47,19 @@ function windowDouble() {
     isFocused: () => window.focused,
     isMinimized: () => false,
     isDestroyed: () => window.destroyed,
+    show: vi.fn(() => {
+      window.visible = true;
+    }),
+    focus: vi.fn(() => {
+      window.focused = true;
+    }),
   };
   return window;
 }
 let window: ReturnType<typeof windowDouble>;
 let voice: CompanionVoiceSession;
 let active: boolean[];
+let reviews: number;
 function sender() {
   return {
     sender: window.webContents,
@@ -83,10 +90,17 @@ beforeEach(() => {
   vi.useFakeTimers();
   window = windowDouble();
   active = [];
+  reviews = 0;
   voice = new CompanionVoiceSession(
     () => window as unknown as BrowserWindow,
     () => 'http://127.0.0.1:4310/',
-    { active: (value) => active.push(value), ready() {} },
+    {
+      active: (value) => active.push(value),
+      ready() {},
+      reviewFolders: () => {
+        reviews++;
+      },
+    },
   );
   voice.attach(window as unknown as BrowserWindow);
 });
@@ -98,6 +112,39 @@ afterEach(() => {
 });
 
 describe('desktop microphone scope', () => {
+  it('resurfaces pending folders on a new call and an authenticated approval reminder', () => {
+    ready();
+    expect(() => invoke('review-folders', 'call-12345678')).toThrow();
+    invoke('begin', 'call-12345678');
+    expect(reviews).toBe(1);
+    window.visible = false;
+    window.focused = false;
+    invoke('review-folders', 'call-12345678');
+    expect(reviews).toBe(2);
+    expect(() => invoke('review-folders', 'other-call')).toThrow();
+    expect(() =>
+      invoke('review-folders', 'call-12345678', {
+        ...sender(),
+        senderFrame: { url },
+      } as IpcMainInvokeEvent),
+    ).toThrow();
+    invoke('end', 'call-12345678');
+    expect(() => invoke('review-folders', 'call-12345678')).toThrow();
+    expect(reviews).toBe(2);
+  });
+  it('reveals the originating conversation for Basic windowless Talk before capture', async () => {
+    ready();
+    window.visible = false;
+    window.focused = false;
+    expect(voice.talk(true)).toBe(true);
+    await invoke('activate');
+    invoke('begin', { callId: 'basic-call', quality: 'basic' });
+    expect(window.show).toHaveBeenCalledOnce();
+    expect(window.focus).toHaveBeenCalledOnce();
+    expect(voice.isWindowless).toBe(false);
+    expect(permission()).toBe(true);
+    invoke('end', 'basic-call');
+  });
   it('activates one fresh native Talk intent without granting microphone permission', async () => {
     ready();
     expect(() => invoke('activate')).toThrow();

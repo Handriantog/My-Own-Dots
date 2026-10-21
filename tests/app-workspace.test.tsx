@@ -38,6 +38,7 @@ import { Chat } from '../src/client/Chat';
 import { SpaceWorkspace } from '../src/client/SpaceWorkspace';
 import { WorkspaceDialog } from '../src/client/WorkspaceDialog';
 import { WorkspaceRail } from '../src/client/WorkspaceShell';
+import { VoiceSettings } from '../src/client/local-voice/VoiceSettings';
 import type {
   WorkspaceDestination,
   WorkspaceCommand,
@@ -92,7 +93,8 @@ beforeEach(() => {
           llmBackend: 'subscription',
         },
       };
-    if (path === '/local-voice/status') return { enabled: true, ready: true };
+    if (path.startsWith('/local-voice/status'))
+      return { enabled: true, ready: true };
     if (path === '/conversations' && method === 'POST') {
       const created = thread('created');
       conversations = [...conversations, created];
@@ -164,6 +166,40 @@ const createdCalls = () =>
   harness.api.mock.calls.filter(
     ([path, method]) => path === '/conversations' && method === 'POST',
   );
+it('ignores late readiness from the previous Dot after native navigation', async () => {
+  conversations = [];
+  const normal = harness.api.getMockImplementation()!;
+  let old!: (value: unknown) => void;
+  let current!: (value: unknown) => void;
+  harness.api.mockImplementation(async (path: string, method?: string) => {
+    if (path === '/workspace') {
+      const state = await normal(path, method);
+      return {
+        ...state,
+        dots: [...state.dots, { ...state.dots[0], id: 'other' }],
+      };
+    }
+    if (path.startsWith('/local-voice/status'))
+      return new Promise((resolve) => {
+        if (path.endsWith('dotId=other')) current = resolve;
+        else old = resolve;
+      });
+    return normal(path, method);
+  });
+  await mount();
+  await act(async () => navigate({ dotId: 'other' }));
+  await act(async () =>
+    old({ enabled: true, ready: true, selectedQuality: 'medium' }),
+  );
+  expect(root.root.findByType(VoiceSettings).props.previewReady).toBe(false);
+  await act(async () =>
+    current({ enabled: true, ready: true, selectedQuality: 'basic' }),
+  );
+  expect(root.root.findByType(VoiceSettings).props.dotId).toBe('other');
+  expect(root.root.findByType(VoiceSettings).props.status.selectedQuality).toBe(
+    'basic',
+  );
+});
 
 it('renders explicit workspace navigation and preserves a dirty page on native handoff and new chat', async () => {
   await mount();

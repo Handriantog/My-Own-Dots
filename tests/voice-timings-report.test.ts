@@ -4,6 +4,49 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+it('reports Basic text completion without suggesting missing playback', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'voice-report-basic-'));
+  try {
+    const file = join(root, 'log');
+    await writeFile(
+      file,
+      [
+        { event: 'stage', stage: 'speech_end_detected', elapsedMs: 700 },
+        {
+          event: 'text_reply',
+          elapsedMs: 1200,
+          durations: { recognitionMs: 200 },
+        },
+      ]
+        .map(
+          (row) =>
+            '[voice-timing] ' +
+            JSON.stringify({
+              version: 1,
+              callId: 'call',
+              messageId: 'message',
+              quality: 'basic',
+              ...row,
+            }),
+        )
+        .join('\n'),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [resolve('scripts/voice-timings.mjs'), '--file', file],
+      { encoding: 'utf8' },
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('basic');
+    expect(result.stdout).toContain(
+      'Observed wait to text reply completion: 1.200 s',
+    );
+    expect(result.stdout).not.toContain('No playback acknowledgement');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 it('reports bounded recent turns, including interrupted turns, without mixing provider steps or printing content', async () => {
   const root = await mkdtemp(join(tmpdir(), 'voice-report-'));
   try {

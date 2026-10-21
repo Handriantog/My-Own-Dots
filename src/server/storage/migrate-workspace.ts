@@ -400,6 +400,7 @@ export async function migrateLegacySnapshot(options: {
       'mcp_actions',
       'conversation_runs',
       'memory_jobs',
+      'voice_delegations',
     ]) {
       const statement = db.prepare(`SELECT * FROM "${table}"`);
       statement.setReadBigInts(true);
@@ -424,6 +425,9 @@ export async function migrateLegacySnapshot(options: {
       UPDATE conversation_threads SET lease_token=NULL,lease_until=0;
       UPDATE conversation_runs SET status='interrupted' WHERE status='running';
       UPDATE memory_jobs SET state=CASE WHEN state IN ('queued','running') THEN 'cancelled' ELSE state END,lease_token=NULL,lease_until=NULL,call_started_at=NULL;`);
+    db.prepare(
+      "UPDATE voice_delegations SET status='interrupted',lease_token=NULL,lease_until=NULL,lease_generation=lease_generation+1,receipt_message_id=NULL,delivered_at=NULL,updated_at=?,error='Interrupted by workspace migration' WHERE status IN ('queued','running','approval')",
+    ).run(Date.now());
     db.prepare(
       "UPDATE mcp_actions SET status='done',result=? WHERE status='running'",
     ).run(
