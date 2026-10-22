@@ -209,3 +209,26 @@ agent behavior is also documented in [Node's HTTP reference](https://nodejs.org/
 The full suite passes 221 files and 1,844 tests, with one existing skip;
 typecheck and lint pass. OAuth and authenticated Spotify behavior are not yet
 implemented or verified.
+
+## OAuth account boundary
+
+Twenty-one OAuth tests pass using real loopback callback listeners, an injected
+provider transport, and encrypted fixture files. They cover S256 PKCE, exact
+callback host/path, single-use state, the five-minute state lifetime, scope
+checks, rotating/concurrent refresh, consent changes, reconnect, and disconnect
+racing a credential write. Stale cleanup cannot delete a replacement account.
+Callback replies, account presence, errors and captured logs contain no fixture
+tokens. Account files are encrypted and mode 0600; unavailable protected storage
+fails before the browser opens. The eleven existing backup-key tests also pass.
+
+The fixture uses an ephemeral AES-GCM key, not the owner's Keychain. Real
+safeStorage and authenticated Spotify acceptance remain later/manual checks.
+Account identity includes workspace, Dot, binding, source, digest, client ID,
+consent approval and an opaque handle; disable/re-enable still invalidates old
+invocations without deleting an unchanged account.
+
+The host follows Spotify's [PKCE flow](https://developer.spotify.com/documentation/web-api/tutorials/code-pkce-flow)
+and [literal loopback redirect rules](https://developer.spotify.com/documentation/web-api/concepts/redirect_uri).
+An omitted scope field retains the requested/previous set as specified by
+[RFC 6749](https://www.rfc-editor.org/rfc/rfc6749); an explicitly different set
+is rejected. No client secret or token is part of the worker/renderer contract.

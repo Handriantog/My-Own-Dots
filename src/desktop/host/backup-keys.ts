@@ -16,6 +16,21 @@ const linuxBackends = new Set([
   'kwallet6',
 ]);
 
+export function protectedStorageAvailable(
+  storage: ProtectedStorage,
+  platform: NodeJS.Platform,
+): boolean {
+  try {
+    return (
+      storage.isEncryptionAvailable() &&
+      (platform !== 'linux' ||
+        linuxBackends.has(storage.getSelectedStorageBackend?.() ?? ''))
+    );
+  } catch {
+    return false;
+  }
+}
+
 export class BackupKeys {
   private pending: Promise<unknown> = Promise.resolve();
   constructor(
@@ -27,17 +42,10 @@ export class BackupKeys {
   ) {}
 
   available(): boolean {
-    try {
-      return (
-        this.options.storage.isEncryptionAvailable() &&
-        (this.options.platform !== 'linux' ||
-          linuxBackends.has(
-            this.options.storage.getSelectedStorageBackend?.() ?? '',
-          ))
-      );
-    } catch {
-      return false;
-    }
+    return protectedStorageAvailable(
+      this.options.storage,
+      this.options.platform,
+    );
   }
 
   remember(passphrase: string): Promise<void> {
