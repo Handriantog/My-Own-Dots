@@ -100,6 +100,13 @@ the current binding's nonsecret settings. The host returns its bounded JSON
 
 ## Worker results and owner-only data
 
+HTTPS replies must be UTF-8 and fit both the 1 MiB response ceiling and the
+protocol frame ceiling after JSON encoding. The host requests identity encoding
+and rejects compressed responses before decompression. Query strings are URL
+encoded; nonstring query values use their JSON representation. Request bodies
+use JSON and are unavailable for GET rules. Redirects are never followed, and
+cookies, authorization, and unrecognized response headers are not forwarded.
+
 Reply to `invoke` with `result` containing exactly one of these shapes:
 
 | Status             | Fields beyond `status`                  |

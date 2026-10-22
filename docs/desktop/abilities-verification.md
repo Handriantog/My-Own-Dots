@@ -189,3 +189,23 @@ non-group/world-writable check. Package files remain immutable to workers.
 The full suite passes 220 files and 1,809 tests, with the same one existing skip;
 typecheck and lint pass. Packaged Electron runtime acceptance and live provider
 use remain later gates; these results do not claim VM-grade resource isolation.
+
+## HTTPS broker
+
+Thirty-five broker tests pass, covering route/body/header mismatch, private and
+mixed DNS answers, address pinning, original TLS hostname options, revocation
+before connection and before request writes, redirects, streaming byte limits,
+compressed-response rejection, credential echoes, cancellation, and a stalled
+DNS lookup at the exact 30-second deadline. The controlled transport records
+connection and write events separately; these unit fixtures do not establish a
+real socket to a rejected private endpoint.
+
+A separate live, unauthenticated request through the production transport to
+Spotify's `/v1/me` returned HTTP 401. With a controlled local proxy configured as
+the global Node proxy, the probe recorded zero proxy connections. No account
+credentials, login, playback, or library mutation was involved. The one-request
+agent behavior is also documented in [Node's HTTP reference](https://nodejs.org/download/release/latest-v24.x/docs/api/http.html#class-httpagent).
+
+The full suite passes 221 files and 1,844 tests, with one existing skip;
+typecheck and lint pass. OAuth and authenticated Spotify behavior are not yet
+implemented or verified.
