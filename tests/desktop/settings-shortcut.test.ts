@@ -1,6 +1,6 @@
 import { buildSync } from 'esbuild';
 import { runInNewContext } from 'node:vm';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 
 const script = buildSync({
   entryPoints: ['src/desktop/renderer/settings.ts'],
@@ -12,6 +12,13 @@ const script = buildSync({
 }).outputFiles[0].text;
 class Node extends EventTarget {
   textContent = '';
+  value = '';
+  dataset: { color?: string } = {};
+  hidden = false;
+  children: Node[] = [];
+  append(child: Node) {
+    this.children.push(child);
+  }
   attributes = new Map<string, string>();
   setAttribute(key: string, value: string) {
     this.attributes.set(key, value);
@@ -27,13 +34,21 @@ function fixture() {
   let nativePaused = false;
   let resolveCapture!: () => void;
   let resetCapture!: () => void;
+  const blue = node('blue');
+  blue.dataset.color = '#45a7ff';
+  const pink = node('pink');
+  pink.dataset.color = '#f5a0be';
+  const update = vi.fn(async () => ({}));
   const document = {
     querySelector: node,
+    querySelectorAll: () => [blue, pink],
+    createElement: () => new Node(),
     activeElement: node('#talk-shortcut'),
     hasFocus: () => focused,
   };
   const window = Object.assign(new EventTarget(), {
     dotSettings: {
+      update,
       read: () => new Promise(() => {}),
       shortcutStatus: async () => '',
       onShortcutCaptureReset: (callback: () => void) => {
@@ -52,6 +67,7 @@ function fixture() {
   runInNewContext(script, { window, document });
   return {
     node,
+    update,
     resolve: () => resolveCapture(),
     paused: () => nativePaused,
     blur: () => {
@@ -75,6 +91,59 @@ it('ignores a recording acknowledgement that arrives after the window blurred', 
   await Promise.resolve();
   expect(f.paused()).toBe(false);
   expect(button.attributes.get('aria-pressed')).toBe('false');
+});
+
+it('combines independent accessories and removes one without clearing the others', async () => {
+  const f = fixture();
+  f.node('#headwear').value = 'beanie';
+  f.node('#headwear').dispatchEvent(new Event('change'));
+  f.node('#eyewear').value = 'round-glasses';
+  f.node('#eyewear').dispatchEvent(new Event('change'));
+  f.node('#neckwear').value = 'scarf';
+  f.node('#neckwear').dispatchEvent(new Event('change'));
+  await Promise.resolve();
+  expect(f.update).toHaveBeenLastCalledWith({
+    accessories: {
+      headwear: 'beanie',
+      eyewear: 'round-glasses',
+      neckwear: 'scarf',
+    },
+  });
+  f.node('#eyewear').value = 'none';
+  f.node('#eyewear').dispatchEvent(new Event('change'));
+  await Promise.resolve();
+  expect(f.update).toHaveBeenLastCalledWith({
+    accessories: { headwear: 'beanie', eyewear: 'none', neckwear: 'scarf' },
+  });
+});
+
+it('cancels shortcut capture when switching back to Appearance', async () => {
+  const f = fixture();
+  f.node('#behavior-tab').dispatchEvent(new Event('click'));
+  f.node('#talk-shortcut').dispatchEvent(new Event('click'));
+  f.resolve();
+  await Promise.resolve();
+  expect(f.paused()).toBe(true);
+  f.node('#appearance-tab').dispatchEvent(new Event('click'));
+  await Promise.resolve();
+  expect(f.paused()).toBe(false);
+  expect(f.node('#behavior-panel').hidden).toBe(true);
+  expect(f.node('#appearance-panel').hidden).toBe(false);
+});
+
+it('saves a color preset through the shared preferences and reflects custom colors', async () => {
+  const f = fixture();
+  f.node('blue').dispatchEvent(new Event('click'));
+  await Promise.resolve();
+  expect(f.update).toHaveBeenCalledWith({ color: '#45a7ff' });
+  expect(f.node('#color').value).toBe('#45a7ff');
+  expect(f.node('blue').attributes.get('aria-pressed')).toBe('true');
+  f.node('#color').value = '#112233';
+  f.node('#color').dispatchEvent(new Event('input'));
+  await Promise.resolve();
+  expect(f.update).toHaveBeenLastCalledWith({ color: '#112233' });
+  expect(f.node('blue').attributes.get('aria-pressed')).toBe('false');
+  expect(f.node('#color-value').textContent).toBe('#112233');
 });
 it('leaves recording when the native host restores a shortcut after renderer recovery', async () => {
   const f = fixture();

@@ -1,4 +1,8 @@
 import { MemoryActivity, type MemoryActivityHandle } from './MemoryActivity';
+import { SavedMessages } from './SavedMessages';
+import { useMessageMarks } from './useMessageMarks';
+import { openPageLink } from './page-navigation';
+import type { MessageMark, MessageMarkKind } from '../shared/message-marks';
 import { parseMemoryCommand } from '../shared/memory-commands';
 import { PageReviewCard } from './PageReviewCard';
 import { pageReviewSchema, pageReviewTool } from '../shared/page-review';
@@ -16,7 +20,7 @@ import { FolderAccessSettings } from './FolderAccessSettings';
 import { contextualMessage, type PageContext } from './page-context';
 import { api } from './api';
 import type { Page } from '../server/pages';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { CopilotKitCoreErrorCode } from '@copilotkit/core';
 import {
   CopilotChatToolCallsView,
@@ -27,12 +31,14 @@ import {
 } from '@copilotkit/react-core/v2';
 import {
   FilePlus,
+  Bookmark,
   ArrowUp,
   Clock3,
   Link2,
   Phone,
   PhoneOff,
   Square,
+  SlidersHorizontal,
   X,
 } from 'lucide-react';
 import {
@@ -74,6 +80,8 @@ export function Chat({
   onSaved,
   onSchedule,
   onComputer,
+  messageTarget,
+  savedMessagesKey,
 }: {
   companionColor?: string;
   thread: Conversation;
@@ -97,6 +105,8 @@ export function Chat({
   onSaved: () => void;
   onSchedule: () => void;
   onComputer?: () => void;
+  messageTarget?: { messageId: string };
+  savedMessagesKey?: string;
 }) {
   const { agent, isReady } = useAgent({
     agentId: `chat-${thread.id}`,
@@ -104,6 +114,31 @@ export function Chat({
     threadId: thread.id,
   });
   const { copilotkit } = useCopilotKit();
+  const saved = useMessageMarks(thread.id, savedMessagesKey);
+  const [savedOpen, setSavedOpen] = useState(false);
+  const [savedKind, setSavedKind] = useState<MessageMarkKind>('pin');
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string>();
+  const [jumpError, setJumpError] = useState('');
+  const [jumpRequest, setJumpRequest] = useState<{ messageId: string }>();
+  const savedTrigger = useRef<HTMLButtonElement>(null);
+  const transcript = useRef<HTMLDivElement>(null);
+  const appliedTarget = useRef<typeof messageTarget>(undefined);
+  const jumpToMessage = (id: string) => {
+    setJumpError('');
+    setSavedOpen(false);
+    setJumpRequest({ messageId: id });
+  };
+  const closeSaved = () => {
+    setSavedOpen(false);
+    savedTrigger.current?.focus();
+  };
+  const openSavedMessage = (mark: MessageMark) => {
+    if (mark.threadId === thread.id) jumpToMessage(mark.messageId);
+    else
+      openPageLink(
+        `#/chat/${encodeURIComponent(mark.dotId)}/${encodeURIComponent(mark.threadId)}?message=${encodeURIComponent(mark.messageId)}`,
+      );
+  };
   const [pageContext, setPageContext] = useState<PageContext | null>();
   const [contextError, setContextError] = useState('');
   const [contextAttempt, setContextAttempt] = useState(0);
@@ -135,6 +170,8 @@ export function Chat({
   const [draft, setDraft] = useState('');
   const [source, setSource] = useState('');
   const [sourceOpen, setSourceOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsId = useId();
   const [error, setError] = useState('');
   const [runError, setRunError] = useState('');
   const chatError = error || runError;
@@ -364,6 +401,7 @@ export function Chat({
     const command =
       localMemory && !voiceMessageId ? parseMemoryCommand(text) : null;
     if (command) {
+      setSettingsOpen(true);
       setRunning(true);
       try {
         if (!memoryActivity.current)
@@ -437,6 +475,33 @@ export function Chat({
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: 'instant', block: 'end' });
   }, [agent.messages.length, running]);
+  useEffect(() => {
+    if (!loaded || !messageTarget || appliedTarget.current === messageTarget)
+      return;
+    appliedTarget.current = messageTarget;
+    jumpToMessage(messageTarget.messageId);
+  }, [loaded, messageTarget, agent.messages.length]);
+  useEffect(() => {
+    if (!jumpRequest) return;
+    const element = Array.from(
+      transcript.current?.querySelectorAll<HTMLElement>('.chat-entry') ?? [],
+    ).find((entry) => entry.id === `chat-message-${jumpRequest.messageId}`);
+    if (!element) {
+      setJumpError(
+        'The original message is no longer in this conversation. Its saved text is still available.',
+      );
+      savedTrigger.current?.focus();
+      return;
+    }
+    setHighlightedMessageId(jumpRequest.messageId);
+    element.scrollIntoView({ block: 'center', behavior: 'instant' });
+    element.focus({ preventScroll: true });
+  }, [jumpRequest]);
+  useEffect(() => {
+    if (!highlightedMessageId) return;
+    const timer = setTimeout(() => setHighlightedMessageId(undefined), 3000);
+    return () => clearTimeout(timer);
+  }, [highlightedMessageId]);
   useEffect(() => {
     if (paused && voice.status !== 'idle') void voice.end();
   }, [paused]);
@@ -531,7 +596,7 @@ export function Chat({
           state={running ? 'working' : paused ? 'paused' : 'idle'}
         />
         <div>
-          <strong>{dot.name}</strong>
+          <strong title={dot.name}>{dot.name}</strong>
           <span>
             {paused
               ? 'Paused'
@@ -543,6 +608,34 @@ export function Chat({
           </span>
         </div>
         <div className="chat-persona-actions">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Saved messages"
+            ref={savedTrigger}
+            title="Pins and bookmarks"
+            aria-expanded={savedOpen}
+            onClick={() => {
+              if (!savedOpen) saved.refresh();
+              setSavedOpen((open) => !open);
+            }}
+          >
+            <Bookmark size={17} />
+          </button>
+          <button
+            type="button"
+            className="icon-button"
+            aria-label="Conversation settings"
+            title="Conversation settings"
+            aria-expanded={settingsOpen}
+            aria-controls={settingsId}
+            onClick={() => {
+              if (settingsOpen) voiceSettings.current?.stopPreview();
+              setSettingsOpen((open) => !open);
+            }}
+          >
+            <SlidersHorizontal size={17} />
+          </button>
           <button
             className="icon-button"
             aria-label="Save conversation as page"
@@ -605,8 +698,8 @@ export function Chat({
           </button>
         </div>
       </header>
-      <FolderAccessSettings dotId={dot.id} />
-      {
+      <div id={settingsId} className="chat-settings" hidden={!settingsOpen}>
+        <FolderAccessSettings dotId={dot.id} />
         <VoiceSettings
           ref={voiceSettings}
           dotId={dot.id}
@@ -618,7 +711,14 @@ export function Chat({
           onSaved={onVoiceSettingsSaved}
           unavailableReason={localVoiceReason}
         />
-      }
+        {localMemory && (
+          <MemoryActivity
+            ref={memoryActivity}
+            dotId={dot.id}
+            threadId={thread.id}
+          />
+        )}
+      </div>
       {pageContext && (
         <div className="page-chat-context">
           Working on{' '}
@@ -627,52 +727,86 @@ export function Chat({
           </a>
         </div>
       )}
-      {localMemory && (
-        <MemoryActivity
-          ref={memoryActivity}
-          dotId={dot.id}
-          threadId={thread.id}
-        />
-      )}
-      <div className="chat-transcript">
-        <VoiceTasks
-          threadId={thread.id}
-          onUpdated={() => {
-            onSaved();
-            if (!running)
-              void copilotkit.connectAgent({ agent }).catch(() => {});
-          }}
-        />
-        {!visible.length && (
-          <div className="chat-welcome">
-            <span className="eyebrow">A LITTLE SPACE TO THINK</span>
-            <h1>What’s on your mind?</h1>
-            <p>{dot.instructions}</p>
-            <p className="muted">
-              Your conversation stays with this Dot, across text and calls.
-            </p>
-          </div>
-        )}
-        <ChatTranscript
-          messages={visible}
-          calls={calls}
-          renderTools={(message) => (
-            <CopilotChatToolCallsView
-              message={message}
-              messages={agent.messages}
-            />
+      <div
+        className="chat-body"
+        onKeyDown={(event) => {
+          if (event.key === 'Escape' && savedOpen) {
+            event.stopPropagation();
+            closeSaved();
+          }
+        }}
+      >
+        <div className="chat-transcript" ref={transcript} inert={savedOpen}>
+          <VoiceTasks
+            threadId={thread.id}
+            onUpdated={() => {
+              onSaved();
+              if (!running)
+                void copilotkit.connectAgent({ agent }).catch(() => {});
+            }}
+          />
+          {!visible.length && (
+            <div className="chat-welcome">
+              <span className="eyebrow">A LITTLE SPACE TO THINK</span>
+              <h1>What’s on your mind?</h1>
+              <p>{dot.instructions}</p>
+              <p className="muted">
+                Your conversation stays with this Dot, across text and calls.
+              </p>
+            </div>
           )}
-        />
-        {running && (
-          <div className="thinking">
-            <span />
-            <span />
-            <span />
-            <span>{dot.name} is thinking</span>
-          </div>
+          <ChatTranscript
+            messages={visible}
+            dotName={dot.name}
+            marks={saved.marks.filter((mark) => mark.threadId === thread.id)}
+            marksDisabled={saved.loading || saved.saving || running || !loaded}
+            onMark={(id, kind, active) => {
+              void saved.update(thread.id, id, kind, active);
+            }}
+            highlightedMessageId={highlightedMessageId}
+            calls={calls}
+            renderTools={(message) => (
+              <CopilotChatToolCallsView
+                message={message}
+                messages={agent.messages}
+              />
+            )}
+          />
+          {running && (
+            <div className="thinking">
+              <span />
+              <span />
+              <span />
+              <span>{dot.name} is thinking</span>
+            </div>
+          )}
+          <div ref={bottom} />
+        </div>
+        {savedOpen && (
+          <SavedMessages
+            threadId={thread.id}
+            marks={saved.marks}
+            kind={savedKind}
+            onKind={setSavedKind}
+            onClose={closeSaved}
+            onOpen={openSavedMessage}
+            onRemove={(mark, kind) => {
+              void saved.update(mark.threadId, mark.messageId, kind, false);
+            }}
+            busy={saved.loading || saved.saving}
+            loading={saved.loading}
+          />
         )}
-        <div ref={bottom} />
       </div>
+      {(saved.error || jumpError) && (
+        <div className="chat-error" role="alert">
+          {saved.error || jumpError}
+          {saved.error && <button onClick={saved.refresh}>Retry</button>}
+          {jumpError && (
+            <button onClick={() => setJumpError('')}>Dismiss</button>
+          )}
+        </div>
+      )}
       {contextError && (
         <div className="chat-error" role="alert">
           {contextError}
@@ -794,9 +928,7 @@ export function Chat({
           )}
         </div>
         <div className="chat-compose-note">
-          {canCall
-            ? 'Text and voice, one conversation.'
-            : 'Text is ready. Voice needs separate server configuration.'}
+          Enter to send · Shift + Enter for a new line
         </div>
       </form>
     </div>

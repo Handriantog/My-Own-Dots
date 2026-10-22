@@ -31,6 +31,13 @@ import { StorageController } from './storage-controller.js';
 import { ArchiveWorkerClient } from './archive-worker-client.js';
 import { BackupKeys } from './backup-keys.js';
 import { storageMethods } from '../shared/storage-contract.js';
+import {
+  accessoriesKey,
+  accessoriesQuery,
+  DEFAULT_ACCESSORIES,
+  DEFAULT_ACCESSORIES_KEY,
+  type Accessories,
+} from '../shared/accessories.js';
 const recovery = 'dots://app/recovery.html';
 const setupPage = `${recovery}#setup`;
 const isRecoveryPage = (url: string) => url === recovery || url === setupPage;
@@ -67,6 +74,9 @@ export class WorkspaceWindow {
     private readonly backend: WorkspaceBackend,
     private readonly preferences: () => void,
     reviewFolders?: () => void,
+    private readonly getColor: () => string = () => '#45a7ff',
+    private readonly getAccessories: () => Accessories = () =>
+      DEFAULT_ACCESSORIES,
   ) {
     this.voice = new CompanionVoiceSession(
       () => this.window,
@@ -414,6 +424,7 @@ export class WorkspaceWindow {
       if (this.disposed || window.isDestroyed()) return;
       if (isWorkspacePage(window.webContents.getURL())) {
         this.loaded.add(window);
+        this.updateAppearance();
         this.resetNavigation.delete(window);
         if (window === this.window)
           for (const command of this.pendingCommands.splice(0))
@@ -490,7 +501,7 @@ export class WorkspaceWindow {
         ) {
           try {
             await window.loadURL(
-              `dots://workspace/?surface=${window === this.window ? 'workspace' : 'companion'}${this.resetNavigation.has(window) ? `&resetNavigation=${this.resetNavigation.get(window)}` : ''}`,
+              `dots://workspace/?surface=${window === this.window ? 'workspace' : 'companion'}&dotColor=${encodeURIComponent(this.getColor())}${accessoriesQuery(this.getAccessories())}${this.resetNavigation.has(window) ? `&resetNavigation=${this.resetNavigation.get(window)}` : ''}`,
             );
           } catch {
             if (!this.disposed) {
@@ -516,6 +527,38 @@ export class WorkspaceWindow {
       this.sendStatus(this.backend.status);
     } catch {
       /* Supervisor emits a safe actionable error to recovery and loaded views. */
+    }
+  }
+  updateAppearance(): void {
+    if (this.disposed) return;
+    const color = this.getColor();
+    const accessories = accessoriesKey(this.getAccessories());
+    for (const window of this.windows) {
+      if (window.isDestroyed()) continue;
+      const current = window.webContents.getURL();
+      if (!isWorkspacePage(current)) continue;
+      // Only appearance data enters the trusted bundled document. Keep its
+      // current route and drafts intact, and retain the tint across reloads.
+      void window.webContents
+        .executeJavaScript(
+          `(() => {
+            const url = new URL(location.href);
+            if (url.protocol !== 'dots:' || url.host !== 'workspace' ||
+                url.pathname !== '/' || url.username || url.password ||
+                !['workspace', 'companion'].includes(url.searchParams.get('surface'))) return;
+            const color = ${JSON.stringify(color)};
+            const accessories = ${JSON.stringify(accessories)};
+            const defaultAccessories = ${JSON.stringify(DEFAULT_ACCESSORIES_KEY)};
+            if (url.searchParams.get('dotColor') === color &&
+                (url.searchParams.get('dotAccessories') || defaultAccessories) === accessories) return;
+            url.searchParams.set('dotColor', color);
+            if (accessories === defaultAccessories) url.searchParams.delete('dotAccessories');
+            else url.searchParams.set('dotAccessories', accessories);
+            history.replaceState(history.state, '', url.href);
+            window.dispatchEvent(new Event('dot:appearance'));
+          })();`,
+        )
+        .catch(() => {});
     }
   }
   async open(target?: WorkspaceDestination) {

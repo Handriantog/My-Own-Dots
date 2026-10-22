@@ -1,4 +1,9 @@
 import { EventEmitter } from 'node:events';
+import { runInNewContext } from 'node:vm';
+import {
+  DEFAULT_ACCESSORIES,
+  type Accessories,
+} from '../../src/desktop/shared/accessories.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -27,8 +32,9 @@ interface WindowDouble extends EventEmitter {
     mainFrame: { url: string };
     send: ReturnType<typeof vi.fn>;
     getURL(): string;
+    executeJavaScript: ReturnType<typeof vi.fn>;
   };
-  loadURL: ReturnType<typeof vi.fn>;
+  loadURL: ReturnType<typeof vi.fn<(url: string) => Promise<void>>>;
   show: ReturnType<typeof vi.fn>;
   destroy(): void;
 }
@@ -71,6 +77,23 @@ vi.mock('electron', async () => {
         mainFrame: { url: '' },
         send: vi.fn(),
         getURL: () => this.webContents.mainFrame.url,
+        executeJavaScript: vi.fn(async (source: string) =>
+          runInNewContext(source, {
+            location: { href: this.webContents.mainFrame.url },
+            URL,
+            history: {
+              state: { draft: 'keep' },
+              replaceState: (_state: unknown, _title: string, url: string) => {
+                this.webContents.mainFrame.url = url;
+              },
+            },
+            window: {
+              dispatchEvent: (event: Event) =>
+                this.webContents.emit(event.type),
+            },
+            Event,
+          }),
+        ),
         session: {
           setPermissionCheckHandler() {},
           setPermissionRequestHandler() {},
@@ -127,6 +150,8 @@ import {
   destinationFromUrl,
 } from '../../src/desktop/host/workspace-navigation.js';
 let data: string;
+let appearanceColor: string;
+let appearanceAccessories: Accessories;
 let workspace: WorkspaceWindow;
 let notify: (status: WorkspaceBackendStatus) => void;
 let backend: {
@@ -163,11 +188,16 @@ beforeEach(async () => {
       return () => {};
     },
   };
+  appearanceColor = '#45a7ff';
+  appearanceAccessories = { ...DEFAULT_ACCESSORIES };
   workspace = new WorkspaceWindow(
     '/bundle',
     data,
     backend as unknown as WorkspaceBackend,
     vi.fn(),
+    undefined,
+    () => appearanceColor,
+    () => appearanceAccessories,
   );
 });
 afterEach(async () => {
@@ -190,7 +220,7 @@ it('opens a bundled isolated main window and reuses it for dirty-page-safe hando
   await workspace.open({ dotId: 'dot-1', threadId: 'thread-1' });
   expect(host.windows).toHaveLength(1);
   expect(window.loadURL).toHaveBeenCalledWith(
-    'dots://workspace/?surface=workspace',
+    'dots://workspace/?surface=workspace&dotColor=%2345a7ff',
   );
   expect(window.loadURL).toHaveBeenCalledTimes(count);
   expect(window.webContents.send).toHaveBeenCalledWith(
@@ -245,7 +275,7 @@ it('uses recovery for initial startup failure then loads the bundled renderer on
   expect(host.windows[0].webContents.getURL()).toBe('dots://app/recovery.html');
   await workspace.retry();
   expect(host.windows[0].webContents.getURL()).toBe(
-    'dots://workspace/?surface=workspace',
+    'dots://workspace/?surface=workspace&dotColor=%2345a7ff',
   );
 });
 it('keeps native command navigation local and refuses foreign frames', async () => {
@@ -316,7 +346,7 @@ it('waits for cold startup before sending an internal handoff', async () => {
   await opening;
   await handoff;
   expect(host.windows[0].webContents.getURL()).toBe(
-    'dots://workspace/?surface=workspace',
+    'dots://workspace/?surface=workspace&dotColor=%2345a7ff',
   );
   expect(host.windows[0].webContents.send).toHaveBeenCalledWith(
     'dot:workspace:navigate',
@@ -356,7 +386,7 @@ it('keeps recovery actionable after a renderer crash with a healthy backend', as
   expect(recoveryView(status).showActions).toBe(true);
   await host.handlers.get('dot:workspace:retry')!(event);
   expect(window.webContents.getURL()).toBe(
-    'dots://workspace/?surface=workspace',
+    'dots://workspace/?surface=workspace&dotColor=%2345a7ff',
   );
 });
 it('accepts omitted optional IDs and maps internal page/thread links without admitting foreign schemes', () => {
@@ -645,4 +675,115 @@ it('honors the confirmed discard when the old editor prevents unload, only for t
   unload.preventDefault.mockClear();
   main.webContents.emit('will-prevent-unload', unload);
   expect(unload.preventDefault).not.toHaveBeenCalled();
+});
+
+it('shares live appearance with open workspace surfaces without reloading drafts', async () => {
+  appearanceColor = '#f5a0be';
+  await workspace.open();
+  const main = host.windows[0];
+  expect(new URL(main.webContents.getURL()).searchParams.get('dotColor')).toBe(
+    '#f5a0be',
+  );
+  main.webContents.mainFrame.url += '#/spaces/personal/pages/draft';
+  const compact = new BrowserWindow({}) as unknown as WindowDouble;
+  workspace.register(compact as unknown as BrowserWindow);
+  await compact.loadURL(
+    'dots://workspace/?surface=companion&dotColor=%23f5a0be',
+  );
+  const changed = vi.fn();
+  main.webContents.on('dot:appearance', changed);
+  const loads = main.loadURL.mock.calls.length;
+  appearanceColor = '#55aa88';
+  workspace.updateAppearance();
+  await Promise.resolve();
+  for (const window of [main, compact])
+    expect(
+      new URL(window.webContents.getURL()).searchParams.get('dotColor'),
+    ).toBe('#55aa88');
+  expect(new URL(main.webContents.getURL()).hash).toBe(
+    '#/spaces/personal/pages/draft',
+  );
+  expect(main.loadURL).toHaveBeenCalledTimes(loads);
+  expect(changed).toHaveBeenCalledOnce();
+});
+
+it('restores outfits on open and updates accessories without changing the selected page', async () => {
+  appearanceAccessories = {
+    headwear: 'crown',
+    eyewear: 'none',
+    neckwear: 'medal',
+  };
+  await workspace.open();
+  const main = host.windows[0];
+  expect(
+    new URL(main.webContents.getURL()).searchParams.get('dotAccessories'),
+  ).toBe('crown.none.medal');
+  main.webContents.mainFrame.url += '#/pages/draft';
+  const loads = main.loadURL.mock.calls.length;
+  appearanceAccessories = {
+    headwear: 'beanie',
+    eyewear: 'round-glasses',
+    neckwear: 'scarf',
+  };
+  workspace.updateAppearance();
+  await Promise.resolve();
+  expect(
+    new URL(main.webContents.getURL()).searchParams.get('dotAccessories'),
+  ).toBe('beanie.round-glasses.scarf');
+  expect(new URL(main.webContents.getURL()).hash).toBe('#/pages/draft');
+  expect(main.loadURL).toHaveBeenCalledTimes(loads);
+  appearanceAccessories = { ...DEFAULT_ACCESSORIES };
+  workspace.updateAppearance();
+  await Promise.resolve();
+  expect(
+    new URL(main.webContents.getURL()).searchParams.has('dotAccessories'),
+  ).toBe(false);
+});
+
+it('preserves new navigation and the latest color when appearance scripts are queued', async () => {
+  await workspace.open();
+  const main = host.windows[0];
+  const execute =
+    main.webContents.executeJavaScript.getMockImplementation() as (
+      source: string,
+    ) => Promise<void>;
+  const pending: string[] = [];
+  main.webContents.executeJavaScript.mockImplementation(
+    async (source: string) => {
+      pending.push(source);
+    },
+  );
+  appearanceColor = '#f5a0be';
+  workspace.updateAppearance();
+  appearanceColor = '#45a7ff';
+  workspace.updateAppearance();
+  main.webContents.mainFrame.url += '#/threads/new-selection';
+  await execute(pending.shift()!);
+  expect(new URL(main.webContents.getURL()).searchParams.get('dotColor')).toBe(
+    '#f5a0be',
+  );
+  for (const source of pending) await execute(source);
+  const url = new URL(main.webContents.getURL());
+  expect(url.hash).toBe('#/threads/new-selection');
+  expect(url.searchParams.get('dotColor')).toBe('#45a7ff');
+});
+
+it('does not change a recovery page if navigation wins a queued appearance update', async () => {
+  await workspace.open();
+  const main = host.windows[0];
+  const execute =
+    main.webContents.executeJavaScript.getMockImplementation() as (
+      source: string,
+    ) => Promise<void>;
+  let pending = '';
+  main.webContents.executeJavaScript.mockImplementation(
+    async (source: string) => {
+      pending = source;
+    },
+  );
+  appearanceColor = '#f5a0be';
+  workspace.updateAppearance();
+  main.webContents.mainFrame.url = 'dots://app/recovery.html';
+  await execute(pending);
+  expect(main.webContents.getURL()).toBe('dots://app/recovery.html');
 });

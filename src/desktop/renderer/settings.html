@@ -5,83 +5,208 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+      content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; worker-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <title>Customize Dot</title>
   </head>
   <body>
     <main>
-      <div class="intro">
-        <img src="./desktop-dot/icon.png" alt="Blue plush Dot" />
+      <header class="intro">
+        <div class="preview">
+          <img id="dot-preview" src="./desktop-dot/icon.png" alt="Your Dot" />
+        </div>
         <div>
-          <h1>Make Dot yours</h1>
-          <p>One little companion. Your colors.</p>
+          <h1>Customize Dot</h1>
+          <p>Your companion, everywhere.</p>
         </div>
-      </div>
-      <label class="row"
-        >Body color <input id="color" type="color" aria-label="Body color"
-      /></label>
-      <label class="volume"
-        >Master volume <output id="volume-label">40%</output
-        ><input
-          id="volume"
-          type="range"
-          min="0"
-          max="100"
-          aria-label="Master volume"
-      /></label>
-      <label class="row" for="sound-category">
-        Sound category
-        <select id="sound-category">
-          <option value="walking">Walking</option>
-          <option value="interactions">Interactions</option>
-          <option value="climbing">Climbing</option>
-          <option value="falls">Falls &amp; landings</option>
-          <option value="rest">Rest &amp; idle</option>
-        </select>
-      </label>
-      <label class="volume" for="category-volume">
-        <span id="category-volume-name">Walking volume</span>
-        <output id="category-volume-label" for="category-volume">100%</output>
-        <input
-          id="category-volume"
-          type="range"
-          min="0"
-          max="100"
-          value="100"
-        />
-      </label>
-      <label class="row"
-        >Mute effects <input id="muted" type="checkbox" role="switch"
-      /></label>
-      <label class="row"
-        >Pause roaming <input id="paused" type="checkbox" role="switch"
-      /></label>
-      <label class="row"
-        >Reduce motion <input id="reducedMotion" type="checkbox" role="switch"
-      /></label>
-      <section class="shortcut" aria-labelledby="shortcut-title">
-        <h2 id="shortcut-title">Windowless talk</h2>
-        <p id="shortcut-hint">
-          Press once to talk, again to end. Dot stays in place and shows when it
-          is listening, thinking or speaking.
-        </p>
+      </header>
+      <nav class="settings-tabs" aria-label="Customization sections">
         <button
-          id="talk-shortcut"
+          id="appearance-tab"
           type="button"
-          aria-describedby="shortcut-hint"
+          aria-pressed="true"
+          aria-controls="appearance-panel"
         >
-          Loading…
+          Appearance
         </button>
-        <div class="shortcut-actions">
-          <button id="shortcut-reset" type="button">Use ⌘ ⇧ Space</button>
-          <button id="shortcut-disable" type="button">Disable</button>
-        </div>
-        <p id="shortcut-status" role="status" aria-live="polite"></p>
-      </section>
-      <p class="note">Changes save automatically.</p>
-      <p id="error" role="status"></p>
+        <button
+          id="behavior-tab"
+          type="button"
+          aria-pressed="false"
+          aria-controls="behavior-panel"
+        >
+          Behavior
+        </button>
+      </nav>
+      <div id="appearance-panel">
+        <section class="card appearance" aria-labelledby="appearance-title">
+          <div class="section-heading">
+            <h2 id="appearance-title">Body color</h2>
+            <output id="color-value" for="color">#45a7ff</output>
+          </div>
+          <div class="palette" role="group" aria-label="Body color presets">
+            <button
+              type="button"
+              class="swatch"
+              data-color="#45a7ff"
+              aria-label="Sky blue"
+              aria-pressed="false"
+              title="Sky blue"
+            ></button>
+            <button
+              type="button"
+              class="swatch"
+              data-color="#74d9b1"
+              aria-label="Mint"
+              aria-pressed="false"
+              title="Mint"
+            ></button>
+            <button
+              type="button"
+              class="swatch"
+              data-color="#f5a0be"
+              aria-label="Rose"
+              aria-pressed="false"
+              title="Rose"
+            ></button>
+            <button
+              type="button"
+              class="swatch"
+              data-color="#b8a1f3"
+              aria-label="Lavender"
+              aria-pressed="false"
+              title="Lavender"
+            ></button>
+            <button
+              type="button"
+              class="swatch"
+              data-color="#ffbc72"
+              aria-label="Peach"
+              aria-pressed="false"
+              title="Peach"
+            ></button>
+            <button
+              type="button"
+              class="swatch"
+              data-color="#292b40"
+              aria-label="Midnight"
+              aria-pressed="false"
+              title="Midnight"
+            ></button>
+            <label class="custom-color"
+              ><span>Custom</span
+              ><input
+                id="color"
+                type="color"
+                value="#45a7ff"
+                aria-label="Custom body color"
+            /></label>
+          </div>
+        </section>
+        <section class="card accessories" aria-labelledby="accessories-title">
+          <div class="section-heading">
+            <h2 id="accessories-title">Accessories</h2>
+            <span class="accessories-hint">Mix &amp; match</span>
+          </div>
+          <label class="accessory-row" for="headwear"
+            ><span>Headwear</span
+            ><select id="headwear"></select
+          ></label>
+          <label class="accessory-row" for="eyewear"
+            ><span>Eyewear</span
+            ><select id="eyewear"></select
+          ></label>
+          <label class="accessory-row" for="neckwear"
+            ><span>Neckwear</span
+            ><select id="neckwear"></select
+          ></label>
+        </section>
+      </div>
+      <div id="behavior-panel" hidden>
+        <section class="card sound" aria-labelledby="sound-title">
+          <div class="section-heading">
+            <h2 id="sound-title">Sound</h2>
+            <label class="toggle"
+              >Mute<input id="muted" type="checkbox" role="switch"
+            /></label>
+          </div>
+          <label class="volume" for="volume"
+            ><span>Volume</span
+            ><input
+              id="volume"
+              type="range"
+              min="0"
+              max="100"
+              aria-label="Master volume"
+            /><output id="volume-label" for="volume">40%</output></label
+          >
+          <details>
+            <summary>Individual sounds</summary>
+            <div class="sound-detail">
+              <label class="row" for="sound-category"
+                ><span>Sound</span
+                ><select id="sound-category">
+                  <option value="walking">Walking</option>
+                  <option value="interactions">Interactions</option>
+                  <option value="climbing">Climbing</option>
+                  <option value="falls">Falls &amp; landings</option>
+                  <option value="rest">Rest &amp; idle</option>
+                </select></label
+              >
+              <label class="volume" for="category-volume"
+                ><span id="category-volume-name">Walking volume</span
+                ><input
+                  id="category-volume"
+                  type="range"
+                  min="0"
+                  max="100"
+                  value="100"
+                /><output id="category-volume-label" for="category-volume"
+                  >100%</output
+                ></label
+              >
+            </div>
+          </details>
+        </section>
+        <section class="card motion" aria-label="Movement">
+          <label class="toggle"
+            ><span>Pause roaming</span
+            ><input id="paused" type="checkbox" role="switch"
+          /></label>
+          <label class="toggle"
+            ><span>Reduce motion</span
+            ><input id="reducedMotion" type="checkbox" role="switch"
+          /></label>
+        </section>
+        <section class="card shortcut" aria-labelledby="shortcut-title">
+          <div class="shortcut-row">
+            <h2 id="shortcut-title">Talk shortcut</h2>
+            <button
+              id="talk-shortcut"
+              type="button"
+              aria-describedby="shortcut-hint"
+            >
+              Loading…
+            </button>
+          </div>
+          <p id="shortcut-hint">Press once to talk, again to end.</p>
+          <details>
+            <summary>Shortcut options</summary>
+            <div class="shortcut-actions">
+              <button id="shortcut-reset" type="button">Use ⌘ ⇧ Space</button
+              ><button id="shortcut-disable" type="button">
+                Disable shortcut
+              </button>
+            </div>
+          </details>
+          <p id="shortcut-status" role="status" aria-live="polite"></p>
+        </section>
+      </div>
     </main>
+    <footer>
+      <p id="error" role="status"></p>
+      <p class="note">Changes save automatically · Shared across the app</p>
+    </footer>
     <script type="module" src="./settings.ts"></script>
   </body>
 </html>

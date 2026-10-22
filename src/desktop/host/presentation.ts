@@ -63,6 +63,7 @@ export function overlayOrigin(
   root: Point,
   display: DesktopDisplay,
   dragging = false,
+  visualHeight: number = BODY.height,
 ): Point {
   const area = display.bounds;
   // V8's native integer conversion rejects -0, which Math.round produces
@@ -75,7 +76,7 @@ export function overlayOrigin(
     dragging ||
     root.x - BODY.width / 2 < area.x ||
     root.x + BODY.width / 2 > area.x + area.width ||
-    root.y - BODY.height < area.y ||
+    root.y - visualHeight < area.y ||
     root.y > area.y + area.height
   )
     return { x: nativePixel(root.x - 160), y: nativePixel(root.y - 200) };

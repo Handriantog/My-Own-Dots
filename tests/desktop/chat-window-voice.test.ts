@@ -1,4 +1,9 @@
 import { EventEmitter } from 'node:events';
+import { runInNewContext } from 'node:vm';
+import {
+  DEFAULT_ACCESSORIES,
+  type Accessories,
+} from '../../src/desktop/shared/accessories.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 const host = vi.hoisted(() => ({
@@ -86,6 +91,8 @@ vi.mock('electron', async () => {
 import { CompanionChatWindow } from '../../src/desktop/host/chat-window.js';
 
 let chat: CompanionChatWindow;
+let appearanceColor: string;
+let appearanceAccessories: Accessories;
 const bounds = { x: 0, y: 0, width: 440, height: 620 };
 function invoke(name: string, payload?: unknown) {
   const window = host.windows[0];
@@ -110,7 +117,20 @@ beforeEach(async () => {
     }),
     text: async () => '<div id="root"></div>',
   }));
-  chat = new CompanionChatWindow('/bundle', '/unused');
+  appearanceColor = '#45a7ff';
+  appearanceAccessories = {
+    headwear: 'crown',
+    eyewear: 'none',
+    neckwear: 'medal',
+  };
+  chat = new CompanionChatWindow(
+    '/bundle',
+    '/unused',
+    () => appearanceColor,
+    undefined,
+    undefined,
+    () => appearanceAccessories,
+  );
   await chat.open(bounds);
   invoke('ready', true);
 });
@@ -121,6 +141,58 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
+
+it.each([false, true])(
+  'keeps the selected chat and latest color when appearance changes are queued (recovery: %s)',
+  async (recovery) => {
+    const window = host.windows[0];
+    expect(
+      new URL(window.webContents.mainFrame.url).searchParams.get(
+        'dotAccessories',
+      ),
+    ).toBe('crown.none.medal');
+    const pending: string[] = [];
+    window.webContents.executeJavaScript.mockImplementation(
+      async (source: string) => {
+        pending.push(source);
+      },
+    );
+    appearanceColor = '#f5a0be';
+    appearanceAccessories = {
+      headwear: 'beanie',
+      eyewear: 'round-glasses',
+      neckwear: 'scarf',
+    };
+    chat.updateAppearance();
+    appearanceColor = '#45a7ff';
+    appearanceAccessories = { ...DEFAULT_ACCESSORIES };
+    chat.updateAppearance();
+    window.webContents.mainFrame.url += '#/threads/new-selection';
+    if (recovery) window.webContents.mainFrame.url = 'dots://app/recovery.html';
+    for (const source of pending) {
+      runInNewContext(source, {
+        location: { href: window.webContents.mainFrame.url },
+        URL,
+        Event,
+        window: { dispatchEvent() {} },
+        history: {
+          state: { draft: 'keep' },
+          replaceState: (_state: unknown, _title: string, url: string) => {
+            window.webContents.mainFrame.url = url;
+          },
+        },
+      });
+    }
+    const url = new URL(window.webContents.mainFrame.url);
+    if (recovery) {
+      expect(url.href).toBe('dots://app/recovery.html');
+      return;
+    }
+    expect(url.hash).toBe('#/threads/new-selection');
+    expect(url.searchParams.get('dotColor')).toBe('#45a7ff');
+    expect(url.searchParams.has('dotAccessories')).toBe(false);
+  },
+);
 
 it.each(['hide', 'minimize', 'close', 'unresponsive'])(
   'ends voice on %s while retaining the conversation window',

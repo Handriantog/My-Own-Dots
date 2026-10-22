@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { ReviewDisclosure } from './ReviewDisclosure';
 import { Check, FileText, ArrowUpRight } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -117,51 +118,61 @@ export function PageReviewCard({
   };
   return (
     <section className="page-review-card" aria-label="Review page draft">
-      <header>
-        <FileText size={17} />
-        <strong>
-          {conflict
-            ? 'Review changed'
-            : removed
-              ? 'Saved, then deleted'
-              : saved
-                ? 'Saved to your Space'
-                : !receiptReady
-                  ? 'Checking saved review…'
-                  : finished
-                    ? 'Review ended'
-                    : 'Ready for your review'}
-        </strong>
-        <span>
-          {conflict
-            ? 'Needs new review'
-            : saved
-              ? 'Approved'
-              : !receiptReady
-                ? 'Checking'
-                : finished
-                  ? 'Not saved'
-                  : 'You decide'}
-        </span>
-      </header>
-      <div className="page-review-body">
-        <h3>{draft.success ? draft.data.title : 'Preparing your draft…'}</h3>
-        {draft.success && (
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            components={{
-              img: ({ alt }) => <span>{alt}</span>,
-              a: ({ href, children }) => (
-                <a href={href} target="_blank" rel="noreferrer">
-                  {children}
-                </a>
-              ),
-            }}
-          >
-            {draft.data.content}
-          </ReactMarkdown>
-        )}
-      </div>
+      <ReviewDisclosure
+        settled={(saved || finished) && receiptReady && !conflict && !error}
+        summary={
+          <>
+            <FileText size={17} aria-hidden="true" />
+            <span className="review-heading">
+              <strong>
+                {draft.success ? draft.data.title : 'Preparing your draft…'}
+              </strong>
+              <small>
+                {conflict
+                  ? 'Review changed'
+                  : removed
+                    ? 'Saved, then deleted'
+                    : saved
+                      ? 'Saved to your Space'
+                      : !receiptReady
+                        ? 'Checking saved review…'
+                        : finished
+                          ? 'Review ended'
+                          : 'Ready for your review'}
+              </small>
+            </span>
+            <span className="review-status">
+              {conflict
+                ? 'Needs new review'
+                : saved
+                  ? 'Approved'
+                  : !receiptReady
+                    ? 'Checking'
+                    : finished
+                      ? 'Not saved'
+                      : 'You decide'}
+            </span>
+          </>
+        }
+      >
+        <div className="page-review-body">
+          {draft.success && (
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              components={{
+                img: ({ alt }) => <span>{alt}</span>,
+                a: ({ href, children }) => (
+                  <a href={href} target="_blank" rel="noreferrer">
+                    {children}
+                  </a>
+                ),
+              }}
+            >
+              {draft.data.content}
+            </ReactMarkdown>
+          )}
+        </div>
+      </ReviewDisclosure>
       {conflict && (
         <p role="alert">
           This review was saved with a different draft. Start a new review for

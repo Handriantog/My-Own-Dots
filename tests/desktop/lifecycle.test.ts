@@ -55,6 +55,7 @@ vi.mock('../../src/desktop/host/workspace-window.js', () => ({
     async ready() {}
     async recover() {}
     register() {}
+    updateAppearance() {}
   },
 }));
 const exceptionMonitors = new Set(

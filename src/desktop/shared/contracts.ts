@@ -187,6 +187,7 @@ export interface PointerInput {
 export interface Preferences {
   version: 1;
   color: string;
+  accessories: import('./accessories.js').Accessories;
   volume: number;
   categoryVolumes: CategoryVolumes;
   muted: boolean;

@@ -101,6 +101,11 @@ describe('desktop preferences', () => {
     };
     expect(parsePreferences(legacy)).toEqual({
       ...legacy,
+      accessories: {
+        headwear: 'headphones',
+        eyewear: 'none',
+        neckwear: 'none',
+      },
       talkShortcut: 'Command+Shift+Space',
       categoryVolumes: {
         walking: 1,
@@ -181,6 +186,50 @@ describe('desktop preferences', () => {
       volume: 0.2,
     });
   });
+});
+
+it('persists a mixed outfit and rejects unknown or incomplete wearable selections', async () => {
+  const accessories = {
+    headwear: 'beanie',
+    eyewear: 'round-glasses',
+    neckwear: 'scarf',
+  };
+  expect(parsePreferenceChange({ accessories })).toEqual({ accessories });
+  expect(
+    parsePreferenceChange({
+      accessories: { ...accessories, headwear: 'not-a-hat' },
+    }),
+  ).toBeNull();
+  expect(
+    parsePreferenceChange({ accessories: { headwear: 'beanie' } }),
+  ).toBeNull();
+  expect(
+    parsePreferenceChange({ accessories: { ...accessories, script: 'bad' } }),
+  ).toBeNull();
+  const directory = await mkdtemp(path.join(tmpdir(), 'dot-accessories-'));
+  dirs.push(directory);
+  await new PreferenceStore(directory).save(
+    parsePreferences({ ...DEFAULT_PREFERENCES, accessories }),
+  );
+  expect(await new PreferenceStore(directory).load()).toMatchObject({
+    accessories,
+  });
+});
+
+it('recovers invalid saved accessories without resetting other preferences', () => {
+  expect(
+    parsePreferences({
+      ...DEFAULT_PREFERENCES,
+      color: '#aabbcc',
+      volume: 0.23,
+      accessories: { headwear: 'removed-hat' },
+    }),
+  ).toMatchObject({
+    color: '#aabbcc',
+    volume: 0.23,
+    accessories: { headwear: 'headphones', eyewear: 'none', neckwear: 'none' },
+  });
+  expect(parsePreferenceChange({ muted: true })).toEqual({ muted: true });
 });
 
 it('saves, restores and disables the talk shortcut without adding it to unrelated updates', async () => {

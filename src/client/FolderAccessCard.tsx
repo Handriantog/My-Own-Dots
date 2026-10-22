@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { ReviewDisclosure } from './ReviewDisclosure';
 import { Check, FolderOpen } from 'lucide-react';
 import {
   folderApprovalSchema,
@@ -342,82 +343,92 @@ function FolderAccessReview({
       className="page-review-card folder-access-card"
       aria-label="Review folder access"
     >
-      <header>
-        <FolderOpen size={17} />
-        <strong>Folder access</strong>
-        <span>
-          {decision
-            ? decision.approved
-              ? 'Approved'
-              : 'Declined'
-            : finished
-              ? 'Ended'
-              : !detail
-                ? 'Checking'
-                : expired
-                  ? 'Expired'
-                  : 'Needs your approval'}
-        </span>
-      </header>
-      <div className="page-review-body">
-        {detail && (
+      <ReviewDisclosure
+        settled={!!(decision || finished) && !!detail && !error}
+        summary={
           <>
-            <h3>{detail.request.reason}</h3>
-            {detail.request.folderHint && (
-              <p>Suggested folder: {detail.request.folderHint}</p>
-            )}
-            <p>
-              Requested permission:{' '}
-              {permissionLabel(detail.request.requestedAccess)}
-            </p>
-            {selection && (
-              <dl className="folder-access-selection">
-                <dt>Selected folder</dt>
-                <dd>
-                  <strong>{selection.name}</strong>
-                  <code>{selection.path}</code>
-                </dd>
-              </dl>
-            )}
-            {canDecide && (
-              <label className="folder-access-permission">
-                Permission to grant
-                <select
-                  aria-label="Folder permission"
-                  value={access}
-                  disabled={busy || expired || !bridge}
-                  onChange={(event) =>
-                    setAccess(event.target.value as FolderAccess)
-                  }
-                >
-                  <option value="read">Read only</option>
-                  <option value="readwrite">Read and write</option>
-                </select>
-              </label>
-            )}
-            {decision && (
-              <p role="status">
-                {decision.message}
-                {decision.approved && decision.access
-                  ? ` Permission: ${permissionLabel(decision.access)}.`
-                  : ''}
-              </p>
-            )}
-            {canDecide && !bridge && (
-              <p>
-                Open the desktop app to choose a folder, or decline this request
-                here.
-              </p>
-            )}
-            {canDecide && expired && (
-              <p>
-                This request expired. Decline it and ask your Dot for a new
-                request.
-              </p>
-            )}
+            <FolderOpen size={17} aria-hidden="true" />
+            <span className="review-heading">
+              <strong>{selection ? selection.name : 'Folder access'}</strong>
+              <small>
+                {detail?.request.reason || 'Choose which folder to share'}
+              </small>
+            </span>
+            <span className="review-status">
+              {decision
+                ? decision.approved
+                  ? 'Approved'
+                  : 'Declined'
+                : finished
+                  ? 'Ended'
+                  : !detail
+                    ? 'Checking'
+                    : expired
+                      ? 'Expired'
+                      : 'Needs your approval'}
+            </span>
           </>
-        )}
-      </div>
+        }
+      >
+        <div className="page-review-body">
+          {detail && (
+            <>
+              {detail.request.folderHint && (
+                <p>Suggested folder: {detail.request.folderHint}</p>
+              )}
+              <p>
+                Requested permission:{' '}
+                {permissionLabel(detail.request.requestedAccess)}
+              </p>
+              {selection && (
+                <dl className="folder-access-selection">
+                  <dt>Selected folder</dt>
+                  <dd>
+                    <strong>{selection.name}</strong>
+                    <code>{selection.path}</code>
+                  </dd>
+                </dl>
+              )}
+              {canDecide && (
+                <label className="folder-access-permission">
+                  Permission to grant
+                  <select
+                    aria-label="Folder permission"
+                    value={access}
+                    disabled={busy || expired || !bridge}
+                    onChange={(event) =>
+                      setAccess(event.target.value as FolderAccess)
+                    }
+                  >
+                    <option value="read">Read only</option>
+                    <option value="readwrite">Read and write</option>
+                  </select>
+                </label>
+              )}
+              {decision && (
+                <p role="status">
+                  {decision.message}
+                  {decision.approved && decision.access
+                    ? ` Permission: ${permissionLabel(decision.access)}.`
+                    : ''}
+                </p>
+              )}
+              {canDecide && !bridge && (
+                <p>
+                  Open the desktop app to choose a folder, or decline this
+                  request here.
+                </p>
+              )}
+              {canDecide && expired && (
+                <p>
+                  This request expired. Decline it and ask your Dot for a new
+                  request.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      </ReviewDisclosure>
       {error && <p role="alert">{error}</p>}
       <footer>
         {!detail && error && (

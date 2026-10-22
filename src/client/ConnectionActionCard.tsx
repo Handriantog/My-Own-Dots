@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { ReviewDisclosure } from './ReviewDisclosure';
 import { Check, PlugZap } from 'lucide-react';
 import {
   connectionActionSchema,
@@ -135,69 +136,85 @@ export function ConnectionActionCard({
       className="page-review-card connection-action-card"
       aria-label="Approve connected-service action"
     >
-      <header>
-        <PlugZap size={17} />
-        <strong>
-          {approval
-            ? `${approval.connection} · ${approval.title}`
-            : 'Connected service'}
-        </strong>
-        <span>
-          {approved
-            ? outcome?.isError
-              ? 'Failed'
-              : 'Approved'
-            : declined
-              ? 'Declined'
-              : running
-                ? 'Running'
-                : finished
-                  ? 'Ended'
-                  : !ready
-                    ? 'Checking'
-                    : 'Needs your approval'}
-        </span>
-      </header>
-      <div className="page-review-body">
-        <h3>
-          {action.success ? action.data.summary : 'Preparing the action…'}
-        </h3>
-        {entries.length > 0 && (
-          <dl className="connection-action-args">
-            {entries.map(([key, value]) => (
-              <div key={key}>
-                <dt>{key}</dt>
-                <dd>{display(value)}</dd>
-              </div>
-            ))}
-          </dl>
-        )}
-        {mismatch && (
-          <div className="connection-action-result failed">
-            <strong>Cannot run</strong>
-            <pre>
-              This card’s saved result belongs to a different approval request.
-              Nothing was run for this one.
-            </pre>
-          </div>
-        )}
-        {approvalError && !outcome && (
-          <div className="connection-action-result failed">
-            <strong>Cannot run</strong>
-            <pre>{approvalError}</pre>
-          </div>
-        )}
-        {outcome && (
-          <div
-            className={`connection-action-result ${outcome.isError ? 'failed' : ''}`}
-          >
-            <strong>
-              {outcome.isError ? 'Service error' : 'Service response'}
-            </strong>
-            <pre>{outcome.text}</pre>
-          </div>
-        )}
-      </div>
+      <ReviewDisclosure
+        settled={
+          (approved || declined || finished) &&
+          ready &&
+          !running &&
+          !mismatch &&
+          !error &&
+          !approvalError &&
+          !outcome?.isError
+        }
+        summary={
+          <>
+            <PlugZap size={17} aria-hidden="true" />
+            <span className="review-heading">
+              <strong>
+                {approval
+                  ? `${approval.connection} · ${approval.title}`
+                  : 'Connected service'}
+              </strong>
+              <small>
+                {action.success ? action.data.summary : 'Preparing the action…'}
+              </small>
+            </span>
+            <span className="review-status">
+              {approved
+                ? outcome?.isError
+                  ? 'Failed'
+                  : 'Approved'
+                : declined
+                  ? 'Declined'
+                  : running
+                    ? 'Running'
+                    : finished
+                      ? 'Ended'
+                      : !ready
+                        ? 'Checking'
+                        : 'Needs your approval'}
+            </span>
+          </>
+        }
+      >
+        <div className="page-review-body">
+          {entries.length > 0 && (
+            <dl className="connection-action-args">
+              {entries.map(([key, value]) => (
+                <div key={key}>
+                  <dt>{key}</dt>
+                  <dd>{display(value)}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
+          {mismatch && (
+            <div className="connection-action-result failed">
+              <strong>Cannot run</strong>
+              <pre>
+                This card’s saved result belongs to a different approval
+                request. Nothing was run for this one.
+              </pre>
+            </div>
+          )}
+          {approvalError && !outcome && (
+            <div className="connection-action-result failed">
+              <strong>Cannot run</strong>
+              <pre>{approvalError}</pre>
+            </div>
+          )}
+          {outcome && (
+            <div
+              className={`connection-action-result ${outcome.isError ? 'failed' : ''}`}
+            >
+              <strong>
+                {outcome.isError ? 'Service error' : 'Service response'}
+              </strong>
+              <pre>{outcome.text}</pre>
+            </div>
+          )}
+        </div>
+      </ReviewDisclosure>
       {error && <p role="alert">{error}</p>}
       <footer>
         {!ready && error && (

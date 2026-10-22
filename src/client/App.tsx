@@ -17,6 +17,7 @@ import type {
 } from '../desktop/shared/workspace-contract';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { SpaceWorkspace } from './SpaceWorkspace';
+type MessageDestination = WorkspaceDestination & { messageId?: string };
 import { useCallback, useEffect, useState, useRef } from 'react';
 import { CopilotKitProvider } from '@copilotkit/react-core/v2';
 import {
@@ -37,6 +38,7 @@ import {
 } from 'lucide-react';
 import type {
   Conversation,
+  ConversationUpdate,
   Detail,
   Dot,
   Result,
@@ -95,9 +97,10 @@ export function App({
       return { dotId: '', threadId: undefined };
     }
   });
-  const companionColor = useCompanionColor(desktop);
+  const companionColor = useCompanionColor();
   const [state, setState] = useState<State>();
   const [workspace, setWorkspace] = useState<WorkspaceState>();
+  const conversationRevision = useRef(0);
   const [selectedDot, setSelectedDot] = useState(selection.dotId);
   const dot =
     workspace?.dots.find((item) => item.id === selectedDot) ??
@@ -229,6 +232,10 @@ export function App({
   const [selectedThread, setSelectedThread] = useState<string | undefined>(
     selection.threadId,
   );
+  const [messageTarget, setMessageTarget] = useState<{
+    threadId: string;
+    messageId: string;
+  }>();
   useEffect(() => {
     try {
       localStorage.setItem(`${surface}-dot`, selectedDot);
@@ -279,6 +286,7 @@ export function App({
     );
   const setView = (next: WorkspaceView) =>
     guard(() => {
+      setMessageTarget(undefined);
       if (next !== 'space') acceptedHash.current = '';
       if (next !== 'space' && typeof history !== 'undefined')
         history.replaceState(null, '', location.pathname + location.search);
@@ -289,8 +297,13 @@ export function App({
         setSpaceId(workspace?.spaces[0]?.id || '');
       rawSetView(next);
     });
-  const navigateDestination = (destination: WorkspaceDestination) =>
+  const navigateDestination = (destination: MessageDestination) =>
     guard(() => {
+      setMessageTarget(
+        destination.threadId && destination.messageId
+          ? { threadId: destination.threadId, messageId: destination.messageId }
+          : undefined,
+      );
       if (destination.spaceId) {
         setSpaceId(destination.spaceId);
         setPageId(destination.pageId);
@@ -321,10 +334,10 @@ export function App({
     navigateDestination({ spaceId: space, pageId: page });
   const [quickOpen, setQuickOpen] = useState(false);
   const [backendStatus, setBackendStatus] = useState<WorkspaceStatus>();
-  const pendingNavigation = useRef<WorkspaceDestination | undefined>(undefined);
+  const pendingNavigation = useRef<MessageDestination | undefined>(undefined);
   const pendingCommands = useRef<WorkspaceCommand[]>([]);
   const handlers = useRef<{
-    navigate: (destination: WorkspaceDestination) => void;
+    navigate: (destination: MessageDestination) => void;
     command: (command: WorkspaceCommand) => void;
   }>({ navigate: () => {}, command: () => {} });
   useEffect(() => {
@@ -362,14 +375,26 @@ export function App({
       }
     };
     const hash = () => {
-      const match = location.hash.match(
+      const [path, query] = location.hash.split('?');
+      const match = path.match(
         /^#\/(spaces|chat)\/([^/]+)(?:\/(?:pages\/)?([^/]+))?$/,
       );
       if (!match) return;
+      try {
+        match[2] = decodeURIComponent(match[2]);
+        if (match[3]) match[3] = decodeURIComponent(match[3]);
+      } catch {
+        return;
+      }
+      const messageId = new URLSearchParams(query).get('message');
       const destination =
         match[1] === 'spaces'
           ? { spaceId: match[2], pageId: match[3] }
-          : { dotId: match[2], threadId: match[3] };
+          : {
+              dotId: match[2],
+              threadId: match[3],
+              messageId: messageId ?? undefined,
+            };
       pendingNavigation.current = destination;
       handlers.current.navigate(destination);
       if (dirtyPage.current)
@@ -429,6 +454,20 @@ export function App({
   const [capture, setCapture] = useState<Result>();
   const [prompt, setPrompt] = useState('');
   const [pendingPrompt, setPendingPrompt] = useState<string>();
+  useEffect(() => {
+    if (
+      !selectedThread ||
+      !workspace?.deletedConversations?.some(
+        (item) => item.id === selectedThread,
+      )
+    )
+      return;
+    setSelectedThread(undefined);
+    setMessageTarget(undefined);
+    setPendingPrompt(undefined);
+    if (location.hash.startsWith('#/chat/'))
+      history.replaceState(null, '', location.pathname + location.search);
+  }, [workspace, selectedThread]);
   const [busy, setBusy] = useState(false);
   const [search, setSearch] = useState('');
   const [taskDetail, setTaskDetail] = useState<Detail>();
@@ -443,13 +482,14 @@ export function App({
     return () => clearTimeout(timer);
   }, [voiceIntent, consumeVoiceIntent]);
   const refresh = useCallback(async () => {
+    const revision = conversationRevision.current;
     try {
       const [s, w] = await Promise.all([
         api<State>('/state'),
         api<WorkspaceState>('/workspace'),
       ]);
       setState(s);
-      setWorkspace(w);
+      if (revision === conversationRevision.current) setWorkspace(w);
       setNeedsAuth(false);
       setSelectedDot((previous) =>
         w.dots.some((dot) => dot.id === previous)
@@ -511,6 +551,63 @@ export function App({
       setError(e instanceof Error ? e.message : 'Could not save.');
       return false;
     }
+  };
+  const updateConversation = async (id: string, patch: ConversationUpdate) => {
+    const updated = await api<Conversation>(
+      `/conversations/${encodeURIComponent(id)}`,
+      'PATCH',
+      patch,
+    );
+    conversationRevision.current += 1;
+    setWorkspace(
+      (current) =>
+        current && {
+          ...current,
+          conversations: current.conversations.map((item) =>
+            item.id === id ? updated : item,
+          ),
+        },
+    );
+  };
+  const deleteConversation = async (id: string) => {
+    const deleted = await api<Conversation>(
+      `/conversations/${encodeURIComponent(id)}`,
+      'DELETE',
+    );
+    conversationRevision.current += 1;
+    setWorkspace(
+      (current) =>
+        current && {
+          ...current,
+          conversations: current.conversations.filter((item) => item.id !== id),
+          deletedConversations: [
+            deleted,
+            ...(current.deletedConversations ?? []).filter(
+              (item) => item.id !== id,
+            ),
+          ],
+        },
+    );
+  };
+  const restoreConversation = async (id: string) => {
+    const restored = await api<Conversation>(
+      `/conversations/${encodeURIComponent(id)}/restore`,
+      'POST',
+    );
+    conversationRevision.current += 1;
+    setWorkspace(
+      (current) =>
+        current && {
+          ...current,
+          conversations: [
+            ...current.conversations.filter((item) => item.id !== id),
+            restored,
+          ].sort((a, b) => b.createdAt - a.createdAt),
+          deletedConversations: (current.deletedConversations ?? []).filter(
+            (item) => item.id !== id,
+          ),
+        },
+    );
   };
   const thread = workspace?.conversations.find(
     (item) => item.id === selectedThread && item.dotId === dot?.id,
@@ -765,6 +862,9 @@ export function App({
             setView={setView}
             setSelectedDot={setSelectedDot}
             mutate={mutate}
+            updateConversation={updateConversation}
+            deleteConversation={deleteConversation}
+            restoreConversation={restoreConversation}
           />
         </>
       )}
@@ -991,6 +1091,15 @@ export function App({
                   key={thread.id}
                   companionColor={companionColor}
                   thread={thread}
+                  savedMessagesKey={(workspace.deletedConversations ?? [])
+                    .map((item) => item.id)
+                    .sort()
+                    .join(',')}
+                  messageTarget={
+                    messageTarget?.threadId === thread.id
+                      ? messageTarget
+                      : undefined
+                  }
                   dot={dot}
                   initialPrompt={pendingPrompt}
                   onConsumed={() => setPendingPrompt(undefined)}

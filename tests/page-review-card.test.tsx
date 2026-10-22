@@ -20,6 +20,48 @@ beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
 });
 
+it('keeps a pending draft open, then collapses its receipt without hiding the saved page action', async () => {
+  api.mockResolvedValue(null);
+  const props = {
+    args: draft,
+    status: 'executing',
+    respond: async () => {},
+    threadId: 'thread',
+    toolCallId: 'call',
+    onSaved: () => {},
+  };
+  let root!: ReturnType<typeof create>;
+  await act(async () => {
+    root = create(createElement(PageReviewCard, props));
+  });
+  expect(root.root.findByType('details').props.open).toBe(true);
+  api.mockResolvedValue({
+    id: 'page',
+    spaceId: 'space',
+    title: 'Brief',
+    content: 'Evidence',
+    reviewDraft: draft,
+  });
+  const approve = root.root
+    .findAllByType('button')
+    .find((button) => text(button.props.children).includes('Approve & save'))!;
+  await act(async () => {
+    await approve.props.onClick();
+  });
+  await act(async () => {
+    root.update(
+      createElement(PageReviewCard, { ...props, status: 'complete' }),
+    );
+  });
+  expect(root.root.findByType('details').props.open).toBe(false);
+  expect(text(root.root.findByType('summary').children)).toContain('Brief');
+  expect(text(root.root.findByType('footer').children)).toContain('Open page');
+  expect(text(root.toJSON())).toContain('Evidence');
+  await act(async () => {
+    root.unmount();
+  });
+});
+
 it('drops the saved page when a refreshed receipt reports it deleted', async () => {
   const saved = {
     id: 'page',

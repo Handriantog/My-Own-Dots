@@ -4,10 +4,17 @@ import { expect, it } from 'vitest';
 import { Mascot } from '../src/client/Mascot';
 import { companionColorFromSearch } from '../src/client/companion-appearance';
 
-it('uses the customized desktop color only in companion chat', () => {
+it('reads the shared color in workspace, companion and legacy desktop URLs', () => {
   expect(companionColorFromSearch('?desktop=1&dotColor=%23f5a0be')).toBe(
     '#f5a0be',
   );
+  expect(
+    companionColorFromSearch('?surface=workspace&dotColor=%23f5a0be'),
+  ).toBe('#f5a0be');
+  expect(
+    companionColorFromSearch('?surface=companion&dotColor=%2355aa88'),
+  ).toBe('#55aa88');
+  expect(companionColorFromSearch('?surface=workspace')).toBe('#45a7ff');
   expect(companionColorFromSearch('?dotColor=%23f5a0be')).toBeUndefined();
   expect(companionColorFromSearch('?desktop=1&dotColor=red')).toBe('#45a7ff');
 });
@@ -20,7 +27,7 @@ it('renders the companion avatar instead of a hashed specialist image when custo
     }),
   );
   expect(desktop).toContain('companion-avatar');
-  expect(desktop).not.toContain('/dots/');
+  expect(desktop).toContain('/dots/blue.png');
   const browser = renderToStaticMarkup(
     createElement(Mascot, { identity: 'specialist' }),
   );

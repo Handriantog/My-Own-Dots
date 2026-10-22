@@ -198,8 +198,24 @@ it('makes the persisted quality selector available directly in the existing Dot 
       />,
     );
   });
+  await act(async () =>
+    root!.root
+      .findByProps({ 'aria-label': 'Voice', type: 'button' })
+      .props.onClick(),
+  );
   expect(select('Voice chat quality').props.disabled).toBe(false);
   await change('Voice chat quality', 'basic');
+  await act(async () =>
+    root!.root
+      .findByProps({ 'aria-label': 'General', type: 'button' })
+      .props.onClick(),
+  );
+  await act(async () =>
+    root!.root
+      .findByProps({ 'aria-label': 'Voice', type: 'button' })
+      .props.onClick(),
+  );
+  expect(select('Voice chat quality').props.value).toBe('basic');
   await click('Save voice settings');
   expect(settingsCalls('PUT')[0][0]).toBe(
     '/api/local-voice/dots/dot-a/settings',

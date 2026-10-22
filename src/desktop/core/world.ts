@@ -36,6 +36,7 @@ export function buildWorld(
   displays: DesktopDisplay[],
   _nowMs: number,
   excludedOwners = new Set<number>(),
+  visualHeight: number = BODY.height,
 ): World {
   const platforms: Platform[] = displays.map((d) => ({
     id: `floor:${d.id}`,
@@ -63,7 +64,7 @@ export function buildWorld(
       right(dock.bounds) - BODY.footHalf,
       right(display.bounds) - BODY.width / 2,
     );
-    if (x2 - x1 >= 2 && dock.bounds.y >= display.bounds.y + BODY.height)
+    if (x2 - x1 >= 2 && dock.bounds.y >= display.bounds.y + visualHeight)
       platforms.push({
         id: `dock:${display.id}:${dock.id}`,
         x1: stable(x1),
@@ -90,7 +91,7 @@ export function buildWorld(
         r.y > bottom(d)
       )
         continue;
-      if (r.y >= d.y + BODY.height && r.y <= bottom(d)) {
+      if (r.y >= d.y + visualHeight && r.y <= bottom(d)) {
         let tops: Interval[] = [
           [
             Math.max(r.x + BODY.footHalf, d.x + BODY.width / 2),
@@ -98,7 +99,7 @@ export function buildWorld(
           ],
         ];
         for (const { bounds: o } of occluders) {
-          if (o.y < r.y + 1 && bottom(o) > r.y - BODY.height + 1)
+          if (o.y < r.y + 1 && bottom(o) > r.y - visualHeight + 1)
             tops = subtract(
               tops,
               o.x - BODY.width / 2,
@@ -128,7 +129,7 @@ export function buildWorld(
           continue;
         let sides: Interval[] = [
           [
-            Math.max(r.y, d.y + BODY.height / 2),
+            Math.max(r.y, d.y + visualHeight - BODY.height / 2),
             Math.min(bottom(r), bottom(d) - BODY.height / 2),
           ],
         ];
@@ -140,7 +141,7 @@ export function buildWorld(
             sides = subtract(
               sides,
               o.y - BODY.height / 2,
-              bottom(o) + BODY.height / 2,
+              bottom(o) + visualHeight - BODY.height / 2,
             );
         }
         sides

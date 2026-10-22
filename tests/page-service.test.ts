@@ -2,6 +2,32 @@ import { expect, it, vi } from 'vitest';
 import { WorkspaceStore } from '../src/server/workspace.js';
 import { PageService } from '../src/server/page-service.js';
 import { pageAccess } from '../src/server/page-tools.js';
+it('starts a new page chat after deletion and keeps the old chat recoverable', async () => {
+  const ws = new WorkspaceStore(':memory:', 'owner');
+  try {
+    const dot = ws.dots()[0];
+    const page = ws.pages.create(dot.spaceId, {
+      title: 'Design',
+      content: 'Keep this page',
+    });
+    const service = new PageService(ws, () => ({
+      getOrCreateThread: async () => {},
+      getThreadMessages: async () => ({ messages: [] }),
+    }));
+    const old = await service.conversation(dot.spaceId, page.id, dot.id);
+    ws.deleteConversation(old.id);
+    const fresh = await service.conversation(dot.spaceId, page.id, dot.id);
+    expect(fresh.id).not.toBe(old.id);
+    expect(ws.pages.get(dot.spaceId, page.id).content).toBe('Keep this page');
+    ws.restoreConversation(old.id);
+    expect(ws.requireThread(old.id).title).toBe('Design');
+    expect((await service.conversation(dot.spaceId, page.id, dot.id)).id).toBe(
+      fresh.id,
+    );
+  } finally {
+    ws.close();
+  }
+});
 it('reuses one actual Intelligence thread per page and Dot under concurrent requests', async () => {
   const ws = new WorkspaceStore(':memory:', 'owner');
   const dot = ws.dots()[0];

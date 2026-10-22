@@ -1,4 +1,5 @@
 import { setupInputSchema } from './setup-telemetry.js';
+import { messageMarkRoutes } from './message-mark-routes.js';
 import { pageRoutes } from './page-routes.js';
 import { Hono } from 'hono';
 import { z } from 'zod';
@@ -28,6 +29,7 @@ const dotSchema = z
 export function workspaceRoutes(platform: Platform, voice: VoiceService) {
   const app = new Hono();
   app.route('/', pageRoutes(platform));
+  app.route('/', messageMarkRoutes(platform));
   app.post('/setup-telemetry', async (c) => {
     const parsed = setupInputSchema.safeParse(
       await c.req.json().catch(() => null),
@@ -49,6 +51,7 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
       spaces: await platform.workspace.spaces(),
       dots: await platform.workspace.dots(),
       conversations: await platform.workspace.conversations(),
+      deletedConversations: await platform.workspace.deletedConversations(),
       setup: platform.setup(),
       calls: await platform.workspace.calls(),
     }),
@@ -173,8 +176,46 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
       201,
     );
   });
+  app.patch('/conversations/:id', async (c) => {
+    const data = z
+      .object({
+        title: z.string().trim().min(1).max(120).optional(),
+        pinned: z.boolean().optional(),
+      })
+      .strict()
+      .refine(
+        (value) => value.title !== undefined || value.pinned !== undefined,
+      )
+      .safeParse(await c.req.json().catch(() => null));
+    if (!data.success)
+      return c.json(
+        { error: 'Enter a chat name (1–120 characters) or a pin setting.' },
+        400,
+      );
+    return c.json(
+      await platform.workspace.updateConversation(c.req.param('id'), data.data),
+    );
+  });
   app.get('/conversations/:id/capture', async (c) =>
     c.json(await platform.workspace.capture(c.req.param('id'))),
+  );
+  app.delete('/conversations/:id', async (c) => {
+    const id = c.req.param('id');
+    await platform.workspace.requireThread(id);
+    if (
+      platform.localConversations &&
+      (await platform.localConversations.isRunning(id))
+    )
+      return c.json(
+        {
+          error: 'Conversation is busy. Stop its response before deleting it.',
+        },
+        409,
+      );
+    return c.json(await platform.workspace.deleteConversation(id));
+  });
+  app.post('/conversations/:id/restore', async (c) =>
+    c.json(await platform.workspace.restoreConversation(c.req.param('id'))),
   );
   app.post('/voice/calls', async (c) => {
     const data = z
@@ -241,6 +282,8 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
   app.all('/copilotkit/*', (c) => platform.handle(c.req.raw));
   app.onError((error, c) => {
     const text = error.message;
+    if (/^Conversation (is busy|has scheduled tasks)/.test(text))
+      return c.json({ error: text }, 409);
     if (text.startsWith('Space access must include'))
       return c.json({ error: text }, 400);
     const known =
