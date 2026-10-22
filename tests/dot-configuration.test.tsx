@@ -136,3 +136,24 @@ it('keeps edits and permits retry when saving rejects', async () => {
   await save();
   expect(close).toHaveBeenCalledOnce();
 });
+
+it('targets customization at the edited Dot and offers one desktop selection', async () => {
+  const openPreferences = vi.fn(async () => {});
+  const selectDesktopDot = vi.fn(async () => {});
+  vi.stubGlobal(
+    'window',
+    Object.assign(new EventTarget(), {
+      dotWorkspace: { openPreferences, selectDesktopDot },
+    }),
+  );
+  await mount();
+  const button = (label: string) =>
+    root.root
+      .findAllByType('button')
+      .find((b) => b.children.join('') === label)!;
+  await act(async () => button('Customize…').props.onClick());
+  expect(openPreferences).toHaveBeenCalledWith('dot-a');
+  await act(async () => button('Use on desktop').props.onClick());
+  expect(selectDesktopDot).toHaveBeenCalledWith('dot-a');
+  expect(button('On desktop').props.disabled).toBe(true);
+});

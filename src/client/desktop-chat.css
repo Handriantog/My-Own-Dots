@@ -42,12 +42,15 @@
   align-items: center;
   gap: 4px;
 }
-.companion-toolbar-row > select {
+.companion-toolbar-row > .companion-dot-name {
   margin-right: auto;
   flex: 1;
   min-width: 0;
   font-size: 14px;
   font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .companion-toolbar select {
   border: 0;

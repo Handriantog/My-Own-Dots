@@ -55,6 +55,7 @@ import {
   type Notices,
 } from './poll-notice';
 import { Mascot } from './Mascot';
+import { DotAppearanceContext } from './dot-appearance';
 import { useCompanionColor } from './companion-appearance';
 import { Chat } from './Chat';
 import { FolderAccessSettings } from './FolderAccessSettings';
@@ -103,8 +104,11 @@ export function App({
   const conversationRevision = useRef(0);
   const [selectedDot, setSelectedDot] = useState(selection.dotId);
   const dot =
-    workspace?.dots.find((item) => item.id === selectedDot) ??
-    workspace?.dots[0];
+    workspace?.dots.find(
+      (item) =>
+        item.id ===
+        (desktop ? (workspace.desktopDotId ?? selectedDot) : selectedDot),
+    ) ?? workspace?.dots[0];
   const [voiceRevision, setVoiceRevision] = useState(0);
   const refreshVoiceSettings = useCallback(
     () => setVoiceRevision((value) => value + 1),
@@ -492,9 +496,11 @@ export function App({
       if (revision === conversationRevision.current) setWorkspace(w);
       setNeedsAuth(false);
       setSelectedDot((previous) =>
-        w.dots.some((dot) => dot.id === previous)
-          ? previous
-          : w.dots[0]?.id || '',
+        desktop && w.desktopDotId
+          ? w.desktopDotId
+          : w.dots.some((dot) => dot.id === previous)
+            ? previous
+            : w.dots[0]?.id || '',
       );
       setNotices((current) => applyRefreshResult(current, { ok: true }));
     } catch (e) {
@@ -506,12 +512,34 @@ export function App({
         ),
       );
     }
-  }, []);
+  }, [desktop]);
   useEffect(() => {
     void refresh();
     const timer = setInterval(() => void refresh(), 3000);
     return () => clearInterval(timer);
   }, [refresh]);
+  useEffect(
+    () =>
+      window.dotWorkspace?.onCustomization?.((state) => {
+        conversationRevision.current++;
+        setWorkspace((previous) =>
+          previous
+            ? {
+                ...previous,
+                desktopDotId: state.dotId,
+                dots: previous.dots.map((dot) => ({
+                  ...dot,
+                  customization:
+                    state.dots.find((item) => item.id === dot.id)
+                      ?.customization ?? dot.customization,
+                })),
+              }
+            : previous,
+        );
+        if (desktop && state.dotId) setSelectedDot(state.dotId);
+      }),
+    [desktop],
+  );
   useEffect(() => {
     setCapture(undefined);
     if (!selectedThread) return;
@@ -872,22 +900,7 @@ export function App({
         {desktop && (
           <header className="companion-toolbar">
             <div className="companion-toolbar-row">
-              <select
-                aria-label="Choose your Dot"
-                value={dot.id}
-                onChange={(event) => {
-                  const next = workspace.dots.find(
-                    (item) => item.id === event.target.value,
-                  );
-                  if (next) chooseDot(next);
-                }}
-              >
-                {workspace.dots.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
+              <strong className="companion-dot-name">{dot.name}</strong>
               {view !== 'chat' && (
                 <button className="text-button" onClick={() => setView('chat')}>
                   Back to chat
@@ -1507,11 +1520,18 @@ export function App({
       )}
     </div>
   );
-  return configured ? (
-    <CopilotKitProvider runtimeUrl="/api/copilotkit" headers={authHeaders()}>
-      {content}
-    </CopilotKitProvider>
-  ) : (
-    content
+  return (
+    <DotAppearanceContext.Provider value={workspace.dots}>
+      {configured ? (
+        <CopilotKitProvider
+          runtimeUrl="/api/copilotkit"
+          headers={authHeaders()}
+        >
+          {content}
+        </CopilotKitProvider>
+      ) : (
+        content
+      )}
+    </DotAppearanceContext.Provider>
   );
 }

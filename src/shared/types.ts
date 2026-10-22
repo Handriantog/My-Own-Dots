@@ -78,6 +78,7 @@ export interface Space {
 }
 export interface Dot {
   id: string;
+  customization?: import('./dot-customization.js').DotCustomization;
   /** Default destination for saved pages, not ownership. */
   spaceId: string;
   spaceIds: string[];
@@ -131,6 +132,7 @@ export interface SetupStatus {
   missing: string[];
 }
 export interface WorkspaceState {
+  desktopDotId?: string | null;
   spaces: Space[];
   dots: Dot[];
   conversations: Conversation[];

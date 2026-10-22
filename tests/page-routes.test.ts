@@ -38,6 +38,66 @@ const request = (body: unknown, method = 'POST') => ({
   body: JSON.stringify(body),
 });
 
+it('selects one desktop Dot and validates scoped customization through the owner API', async () => {
+  const { ws, app } = await fixture('owner-secret');
+  const a = ws.dots()[0];
+  const b = ws.createDot(a.spaceId, 'Scout', 'Research carefully', true, true);
+  const ownerRequest = (body: unknown, method: string) => ({
+    ...request(body, method),
+    headers: {
+      'Content-Type': 'application/json',
+      authorization: 'Bearer owner-secret',
+    },
+  });
+  expect(
+    (await app.request('/api/desktop-dot', request({ dotId: b.id }, 'PUT')))
+      .status,
+  ).toBe(401);
+  expect(
+    (
+      await app.request(
+        '/api/desktop-dot',
+        ownerRequest({ dotId: b.id }, 'PUT'),
+      )
+    ).status,
+  ).toBe(200);
+  expect(
+    (
+      await app.request(
+        '/api/desktop-dot',
+        ownerRequest({ dotId: 'missing' }, 'PUT'),
+      )
+    ).status,
+  ).toBe(404);
+  expect(ws.desktopDot().dotId).toBe(b.id);
+  expect(
+    (
+      await app.request(
+        `/api/dots/${a.id}/customization`,
+        ownerRequest({ color: '#abcdef', muted: true }, 'PATCH'),
+      )
+    ).status,
+  ).toBe(200);
+  expect(ws.dot(a.id)?.customization?.color).toBe('#abcdef');
+  expect(ws.dot(b.id)?.customization?.color).toBe('#45a7ff');
+  expect(
+    (
+      await app.request(
+        `/api/dots/${a.id}/customization`,
+        ownerRequest({ talkShortcut: '' }, 'PATCH'),
+      )
+    ).status,
+  ).toBe(400);
+  expect(
+    (
+      await app.request(
+        `/api/dots/${a.id}/customization`,
+        ownerRequest({ accessories: { headwear: 'invalid' } }, 'PATCH'),
+      )
+    ).status,
+  ).toBe(400);
+});
+
 it('saves Learning settings through the owner API and rejects malformed container IDs', async () => {
   const { ws, app } = await fixture();
   const dot = ws.dots()[0];

@@ -34,6 +34,7 @@ export class CompanionVoiceSession {
       state?(value: CompanionVoiceState): void;
       reviewFolders?(): void;
       error?(message: string): void;
+      canStart?(): boolean;
     },
     private readonly channel = 'dot:voice',
   ) {
@@ -55,6 +56,7 @@ export class CompanionVoiceSession {
     });
     ipcMain.handle(`${this.channel}:activate`, (event) => {
       this.requireTrusted(event);
+      this.requireCanStart();
       const window = this.getWindow()!;
       if (
         !this.talkUntil ||
@@ -119,6 +121,7 @@ export class CompanionVoiceSession {
     );
     ipcMain.handle(`${this.channel}:begin`, (event, value: unknown) => {
       this.requireTrusted(event);
+      this.requireCanStart();
       const data =
         typeof value === 'object' && value !== null
           ? (value as { callId?: unknown; quality?: unknown })
@@ -194,6 +197,7 @@ export class CompanionVoiceSession {
   }
 
   talk(windowless = false): boolean {
+    if (this.changed.canStart?.() === false) return false;
     const window = this.getWindow();
     if (
       !window ||
@@ -221,6 +225,12 @@ export class CompanionVoiceSession {
         );
       this.stop('timeout');
     }, ms);
+  }
+  private requireCanStart(): void {
+    if (this.changed.canStart?.() === false)
+      throw new Error(
+        'The desktop Dot is switching. Choose Talk again when it is ready.',
+      );
   }
 
   private clearDeadline(): void {

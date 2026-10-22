@@ -2,6 +2,25 @@
 
 Machine: Apple M3 Max, 14 CPU cores, 36 GiB RAM, macOS 26.6.2 (25G83), arm64. Runtime: Electron 44.8.0, PixiJS 8.22.0. Native helper compiled with the installed Swift toolchain, deployment target macOS 14.
 
+## Voice requests to open websites — October 22, 2026
+
+The `open_website` tool opens requested HTTP(S) sites in the default browser through private IPC between the app-owned backend and Electron. Basic/Medium use the regular agent; High passes the capability into delegated tasks; Realtime uses its existing compute turn. Source selection and clarification remain agent decisions. Ordinary desktop chat can also use the tool. No extra package, UI control, public endpoint, or workspace schema change was added.
+
+- Full suite: **1,618 passed, 93 skipped**. Typecheck, lint, formatting, whitespace checks, the web/server build and desktop build passed. The existing large frontend chunk advisory remains. One concurrent full-suite run timed out in `tests/storage/archive.test.ts` → `round trips a large stream with bounded buffering`; the final full run passed without simultaneous build/lint work.
+- Tests exercise the actual agent/tool loop, a child-process IPC roundtrip, URL rejection, request expiry, stopped workspaces, matching acknowledgements, lost replies, duplicate suppression, failures, and scheduled/receipt exclusions. High coverage carries a prior source URL through the parent conversation into a delegated task and verifies its persisted browser receipt.
+- Realtime regression coverage uses VoiceService, the SDK/Hono runtime, the agent and native request handler: opening succeeds, later inference fails, retrying the same compute call opens no extra tab, and a fresh request can open again. Independent review verified the fix and found no remaining Critical or Important issues.
+- Native worker protocol tests: **17 passed**. The separate native launcher suite remains blocked by this environment's `getconf DARWIN_USER_CACHE_DIR` input/output error: `test_network_is_denied`, `test_reads_only_allowed_home_files_and_writes_only_cache`, and `test_worker_starts_from_private_cache_when_app_cwd_is_denied`. Launcher code was not changed to bypass this restriction.
+- Automated checks used fixture inference and a captured OS-open callback; no real websites, microphone or paid voice service were used. Live model routing/source selection, actual default-browser launch, and voice hardware remain desktop acceptance checks. Four routing corpus cases were added but have not been evaluated with the installed model in this session. “Opened” confirms OS acceptance, not page-load success. The existing installed app and the owner's workspace data were not changed.
+
+## Per-Dot customization — October 22, 2026
+
+Each Dot now owns its appearance and behavior in workspace storage. A single desktop Dot ID controls the companion and compact Chat/Talk, while the global Talk shortcut stays in machine preferences. Existing shared customization migrates once, and older workspace backups remain restorable before and after upgrading.
+
+- Full suite: **1,600 passed, 93 skipped**. Typecheck, lint, formatting, whitespace checks, the web/server build, and the desktop build passed. The inherited large frontend chunk advisory remains.
+- Regression coverage includes independent settings, exclusive selection across restart, untouched new-Dot defaults, owner API validation, stale settings senders, scoped avatars, compact chat identity, backup upgrade/restore, and delayed desktop switches racing with Talk.
+- A real Electron UI smoke used the compiled app with a disposable workspace/profile, blank provider keys, and no AI or microphone use. It customized Scout independently, selected it through **Use on desktop**, verified browsing another Dot did not change the selection, opened default customization for Scout, and confirmed exactly one overlay window. Screenshots in `artifacts/per-dot-customization/` were visually inspected.
+- Independent review found and verified fixes for backup schema ordering and Talk/selection concurrency; no Important or Critical findings remained. Live voice hardware and replacement of the owner's installed app were not part of this check.
+
 ## Minimal startup refinement — October 19, 2026
 
 At the owner's request, `af709dd` removes the startup headlines, slogans, descriptions, shortcut footer, visible branding and stage checklist. Normal loading now shows the animated mascot with one 11px status line and a thin progress animation. Setup controls remain hidden until a longer wait or recovery state; warnings and errors retain their actionable details. The separate configuration window keeps its fields and uses a smaller heading. The initial HTML already has the minimal presentation, preventing a flash of the old copy before the script runs.

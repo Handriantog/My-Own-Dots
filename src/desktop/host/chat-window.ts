@@ -46,6 +46,7 @@ export class CompanionChatWindow {
       state?(value: CompanionVoiceState): void;
       reviewFolders?(): void;
       error?(message: string): void;
+      canStart?(): boolean;
     } = {
       active() {},
       ready() {},

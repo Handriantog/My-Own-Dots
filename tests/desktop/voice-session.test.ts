@@ -60,6 +60,7 @@ let window: ReturnType<typeof windowDouble>;
 let voice: CompanionVoiceSession;
 let active: boolean[];
 let reviews: number;
+let canStart: boolean;
 function sender() {
   return {
     sender: window.webContents,
@@ -91,12 +92,14 @@ beforeEach(() => {
   window = windowDouble();
   active = [];
   reviews = 0;
+  canStart = true;
   voice = new CompanionVoiceSession(
     () => window as unknown as BrowserWindow,
     () => 'http://127.0.0.1:4310/',
     {
       active: (value) => active.push(value),
       ready() {},
+      canStart: () => canStart,
       reviewFolders: () => {
         reviews++;
       },
@@ -112,6 +115,19 @@ afterEach(() => {
 });
 
 describe('desktop microphone scope', () => {
+  it('rejects native, pending and direct call starts while the desktop Dot is switching', async () => {
+    ready();
+    expect(voice.talk()).toBe(true);
+    canStart = false;
+    expect(() => invoke('activate')).toThrow(/switching/i);
+    expect(() => invoke('begin', 'switch-call-123')).toThrow(/switching/i);
+    voice.stop('cancelled');
+    expect(voice.talk()).toBe(false);
+    expect(active).not.toContain(true);
+    canStart = true;
+    invoke('begin', 'new-call-123');
+    expect(active.at(-1)).toBe(true);
+  });
   it('resurfaces pending folders on a new call and an authenticated approval reminder', () => {
     ready();
     expect(() => invoke('review-folders', 'call-12345678')).toThrow();

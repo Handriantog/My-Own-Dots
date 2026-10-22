@@ -40,6 +40,7 @@ export function ChatTranscript({
   calls,
   renderTools,
   dotName = 'Dot',
+  dotId,
   marks = [],
   onMark,
   marksDisabled = false,
@@ -48,6 +49,7 @@ export function ChatTranscript({
   messages: Message[];
   calls: CallReceipt[];
   dotName?: string;
+  dotId?: string;
   marks?: MessageMark[];
   onMark?: (messageId: string, kind: MessageMarkKind, active: boolean) => void;
   marksDisabled?: boolean;
@@ -124,7 +126,12 @@ export function ChatTranscript({
                 <>
                   <span className="chat-avatar" aria-hidden="true">
                     {message.role === 'assistant' ? (
-                      <Mascot name={dotName} small decorative />
+                      <Mascot
+                        identity={dotId}
+                        name={dotName}
+                        small
+                        decorative
+                      />
                     ) : (
                       Array.from(sender)[0]
                     )}

@@ -60,7 +60,25 @@ export async function copyValidatedSQLite(
   try {
     original.exec('PRAGMA trusted_schema=OFF');
     const actual = JSON.stringify(inventory(original));
-    const match = [...supported.entries()].find(
+    // The additive customization migration is also absent in older supported
+    // backups. Match that exact known schema; never execute archived DDL.
+    const variants = [...supported.entries()].flatMap(([version, schema]) => [
+      [version, schema] as const,
+      [
+        version,
+        schema
+          .filter((row) => row.name !== 'desktop_dot')
+          .map((row) =>
+            row.name === 'dots'
+              ? {
+                  ...row,
+                  sql: String(row.sql).replace(', customization TEXT', ''),
+                }
+              : row,
+          ),
+      ] as const,
+    ]);
+    const match = variants.find(
       ([, expected]) => actual === JSON.stringify(expected),
     );
     if (!match) throw new Error('Unsupported SQLite restore schema');

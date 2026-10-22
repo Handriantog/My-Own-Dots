@@ -1,4 +1,7 @@
 import { CompanionAvatar } from './CompanionAvatar';
+import { useContext } from 'react';
+import { DotAppearanceContext } from './dot-appearance';
+import { DEFAULT_DOT_CUSTOMIZATION } from '../shared/dot-customization';
 import {
   useCompanionAccessories,
   useCompanionColor,
@@ -31,8 +34,14 @@ export function Mascot({
   companionColor?: string;
 }) {
   const savedColor = useCompanionColor();
-  const accessories = useCompanionAccessories();
-  const color = companionColor ?? savedColor;
+  const sharedAccessories = useCompanionAccessories();
+  const dots = useContext(DotAppearanceContext);
+  const customization = identity
+    ? (dots.find((dot) => dot.id === identity)?.customization ??
+      DEFAULT_DOT_CUSTOMIZATION)
+    : undefined;
+  const accessories = customization?.accessories ?? sharedAccessories;
+  const color = customization?.color ?? companionColor ?? savedColor;
   return (
     <span className={`mascot ${state} ${small ? 'small' : ''}`}>
       {color ? (

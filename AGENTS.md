@@ -15,6 +15,12 @@ The owner requires all implementation work for this project to use worktrees ins
 
 This preference applies to future implementation sessions for this repository. It concerns development checkouts; application workspace data follows the product's storage configuration.
 
+## Pull request verification
+
+- Before opening a PR, run the checks in `.github/workflows/ci.yml`, including the full test suite with `LOCAL_TEST_DATABASE_URL` pointing to a dedicated test database. Do not use owner application data for tests.
+- Push the verified commit and wait for its GitHub Actions checks to pass before opening the PR. After opening or updating a PR, inspect both push and pull-request checks for the current commit and resolve failures before reporting it ready.
+- Report skipped or unavailable checks explicitly. A passing local run or one passing Actions run does not establish that every required check passed.
+
 ## Product design: less is more
 
 - Prefer small, simple interfaces with fewer words, controls, and steps.

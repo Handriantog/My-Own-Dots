@@ -467,8 +467,10 @@ it.each(['before-ack', 'committed'])(
       if (child.exitCode === null && !child.signalCode) child.kill('SIGKILL');
       await exited;
     });
-    if (mode === 'committed') await once(child, 'message');
-    else {
+    expect((await once(child, 'message'))[0]).toBe(
+      mode === 'committed' ? 'committed' : 'publishing',
+    );
+    if (mode === 'before-ack') {
       await vi.waitFor(async () =>
         expect(await readFile(f.database + '.started', 'utf8')).toBe('started'),
       );

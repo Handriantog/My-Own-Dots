@@ -19,7 +19,13 @@ export interface DesktopWorkspaceBridge {
   retry(): Promise<void>;
   chooseWorkspace(): Promise<boolean>;
   configure(values: Record<string, string>): Promise<void>;
-  openPreferences(): Promise<void>;
+  openPreferences(dotId?: string): Promise<void>;
+  selectDesktopDot(dotId: string): Promise<void>;
+  onCustomization(
+    listener: (
+      state: import('../../shared/dot-customization.js').DesktopDotState,
+    ) => void,
+  ): () => void;
   openBackendSettings(): Promise<void>;
   onNavigate(listener: (destination: WorkspaceDestination) => void): () => void;
   onCommand(listener: (command: WorkspaceCommand) => void): () => void;

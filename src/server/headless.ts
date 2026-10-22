@@ -5,6 +5,7 @@ import {
 import type { Message } from '@ag-ui/core';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { voiceComputeMessagePrefix } from '../shared/voice-compute.js';
 import { voiceReceiptMessagePrefix } from '../shared/voice-receipt.js';
 import { scheduledTaskMessagePrefix } from '../shared/scheduled-message.js';
 
@@ -88,7 +89,11 @@ export async function runThreadTurn(
         ? voiceReceiptMessagePrefix
         : metadata?.opendotsSource === 'scheduled_task'
           ? scheduledTaskMessagePrefix
-          : '';
+          : metadata?.opendotsSource === 'voice_compute' &&
+              typeof metadata.browserRequestId === 'string' &&
+              /^[a-f0-9]{64}$/.test(metadata.browserRequestId)
+            ? `${voiceComputeMessagePrefix}${metadata.browserRequestId}:`
+            : '';
     agent.addMessage({
       id: `${idPrefix}${randomUUID()}`,
       role: 'user',

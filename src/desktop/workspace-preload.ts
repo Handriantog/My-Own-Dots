@@ -38,7 +38,19 @@ if (
     },
     configure: (values) =>
       ipcRenderer.invoke('dot:workspace:configure', values),
-    openPreferences: () => ipcRenderer.invoke('dot:workspace:preferences'),
+    openPreferences: (dotId) =>
+      ipcRenderer.invoke('dot:workspace:preferences', dotId),
+    selectDesktopDot: (dotId) =>
+      ipcRenderer.invoke('dot:workspace:select-desktop-dot', dotId),
+    onCustomization(callback) {
+      const listener = (
+        _event: unknown,
+        state: Parameters<typeof callback>[0],
+      ) => callback(state);
+      ipcRenderer.on('dot:workspace:customization', listener);
+      return () =>
+        ipcRenderer.removeListener('dot:workspace:customization', listener);
+    },
     openBackendSettings: () =>
       ipcRenderer.invoke('dot:workspace:backend-settings'),
     onNavigate(callback) {

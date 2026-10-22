@@ -19,6 +19,11 @@ import {
 import path from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { WorkspaceBackend } from './host/workspace-backend.js';
+import { DesktopDots } from './host/desktop-dots.js';
+import {
+  DEFAULT_DOT_CUSTOMIZATION,
+  dotCustomizationChangeSchema,
+} from '../shared/dot-customization.js';
 import {
   portableConfiguration,
   resolveWorkspaceLocation,
@@ -139,6 +144,7 @@ async function start(): Promise<void> {
     }
   }
   const backend = new WorkspaceBackend({
+    openWebsite: (url) => shell.openExternal(url),
     bundle: path.join(__dirname, 'app'),
     data: app.getPath('userData'),
     sourceRoot,
@@ -161,14 +167,27 @@ async function start(): Promise<void> {
   });
   const store = new PreferenceStore(app.getPath('userData'));
   let preferences = await store.load();
+  let switchingDesktop = false;
   const workspace = new WorkspaceWindow(
     __dirname,
     app.getPath('userData'),
     backend,
-    () => openSettings(),
+    (dotId) => openSettings(dotId),
     () => folderApprovals.review(false),
     () => preferences.color,
     () => preferences.accessories,
+    async (dotId) => {
+      if (switchingDesktop)
+        throw new Error('The desktop Dot is already switching.');
+      if (chat.voiceEngaged)
+        throw new Error('End the desktop call before switching Dots.');
+      switchingDesktop = true;
+      try {
+        await desktopDots.select(dotId);
+      } finally {
+        switchingDesktop = false;
+      }
+    },
   );
   protocol.handle(
     'dots',
@@ -203,6 +222,8 @@ async function start(): Promise<void> {
   );
   let overlay: BrowserWindow;
   let settingsWindow: BrowserWindow | null = null;
+  let settingsDotId: string | undefined;
+  let settingsConnection: typeof workspace.activeConnection;
   let voiceActive = false;
   let voiceState: CompanionVoiceState = null;
   let voiceError = '';
@@ -212,6 +233,7 @@ async function start(): Promise<void> {
     app.getPath('userData'),
     () => preferences.color,
     {
+      canStart: () => !switchingDesktop,
       active(value) {
         voiceActive = value;
       },
@@ -231,6 +253,20 @@ async function start(): Promise<void> {
     },
     workspace,
     () => preferences.accessories,
+  );
+  let activeDesktopDotId: string | null = null;
+  const desktopDots = new DesktopDots(
+    () => workspace.activeConnection,
+    preferences,
+    (state) => {
+      const selected = state?.dots.find((dot) => dot.id === state.dotId);
+      if (activeDesktopDotId !== (state?.dotId ?? null)) {
+        chat.stopVoice('desktop-dot-changed');
+        activeDesktopDotId = state?.dotId ?? null;
+      }
+      applyPreferences(selected?.customization ?? DEFAULT_DOT_CUSTOMIZATION);
+      if (state) workspace.customizationChanged(state);
+    },
   );
   const clickGesture = new CompanionClick();
   let dismissMenuClick = false;
@@ -354,6 +390,16 @@ async function start(): Promise<void> {
     });
   }
   function changePreferences(change: Partial<Preferences>): void {
+    const dotId = desktopDots.current?.dotId;
+    if (!dotId) {
+      setStatus('Open your workspace to customize a Dot.');
+      return;
+    }
+    void desktopDots
+      .update(dotId, dotCustomizationChangeSchema.parse(change))
+      .catch(() => setStatus('Could not save Dot customization.'));
+  }
+  function applyPreferences(change: Partial<Preferences>): void {
     if (change.talkShortcut !== undefined) {
       talkShortcut.set(change.talkShortcut);
       shortcutError = '';
@@ -413,6 +459,7 @@ async function start(): Promise<void> {
   }
   function openTalk(): void {
     if (quitting) return;
+    if (switchingDesktop) return;
     userHidden = false;
     syncVisibility();
     void chat.talk(panelBounds(440, 620)).catch((error) => {
@@ -435,6 +482,7 @@ async function start(): Promise<void> {
   }
   function toggleWindowlessTalk(): void {
     if (quitting || osSuspended) return;
+    if (switchingDesktop) return;
     userHidden = false;
     voiceError = '';
     companionMenu.close();
@@ -607,7 +655,14 @@ async function start(): Promise<void> {
           void chat.configure(panelBounds(440, 620)).catch(() => {});
         },
       },
-      { label: 'Customize Dot', click: openSettings },
+      {
+        label: 'Customize Dot',
+        click: () => {
+          void openSettings().catch(() =>
+            setStatus('Open your workspace to customize a Dot.'),
+          );
+        },
+      },
       {
         label: 'Body color',
         submenu: [
@@ -800,13 +855,27 @@ async function start(): Promise<void> {
       event.senderFrame.url === 'dots://app/settings.html'
     );
   }
-  function openSettings(): void {
+  async function openSettings(dotId?: string): Promise<void> {
     if (quitting) return;
+    await workspace.ready();
+    const state = await desktopDots.sync();
+    if (quitting) return;
+    const target = dotId ?? state?.dotId;
+    if (!target || !state?.dots.some((dot) => dot.id === target))
+      throw new Error('Save this Dot before customizing it.');
+    if (
+      settingsWindow &&
+      (settingsDotId !== target ||
+        settingsConnection !== workspace.activeConnection)
+    )
+      settingsWindow.destroy();
     if (settingsWindow && !settingsWindow.isDestroyed()) {
       settingsWindow.show();
       settingsWindow.focus();
       return;
     }
+    settingsDotId = target;
+    settingsConnection = workspace.activeConnection;
     settingsWindow = new BrowserWindow({
       width: 500,
       height: Math.min(480, screen.getPrimaryDisplay().workArea.height),
@@ -1016,17 +1085,37 @@ async function start(): Promise<void> {
       else resumeShortcut();
     },
   );
+  function readDotPreferences() {
+    const dot = desktopDots.current?.dots.find(
+      (dot) => dot.id === settingsDotId,
+    );
+    if (!dot || settingsConnection !== workspace.activeConnection)
+      throw new Error('The workspace changed. Reopen customization.');
+    return {
+      ...preferences,
+      ...dot.customization,
+      dotId: dot.id,
+      dotName: dot.name,
+    };
+  }
   ipcMain.handle('dot:preferences:read', (event) => {
     if (!settingsTrusted(event)) throw new Error('Invalid settings sender');
-    return preferences;
+    return readDotPreferences();
   });
   ipcMain.handle('dot:preferences:update', async (event, value: unknown) => {
     if (!settingsTrusted(event)) throw new Error('Invalid settings sender');
     const change = parsePreferenceChange(value);
     if (!change) throw new Error('Invalid preferences');
-    changePreferences(change);
-    await savePreferences();
-    return preferences;
+    const target = readDotPreferences().dotId;
+    const { talkShortcut: shortcut, ...customization } = change;
+    if (shortcut !== undefined) applyPreferences({ talkShortcut: shortcut });
+    if (Object.keys(customization).length)
+      await desktopDots.update(
+        target,
+        dotCustomizationChangeSchema.parse(customization),
+      );
+    if (!settingsTrusted(event)) throw new Error('Customization was closed.');
+    return readDotPreferences();
   });
   let tickCount = 0;
   const ticker = setInterval(() => {
@@ -1147,12 +1236,22 @@ async function start(): Promise<void> {
   powerMonitor.on('lock-screen', suspend);
   powerMonitor.on('resume', resume);
   powerMonitor.on('unlock-screen', resume);
-  installWorkspaceMenu(workspace, () => openSettings());
+  installWorkspaceMenu(workspace, () => {
+    void openSettings().catch(() =>
+      setStatus('Open your workspace to customize a Dot.'),
+    );
+  });
   app.on('activate', () => {
     if (quitting) return;
     void workspace.open();
   });
-  void workspace.open();
+  void workspace
+    .open()
+    .then(() => desktopDots.sync())
+    .catch(() => {});
+  const customizationTimer = setInterval(() => {
+    void desktopDots.sync().catch(() => {});
+  }, 3000);
   app.on('second-instance', () => {
     if (quitting) return;
     void workspace.open();
@@ -1169,6 +1268,7 @@ async function start(): Promise<void> {
     talkShortcut.destroy();
     chat.destroy();
     clearInterval(ticker);
+    clearInterval(customizationTimer);
     if (retryTimer) clearTimeout(retryTimer);
     cancelCapture();
     simulation.suspend();

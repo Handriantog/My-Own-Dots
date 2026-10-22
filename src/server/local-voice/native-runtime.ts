@@ -418,6 +418,7 @@ export class NativeVoiceRuntime {
       this.platform.setupTelemetry,
       this.platform.memory,
       this.coordinator.jobs,
+      this.platform.openWebsite,
     );
     const work = this.run(agent, {
       threadId: job.workerThreadId,

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { DesktopBrowserOpener } from './browser-opener.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
   mkdir,
@@ -40,6 +41,7 @@ export interface WorkspaceBackendOptions {
   executable?: string;
   startupTimeoutMs?: number;
   shutdownTimeoutMs?: number;
+  openWebsite?: (url: string) => Promise<void>;
   /** Native host runs potentially large interrupted-restore verification off its main thread. */
   recoverStorage?: () => Promise<void>;
   portableRoot?: string;
@@ -544,15 +546,31 @@ export class WorkspaceBackend {
           PORT: String(port),
           DATABASE_PATH: this.config!.database,
           DOTS_DESKTOP_API_ONLY: '1',
+          DOTS_DESKTOP_BROWSER: this.options.openWebsite ? '1' : '0',
           DOTS_RUNTIME_ROOT: path.resolve(this.options.bundle),
           DOTS_WORKSPACE_ID: workspaceId,
           DOTS_WORKSPACE_ENV: this.config!.envFile,
           DOTS_PORTABLE_MACHINE_ID: this.options.portableMachineId,
         },
-        stdio: 'ignore',
+        stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
       },
     );
     this.child = child;
+    if (this.options.openWebsite) {
+      const browser = new DesktopBrowserOpener(
+        this.options.openWebsite,
+        () =>
+          this.child === child &&
+          this.generation === generation &&
+          child.connected,
+      );
+      child.on('message', (message: unknown) => {
+        void browser.handle(message).then((reply) => {
+          if (reply && child.connected && this.child === child)
+            child.send(reply, () => {});
+        });
+      });
+    }
     let failure: Error | undefined;
     child.once('error', () => {
       failure = new Error(

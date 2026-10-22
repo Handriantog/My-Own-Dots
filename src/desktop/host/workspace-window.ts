@@ -72,11 +72,12 @@ export class WorkspaceWindow {
     private readonly bundle: string,
     private readonly data: string,
     private readonly backend: WorkspaceBackend,
-    private readonly preferences: () => void,
+    private readonly preferences: (dotId?: string) => void | Promise<void>,
     reviewFolders?: () => void,
     private readonly getColor: () => string = () => '#45a7ff',
     private readonly getAccessories: () => Accessories = () =>
       DEFAULT_ACCESSORIES,
+    private readonly selectDesktopDot?: (dotId: string) => Promise<void>,
   ) {
     this.voice = new CompanionVoiceSession(
       () => this.window,
@@ -260,7 +261,24 @@ export class WorkspaceWindow {
       await this.storage.cancelActive();
       return this.retry();
     });
-    handle('preferences', () => this.preferences());
+    handle('preferences', (_event, dotId) => {
+      if (
+        dotId !== undefined &&
+        (typeof dotId !== 'string' || !dotId || dotId.length > 128)
+      )
+        throw new Error('Invalid Dot.');
+      return this.preferences(dotId as string | undefined);
+    });
+    handle('select-desktop-dot', (_event, dotId) => {
+      if (
+        typeof dotId !== 'string' ||
+        !dotId ||
+        dotId.length > 128 ||
+        !this.selectDesktopDot
+      )
+        throw new Error('Invalid Dot.');
+      return this.selectDesktopDot(dotId);
+    });
     handle('backend-settings', () => this.openBackendSettings());
     handle('choose', async (event) => {
       this.requireRecovery(event);
@@ -362,6 +380,13 @@ export class WorkspaceWindow {
   }
   get activeConnection() {
     return this.connection;
+  }
+  customizationChanged(
+    state: import('../../shared/dot-customization.js').DesktopDotState,
+  ): void {
+    for (const window of this.windows)
+      if (!window.isDestroyed() && isWorkspacePage(window.webContents.getURL()))
+        window.webContents.send('dot:workspace:customization', state);
   }
   private async resetDocuments() {
     this.pendingDestination = undefined;
@@ -787,6 +812,7 @@ export class WorkspaceWindow {
       'status',
       'retry',
       'preferences',
+      'select-desktop-dot',
       'backend-settings',
       'choose',
       'configure',

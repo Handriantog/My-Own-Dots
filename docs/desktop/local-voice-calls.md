@@ -50,6 +50,14 @@ Basic reveals the matching chat window, including when started through the short
 
 Closing or minimizing visible call controls, hiding Dot, locking/sleeping, navigating away, losing the microphone, or losing the call connection ends capture. Ordinary calls also end when their chat window is hidden. Windowless calls intentionally keep that window hidden and end if the companion renderer fails. Calls never resume automatically. The desktop's sound effects are reduced during a call and roaming resumes when it ends. A pending text draft stays intact. macOS may still show its first-use microphone permission dialog.
 
+## Open websites and references
+
+Say **“Open Wikipedia,” “Show me the reference,”** or **“Open all the references.”** Dot uses the default browser and reports the result. References use the actual source links from the conversation or research results. It asks when the destination is unclear; clear requests need no extra confirmation. Merely mentioning a link does not open it.
+
+This works in Basic, Medium, High, and configured Realtime calls when the desktop app starts the workspace backend. The same tool is available in ordinary desktop chat. High uses its existing task conversation and keeps the result there. Attached external backends and standalone web servers do not receive desktop browser access. Research/search permissions and setup are unchanged.
+
+Only HTTP(S) website links are accepted. Each request handles up to ten links, with repeated links opened once per owner message while the backend remains running. Scheduled tasks and automatic call receipts cannot use the tool. Success means the operating system accepted opening the browser; it does not verify that the page loaded. Missing acknowledgements are reported as uncertain and are never retried automatically.
+
 ## Voice and personality
 
 For Medium, open **Chat → Voice & personality**, choose a voice and personality, then **Save**. There are 28 installed English voices: 20 American and 8 British, with female and male options. No extra model download is needed when Medium's assets are installed. **Preview** speaks a fixed example using the draft selection without saving, opening the microphone, or contacting an AI provider. Basic and High disable voice preview and the Kokoro voice picker while retaining the saved voice for a later switch back to Medium.
