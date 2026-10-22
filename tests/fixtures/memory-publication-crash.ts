@@ -8,8 +8,9 @@ const client = await StorageClient.open({
     ? { entry: new URL('./repository-worker-probe.ts', import.meta.url) }
     : {}),
 });
-await client.repositories.jobs.publishDream(
-  JSON.parse(await readFile(requestFile, 'utf8')),
-);
+const request = JSON.parse(await readFile(requestFile, 'utf8'));
+// Separate process/worker startup from the short in-transaction barrier wait.
+if (mode === 'before-ack') process.send?.('publishing');
+await client.repositories.jobs.publishDream(request);
 process.send?.('committed');
 setInterval(() => undefined, 1000);
