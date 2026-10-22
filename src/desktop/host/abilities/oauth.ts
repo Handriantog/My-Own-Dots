@@ -467,6 +467,7 @@ export class AbilityOAuth {
     context: InvocationContext,
     ruleId: string,
     signal: AbortSignal = new AbortController().signal,
+    rejectedToken?: string,
   ): Promise<string> {
     if (this.connections.has(context.bindingId))
       throw new AbilityFailure('busy');
@@ -485,7 +486,10 @@ export class AbilityOAuth {
       record = await this.options.credentials.current(scope);
     if (!record) throw new AbilityFailure('setup_needed');
     signal.throwIfAborted();
-    if (record.account.expiresAt > this.now() + 30_000) {
+    if (
+      record.account.expiresAt > this.now() + 30_000 &&
+      record.account.accessToken !== rejectedToken
+    ) {
       await this.active(context);
       signal.throwIfAborted();
       return record.account.accessToken;
@@ -501,6 +505,7 @@ export class AbilityOAuth {
       record.key,
       controller,
       signal,
+      rejectedToken,
     );
     const refresh: Refresh = { bindingId: binding.id, controller, promise };
     this.refreshes.set(key, refresh);
@@ -518,6 +523,7 @@ export class AbilityOAuth {
     key: AccountKey,
     controller: AbortController,
     callerSignal: AbortSignal,
+    rejectedToken?: string,
   ): Promise<string> {
     const signal = AbortSignal.any([controller.signal, callerSignal]),
       epoch = this.epoch(context.bindingId);
@@ -541,7 +547,11 @@ export class AbilityOAuth {
       await check();
       const current = await this.options.credentials.read(key);
       if (!current?.refreshToken) throw new AbilityFailure('setup_needed');
-      if (current.expiresAt > this.now() + 30_000) return current.accessToken;
+      if (
+        current.expiresAt > this.now() + 30_000 &&
+        current.accessToken !== rejectedToken
+      )
+        return current.accessToken;
       const response = await wait(
         (this.options.exchange ?? requestAbilityHttps)({
           url: permission.tokenUrl,

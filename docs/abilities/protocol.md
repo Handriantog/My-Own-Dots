@@ -160,3 +160,13 @@ Do not automatically retry a mutation after a timeout/disconnect: it may have
 reached the provider. Return `uncertain` when the effect cannot be established.
 An external player such as Spotify is not an Ability-owned process; stopping the
 Ability does not stop that player or its music.
+
+Host authentication refresh is not a worker capability. The host may refresh an
+expired credential proactively or refresh once after a confirmed HTTP 401 and
+retry the same approved request once. It rechecks current authority and keeps
+both credentials private. It does not retry timeout, unknown delivery or 5xx
+mutations. A second 401 is returned for the worker to request reconnection.
+
+Optional tool `channels` and manifest `notices` are declared in the reviewed
+manifest. Channel identity and required notice acceptance are host-owned; neither
+is a worker-supplied protocol field.

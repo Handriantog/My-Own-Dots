@@ -50,10 +50,19 @@ export function abilityRoutes(
   });
   guarded.post('/dots/:dotId/abilities/teach', async (c) => {
     const body = z
-      .strictObject({ reviewId: z.uuid(), settings: values.optional() })
+      .strictObject({
+        reviewId: z.uuid(),
+        settings: values.optional(),
+        acceptedNotices: z.array(z.string().min(1).max(64)).max(4).optional(),
+      })
       .parse(await c.req.json());
     return c.json(
-      await service.teach(c.req.param('dotId'), body.reviewId, body.settings),
+      await service.teach(
+        c.req.param('dotId'),
+        body.reviewId,
+        body.settings,
+        body.acceptedNotices,
+      ),
     );
   });
   for (const action of ['enable', 'disable', 'disconnect'] as const)
@@ -70,13 +79,18 @@ export function abilityRoutes(
   );
   guarded.post('/abilities/:id/update', async (c) => {
     const body = z
-      .strictObject({ reviewId: z.uuid(), settings: values.optional() })
+      .strictObject({
+        reviewId: z.uuid(),
+        settings: values.optional(),
+        acceptedNotices: z.array(z.string().min(1).max(64)).max(4).optional(),
+      })
       .parse(await c.req.json());
     return c.json(
       await service.update(
         z.uuid().parse(c.req.param('id')),
         body.reviewId,
         body.settings,
+        body.acceptedNotices,
       ),
     );
   });

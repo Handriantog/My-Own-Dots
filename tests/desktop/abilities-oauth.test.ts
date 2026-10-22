@@ -610,3 +610,40 @@ describe('refresh and revocation ordering', () => {
     });
   });
 });
+
+it('refreshes a still-unexpired token rejected by the provider, without rotating again for a stale rejection', async () => {
+  const f = await fixture();
+  await f.connect();
+  const rejected = 'ACCESS_TOKEN_SENTINEL';
+  f.state.response = {
+    access_token: 'ACCESS_TOKEN_ROTATED',
+    refresh_token: 'REFRESH_TOKEN_ROTATED',
+    token_type: 'Bearer',
+    expires_in: 3600,
+  };
+  const results = await Promise.all(
+    Array.from({ length: 5 }, () =>
+      f.oauth.authorize(
+        f.context,
+        'search',
+        new AbortController().signal,
+        rejected,
+      ),
+    ),
+  );
+  expect(results).toEqual(Array(5).fill('ACCESS_TOKEN_ROTATED'));
+  expect(
+    f.state.exchanges.filter(
+      (form) => form.get('grant_type') === 'refresh_token',
+    ),
+  ).toHaveLength(1);
+  expect(
+    await f.oauth.authorize(
+      f.context,
+      'search',
+      new AbortController().signal,
+      rejected,
+    ),
+  ).toBe('ACCESS_TOKEN_ROTATED');
+  expect(f.state.exchanges).toHaveLength(2);
+});

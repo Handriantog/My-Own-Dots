@@ -298,3 +298,74 @@ describe('private result cards', () => {
     );
   });
 });
+
+it('shows immutable package notices and requires explicit agreement before Teach', async () => {
+  const onTeach = vi.fn(async () => {});
+  const policy = parseManifest({
+    ...manifestFixture,
+    notices: [
+      {
+        id: 'terms',
+        title: 'Provider terms',
+        text: 'Terms <script>untrusted</script>',
+        required: true,
+      },
+      {
+        id: 'privacy',
+        title: 'Privacy notice',
+        text: 'Private result retention.',
+        required: false,
+      },
+    ],
+  });
+  const policyReview = {
+    ...review,
+    descriptor: { ...review.descriptor, manifest: policy },
+  };
+  await act(async () => {
+    root = create(
+      <PermissionReview
+        dotName="Mochi"
+        review={policyReview}
+        onTeach={onTeach}
+        onCancel={() => {}}
+      />,
+    );
+  });
+  expect(text()).toContain('Private result retention.');
+  expect(button('Teach').props.disabled).toBe(true);
+  await act(async () => {
+    await button('Teach').props.onClick();
+  });
+  expect(onTeach).not.toHaveBeenCalled();
+  await act(async () => {
+    root.root
+      .findByProps({ type: 'checkbox' })
+      .props.onChange({ target: { checked: true } });
+  });
+  await act(async () => {
+    await button('Teach').props.onClick();
+  });
+  expect(onTeach).toHaveBeenCalledWith({}, ['terms']);
+  const html = renderToStaticMarkup(
+    <PermissionReview
+      dotName="Mochi"
+      review={policyReview}
+      onTeach={onTeach}
+      onCancel={() => {}}
+    />,
+  );
+  expect(html).toContain('&lt;script&gt;');
+  expect(html).not.toContain('<script>');
+  await act(async () => {
+    root.update(
+      <PermissionReview
+        dotName="Mochi"
+        review={{ ...policyReview, id: randomUUID() }}
+        onTeach={onTeach}
+        onCancel={() => {}}
+      />,
+    );
+  });
+  expect(button('Teach').props.disabled).toBe(true);
+});

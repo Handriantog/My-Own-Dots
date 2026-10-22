@@ -395,7 +395,13 @@ export class AbilityController {
           const args = desktopAbilityMethods.teach.input.parse(input);
           value = await api(
             `/dots/${encodeURIComponent(args.dotId)}/abilities/teach`,
-            { reviewId: args.reviewId, settings: args.settings },
+            {
+              reviewId: args.reviewId,
+              settings: args.settings,
+              ...(args.acceptedNotices
+                ? { acceptedNotices: args.acceptedNotices }
+                : {}),
+            },
           );
           break;
         }
@@ -409,6 +415,9 @@ export class AbilityController {
           value = await api(`/abilities/${args.bindingId}/update`, {
             reviewId: args.reviewId,
             settings: args.settings,
+            ...(args.acceptedNotices
+              ? { acceptedNotices: args.acceptedNotices }
+              : {}),
           });
           break;
         }

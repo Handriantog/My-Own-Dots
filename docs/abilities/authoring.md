@@ -121,3 +121,21 @@ still binds new code to the exact artifact digest, even if permissions are equal
 
 See [the worker protocol](protocol.md) for messages, limits, private result flow,
 and error behavior. Treat manifest descriptions and results as plain text.
+
+## Provider notices and invocation channels
+
+A manifest can include up to four `notices`, each with a unique `id`, a `title`,
+plain `text` (at most 16,384 characters), and a `required` boolean. The reviewed
+release descriptor contains the exact notice text, bound to its digest. Dot shows
+it before installation; required notices need an explicit agreement checkbox.
+Teach and update requests carry the accepted notice IDs, and the backend rejects
+missing or unknown acceptance before downloading/executing the package. The
+approved manifest, digest and consent timestamp are retained with the binding.
+Notice text is untrusted plain text; no HTML or code is evaluated.
+
+Tools may declare `channels: ["text"]`, `["voice"]`, or both. Omission preserves
+both channels for API-1 compatibility. Dot derives the channel from trusted turn
+state, including delegated voice tasks, excludes unavailable tools from inference,
+and enforces the restriction again at invocation/host authority boundaries. A
+worker or model cannot change the invocation channel. Use this for provider
+restrictions; Spotify's current policy prohibits third-party voice control.

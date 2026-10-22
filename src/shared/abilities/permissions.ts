@@ -29,6 +29,11 @@ function access(manifest: AbilityManifest): Map<string, string> {
     ['platforms', canonicalJson(manifest.platforms)],
     ['helpers', canonicalJson(manifest.helpers)],
     ['settings', canonicalJson(manifest.settings)],
+    ['notices', canonicalJson(manifest.notices ?? [])],
+    ...manifest.tools.map((tool): [string, string] => [
+      'tool:' + tool.id + ':channels',
+      canonicalJson(tool.channels ?? ['text', 'voice']),
+    ]),
     ...manifest.permissions.map((permission): [string, string] => [
       'permission:' + permission.id,
       canonicalJson(permission),

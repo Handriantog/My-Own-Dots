@@ -268,7 +268,10 @@ export function AbilitiesSection({
     );
     if (value) setReview(value);
   };
-  const teach = async (settings: Record<string, JsonValue>) => {
+  const teach = async (
+    settings: Record<string, JsonValue>,
+    acceptedNotices?: string[],
+  ) => {
     if (!review) return;
     const manifest = review.descriptor.manifest;
     const previous = state?.bindings.find(
@@ -285,11 +288,13 @@ export function AbilitiesSection({
               bindingId: previous.id,
               reviewId: review.id,
               settings,
+              ...(acceptedNotices?.length ? { acceptedNotices } : {}),
             })
           : await window.dotAbilities?.teach({
               dotId,
               reviewId: review.id,
               settings,
+              ...(acceptedNotices?.length ? { acceptedNotices } : {}),
             }),
       ),
     );

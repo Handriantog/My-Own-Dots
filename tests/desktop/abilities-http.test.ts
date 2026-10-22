@@ -375,3 +375,75 @@ describe('HTTPS permission enforcement', () => {
     expect(f.state.connections).toEqual([]);
   });
 });
+
+describe('confirmed authentication rejection', () => {
+  it('refreshes host credentials once after 401 and repeats only that confirmed rejection', async () => {
+    const f = fixture();
+    f.state.beforeWrite = () => {
+      f.state.status = f.state.writes.length === 0 ? 401 : 200;
+    };
+    const credential = vi.fn(
+      async (_context, _rule, _signal, rejected?: string) =>
+        rejected ? 'ROTATED_HOST_ONLY_TOKEN' : f.state.token,
+    );
+    const http = new AbilityHttp({
+      authorize: async () => f.binding,
+      credential,
+      transport: f.transport,
+    });
+    const result = await http.request(
+      f.context,
+      f.request,
+      new AbortController().signal,
+    );
+    expect(result).toMatchObject({ ok: true, status: 200 });
+    expect(credential).toHaveBeenCalledTimes(2);
+    expect(credential.mock.calls[1][3]).toBe(f.state.token);
+    expect(f.state.writes.map((write) => write.headers.Authorization)).toEqual([
+      'Bearer ' + f.state.token,
+      'Bearer ROTATED_HOST_ONLY_TOKEN',
+    ]);
+    expect(JSON.stringify(result)).not.toContain('HOST_ONLY');
+  });
+  it.each([401, 503])(
+    'bounds repeated %s responses without retrying unknown mutation delivery',
+    async (status) => {
+      const f = fixture();
+      f.state.status = status;
+      const rule = f.binding.manifest.permissions.find(
+        (item) => item.id === 'search',
+      );
+      if (rule?.kind === 'https') rule.method = 'POST';
+      const credential = vi.fn(async () => f.state.token);
+      const http = new AbilityHttp({
+        authorize: async () => f.binding,
+        credential,
+        transport: f.transport,
+      });
+      expect(
+        await http.request(f.context, f.request, new AbortController().signal),
+      ).toMatchObject({ ok: true, status });
+      expect(f.state.writes).toHaveLength(status === 401 ? 2 : 1);
+    },
+  );
+  it('checks current authority before refreshing a rejected credential', async () => {
+    const f = fixture();
+    f.state.status = 401;
+    f.state.beforeWrite = () => {
+      f.state.revoked = true;
+    };
+    const credential = vi.fn(async () => f.state.token);
+    const http = new AbilityHttp({
+      authorize: async () => {
+        if (f.state.revoked) throw new AbilityFailure('permission_denied');
+        return f.binding;
+      },
+      credential,
+      transport: f.transport,
+    });
+    expect(
+      await http.request(f.context, f.request, new AbortController().signal),
+    ).toEqual({ ok: false, code: 'permission_denied' });
+    expect(credential).toHaveBeenCalledTimes(1);
+  });
+});

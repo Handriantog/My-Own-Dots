@@ -10,6 +10,10 @@ import {
   abilityTools,
   abilityToolName,
 } from '../../src/server/abilities/tools.ts';
+import {
+  setVoiceTurn,
+  clearVoiceTurn,
+} from '../../src/server/local-voice/context.ts';
 import { runtimePolicy } from '../../src/server/storage/runtime-policy.ts';
 import { parseManifest } from '../../src/shared/abilities/manifest.ts';
 import type { VerifiedPackage } from '../../src/shared/abilities/types.ts';
@@ -21,7 +25,7 @@ afterEach(() => {
   for (const fn of cleanups.splice(0).reverse()) fn();
   vi.restoreAllMocks();
 });
-function fixture(delegated = false) {
+function fixture(delegated = false, typedOnly = false) {
   const store = new Store(':memory:'),
     workspace = new WorkspaceStore(':memory:', 'owner');
   cleanups.push(() => {
@@ -32,7 +36,13 @@ function fixture(delegated = false) {
     other = workspace.createDot(dot.spaceId, 'Other', 'Fixture', true, true);
   workspace.bindThread('thread', dot.id, 'Fixture');
   if (delegated) workspace.bindThread('parent', dot.id, 'Parent');
-  const manifest = parseManifest(manifestFixture),
+  const manifest = parseManifest({
+      ...manifestFixture,
+      tools: manifestFixture.tools.map((tool) => ({
+        ...tool,
+        ...(typedOnly ? { channels: ['text'] } : {}),
+      })),
+    }),
     digest = 'a'.repeat(64);
   const pkg: VerifiedPackage = {
     digest,
@@ -375,3 +385,32 @@ it('scopes a voice delegation result to its validated visible parent conversatio
     expect.any(AbortSignal),
   );
 });
+
+it.each(['direct', 'delegated'])(
+  'does not expose typed-only Ability tools to %s voice inference',
+  async (kind) => {
+    const f = fixture(kind === 'delegated', true);
+    if (kind === 'direct') {
+      setVoiceTurn(f.workspace, {
+        callId: 'call',
+        dotId: f.dot.id,
+        threadId: f.input.threadId,
+        messageId: f.input.messages[0].id,
+        text: f.input.messages[0].content,
+      });
+      cleanups.push(() => clearVoiceTurn(f.workspace, 'call'));
+    }
+    const prompts: unknown[] = [];
+    engine.runAgent.mockImplementation(async (request) => {
+      prompts.push(request.prompt);
+      return {
+        result: { text: 'Use typed commands for that Ability.', toolCalls: [] },
+        usage: {},
+      };
+    });
+    await lastValueFrom(f.agent.run(f.input).pipe(toArray()));
+    expect(prompts.length).toBeGreaterThan(0);
+    expect(JSON.stringify(prompts)).not.toContain(f.name);
+    expect(f.invoke).not.toHaveBeenCalled();
+  },
+);

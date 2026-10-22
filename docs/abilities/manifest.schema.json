@@ -38,14 +38,17 @@
     "helpers": {
       "$ref": "#/$defs/__schema12"
     },
+    "notices": {
+      "$ref": "#/$defs/__schema72"
+    },
     "settings": {
       "$ref": "#/$defs/__schema14"
     },
     "tools": {
-      "$ref": "#/$defs/__schema72"
+      "$ref": "#/$defs/__schema74"
     },
     "permissions": {
-      "$ref": "#/$defs/__schema74"
+      "$ref": "#/$defs/__schema77"
     }
   },
   "required": [
@@ -794,14 +797,44 @@
       "const": false
     },
     "__schema72": {
-      "minItems": 1,
-      "maxItems": 64,
+      "maxItems": 4,
       "type": "array",
       "items": {
         "$ref": "#/$defs/__schema73"
       }
     },
     "__schema73": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/__schema2"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16384
+        },
+        "required": {
+          "type": "boolean"
+        }
+      },
+      "required": ["id", "title", "text", "required"],
+      "additionalProperties": false
+    },
+    "__schema74": {
+      "minItems": 1,
+      "maxItems": 64,
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/__schema75"
+      }
+    },
+    "__schema75": {
       "type": "object",
       "properties": {
         "id": {
@@ -819,19 +852,31 @@
         "visibility": {
           "type": "string",
           "enum": ["owner-only", "model-visible"]
+        },
+        "channels": {
+          "minItems": 1,
+          "maxItems": 2,
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/__schema76"
+          }
         }
       },
       "required": ["id", "description", "input", "output", "visibility"],
       "additionalProperties": false
     },
-    "__schema74": {
+    "__schema76": {
+      "type": "string",
+      "enum": ["text", "voice"]
+    },
+    "__schema77": {
       "maxItems": 100,
       "type": "array",
       "items": {
-        "$ref": "#/$defs/__schema75"
+        "$ref": "#/$defs/__schema78"
       }
     },
-    "__schema75": {
+    "__schema78": {
       "oneOf": [
         {
           "type": "object",
@@ -847,7 +892,7 @@
               "const": "https"
             },
             "origin": {
-              "$ref": "#/$defs/__schema76"
+              "$ref": "#/$defs/__schema79"
             },
             "method": {
               "type": "string",
@@ -858,7 +903,7 @@
               "maxItems": 16,
               "type": "array",
               "items": {
-                "$ref": "#/$defs/__schema78"
+                "$ref": "#/$defs/__schema81"
               }
             },
             "pathValues": {
@@ -900,13 +945,13 @@
               "const": "oauth"
             },
             "authorizationUrl": {
-              "$ref": "#/$defs/__schema79"
+              "$ref": "#/$defs/__schema82"
             },
             "tokenUrl": {
-              "$ref": "#/$defs/__schema79"
+              "$ref": "#/$defs/__schema82"
             },
             "resourceOrigin": {
-              "$ref": "#/$defs/__schema76"
+              "$ref": "#/$defs/__schema79"
             },
             "clientIdSetting": {
               "$ref": "#/$defs/__schema44"
@@ -916,7 +961,7 @@
               "maxItems": 50,
               "type": "array",
               "items": {
-                "$ref": "#/$defs/__schema80"
+                "$ref": "#/$defs/__schema83"
               }
             }
           },
@@ -954,14 +999,14 @@
         }
       ]
     },
-    "__schema76": {
-      "$ref": "#/$defs/__schema77"
+    "__schema79": {
+      "$ref": "#/$defs/__schema80"
     },
-    "__schema77": {
+    "__schema80": {
       "type": "string",
       "maxLength": 2048
     },
-    "__schema78": {
+    "__schema81": {
       "anyOf": [
         {
           "type": "string",
@@ -981,10 +1026,10 @@
         }
       ]
     },
-    "__schema79": {
-      "$ref": "#/$defs/__schema77"
+    "__schema82": {
+      "$ref": "#/$defs/__schema80"
     },
-    "__schema80": {
+    "__schema83": {
       "type": "string",
       "minLength": 1,
       "maxLength": 100,

@@ -87,6 +87,7 @@ export const desktopAbilityMethods = {
     input: z.strictObject({
       ...dot,
       reviewId: uuid,
+      acceptedNotices: z.array(id).max(4).optional(),
       settings: values.optional(),
     }),
     output: bindingSchema,
@@ -96,6 +97,7 @@ export const desktopAbilityMethods = {
     input: z.strictObject({
       ...binding,
       reviewId: uuid,
+      acceptedNotices: z.array(id).max(4).optional(),
       settings: values.optional(),
     }),
     output: bindingSchema,

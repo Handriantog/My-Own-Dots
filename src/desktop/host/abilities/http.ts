@@ -221,6 +221,7 @@ export class AbilityHttp {
         context: InvocationContext,
         ruleId: string,
         signal: AbortSignal,
+        rejectedToken?: string,
       ): Promise<string>;
       transport?: AbilityHttpsTransport;
     },
@@ -319,9 +320,10 @@ export class AbilityHttp {
           'User-Agent': 'My-Own-Dots-Ability-Host',
         };
         let credential: string | undefined;
-        if (rule.account) {
+        const credentials: string[] = [];
+        const authenticate = async (rejectedToken?: string) => {
           credential = await waiting(
-            this.options.credential(context, rule.id, signal),
+            this.options.credential(context, rule.id, signal, rejectedToken),
             signal,
           );
           if (
@@ -330,35 +332,49 @@ export class AbilityHttp {
             !/^[A-Za-z0-9._~+/-]+=*$/.test(credential)
           )
             throw new AbilityFailure('setup_needed');
+          credentials.push(credential);
           headers.Authorization = `Bearer ${credential}`;
-        }
+        };
+        if (rule.account) await authenticate();
         const body =
           request.body === undefined ? undefined : JSON.stringify(request.body);
         if (body !== undefined) headers['Content-Type'] = 'application/json';
-        const response = await requestAbilityHttps(
-          {
-            url: url.href,
-            method: rule.method,
-            headers,
-            body,
-            signal,
-            authorize: async () => {
-              await authorize();
+        const send = () =>
+          requestAbilityHttps(
+            {
+              url: url.href,
+              method: rule.method,
+              headers: { ...headers },
+              body,
+              signal,
+              authorize: async () => {
+                await authorize();
+              },
             },
-          },
-          this.options.transport,
-        );
+            this.options.transport,
+          );
+        let response = await send();
+        if (response.status === 401 && rule.account) {
+          // A confirmed authentication rejection permits one retry. Never replay
+          // an unknown delivery, timeout or server error.
+          await authorize();
+          signal.throwIfAborted();
+          await authenticate(credential);
+          response = await send();
+        }
         await authorize();
         signal.throwIfAborted();
         // Defend against ordinary provider diagnostics echoing the bearer token.
         // An authorized provider intentionally encoding its own token is outside
         // this boundary; token endpoints are never available to workers.
         if (
-          credential &&
-          (response.body.includes(credential) ||
-            Object.values(response.headers).some((value) =>
-              value.includes(credential),
-            ))
+          credentials.some(
+            (token) =>
+              response.body.includes(token) ||
+              Object.values(response.headers).some((value) =>
+                value.includes(token),
+              ),
+          )
         )
           throw new AbilityFailure('invalid_response');
         return { ok: true, kind: 'https', ...response };

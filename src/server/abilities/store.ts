@@ -51,6 +51,7 @@ const contextSchema = z.strictObject({
   invocationId: boundedId,
   tool: boundedId,
   threadId: boundedId,
+  channel: z.enum(['text', 'voice']).optional(),
 });
 export type PackageRecord = Omit<VerifiedPackage, 'root'>;
 export type AbilityReceipt = {
@@ -325,7 +326,12 @@ export class AbilityStore {
         binding.dotId !== context.dotId ||
         binding.digest !== context.digest ||
         binding.revision !== context.grantRevision ||
-        !binding.manifest.tools.some((tool) => tool.id === context.tool)
+        !binding.manifest.tools.some(
+          (tool) =>
+            tool.id === context.tool &&
+            (!tool.channels ||
+              tool.channels.includes(context.channel ?? 'text')),
+        )
       )
         return false;
       if (

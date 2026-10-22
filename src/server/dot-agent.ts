@@ -50,6 +50,7 @@ import {
 import { browserResponse } from './research.js';
 import { answerObserver, type SetupTelemetry } from './setup-telemetry.js';
 import {
+  isVoiceTurn,
   voiceTurnInference,
   voiceTurnTiming,
   voiceTurnStreaming,
@@ -553,6 +554,9 @@ export class DotAgent extends AbstractAgent {
                   delegation?.parentThreadId ?? input.threadId,
                   check,
                   controller.signal,
+                  delegation || isVoiceTurn(this.workspace, dot.id, input)
+                    ? 'voice'
+                    : 'text',
                 )
               : [];
             const serverTools = [

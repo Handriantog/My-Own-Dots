@@ -26,6 +26,7 @@ export type AbilityInvocation = {
   invocationId: string;
   arguments: Record<string, JsonValue>;
   selectionRef?: string;
+  channel?: 'text' | 'voice';
 };
 export class AbilityService {
   private maintenance = false;
@@ -100,13 +101,24 @@ export class AbilityService {
     this.reviews.delete(reviewId);
     return entry.review;
   }
+  private requireNotices(review: InstallReview, accepted: string[]) {
+    const notices = review.descriptor.manifest.notices ?? [];
+    if (
+      new Set(accepted).size !== accepted.length ||
+      accepted.some((id) => !notices.some((notice) => notice.id === id)) ||
+      notices.some((notice) => notice.required && !accepted.includes(notice.id))
+    )
+      throw new AbilityFailure('permission_denied');
+  }
   async teach(
     dotId: string,
     reviewId: string,
     settings: Record<string, JsonValue> = {},
+    acceptedNotices: string[] = [],
   ): Promise<Binding> {
     this.session();
     const review = this.takeReview(dotId, reviewId);
+    this.requireNotices(review, acceptedNotices);
     validateValue(review.descriptor.manifest.settings, settings);
     return this.serial(`teach:${dotId}`, async () => {
       const previous = (await this.workspace.abilities.list(dotId)).find(
@@ -142,9 +154,11 @@ export class AbilityService {
     id: string,
     reviewId: string,
     settings?: Record<string, JsonValue>,
+    acceptedNotices: string[] = [],
   ): Promise<Binding> {
     const original = await this.binding(id);
     const review = this.takeReview(original.dotId, reviewId);
+    this.requireNotices(review, acceptedNotices);
     validateValue(
       review.descriptor.manifest.settings,
       settings ?? original.settings,
@@ -251,18 +265,20 @@ export class AbilityService {
   async list(dotId: string) {
     return this.workspace.abilities.list(dotId);
   }
-  async tools(dotId: string) {
+  async tools(dotId: string, channel: 'text' | 'voice' = 'text') {
     if (!this.host.session()) return [];
     await this.cleanup();
     return (await this.workspace.abilities.list(dotId))
       .filter((binding) => binding.enabled && !binding.restored)
       .flatMap((binding) =>
-        binding.manifest.tools.map((tool) => ({
-          bindingId: binding.id,
-          source: binding.manifest.source,
-          abilityId: binding.manifest.id,
-          tool,
-        })),
+        binding.manifest.tools
+          .filter((tool) => !tool.channels || tool.channels.includes(channel))
+          .map((tool) => ({
+            bindingId: binding.id,
+            source: binding.manifest.source,
+            abilityId: binding.manifest.id,
+            tool,
+          })),
       );
   }
   async authorize(context: InvocationContext): Promise<AuthorizedAbility> {
@@ -284,7 +300,13 @@ export class AbilityService {
         binding.dotId !== context.dotId ||
         thread.dotId !== context.dotId ||
         binding.digest !== context.digest ||
-        binding.revision !== context.grantRevision
+        binding.revision !== context.grantRevision ||
+        !binding.manifest.tools.some(
+          (tool) =>
+            tool.id === context.tool &&
+            (!tool.channels ||
+              tool.channels.includes(context.channel ?? 'text')),
+        )
       )
         throw new AbilityFailure('permission_denied');
       const pkg = await this.workspace.abilities.package(binding.digest);
@@ -311,7 +333,11 @@ export class AbilityService {
         const tool = binding.manifest.tools.find(
           (tool) => tool.id === input.tool,
         );
-        if (!tool) throw new AbilityFailure('permission_denied');
+        if (
+          !tool ||
+          (tool.channels && !tool.channels.includes(input.channel ?? 'text'))
+        )
+          throw new AbilityFailure('permission_denied');
         validateValue(tool.input, input.arguments);
         const context = invocationContextSchema.parse({
           workspaceId: this.options.workspaceId,
@@ -323,6 +349,7 @@ export class AbilityService {
           invocationId: input.invocationId,
           tool: input.tool,
           threadId: input.threadId,
+          ...(input.channel ? { channel: input.channel } : {}),
         });
         if (!(await this.workspace.abilities.claimInvocation(context)))
           throw new AbilityFailure('permission_denied');

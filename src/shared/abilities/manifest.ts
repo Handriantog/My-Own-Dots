@@ -238,6 +238,17 @@ export const manifestSchema = z
         z.strictObject({ id: identifier, entrypoint, arguments: objectSchema }),
       )
       .max(16),
+    notices: z
+      .array(
+        z.strictObject({
+          id: identifier,
+          title: z.string().min(1).max(100),
+          text: z.string().min(1).max(16_384),
+          required: z.boolean(),
+        }),
+      )
+      .max(4)
+      .optional(),
     settings: objectSchema,
     tools: z
       .array(
@@ -247,6 +258,12 @@ export const manifestSchema = z
           input: objectSchema,
           output: schema,
           visibility: z.enum(['owner-only', 'model-visible']),
+          channels: z
+            .array(z.enum(['text', 'voice']))
+            .min(1)
+            .max(2)
+            .refine(unique)
+            .optional(),
         }),
       )
       .min(1)
@@ -258,6 +275,11 @@ export const manifestSchema = z
       ctx.addIssue({ code: 'custom', message: 'Invalid Ability references' });
     for (const list of [manifest.helpers, manifest.tools, manifest.permissions])
       if (!unique(list.map((item) => item.id))) bad();
+    if (
+      manifest.notices &&
+      !unique(manifest.notices.map((notice) => notice.id))
+    )
+      bad();
     for (const permission of manifest.permissions) {
       if (
         permission.kind === 'helper' &&

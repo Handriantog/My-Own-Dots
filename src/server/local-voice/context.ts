@@ -67,6 +67,11 @@ function currentVoiceTurn(
     return undefined;
   return turn;
 }
+export function isVoiceTurn(
+  ...args: Parameters<typeof currentVoiceTurn>
+): boolean {
+  return Boolean(currentVoiceTurn(...args));
+}
 export function voiceTurnInference(
   ...args: Parameters<typeof currentVoiceTurn>
 ) {

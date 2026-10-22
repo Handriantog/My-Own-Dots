@@ -27,7 +27,10 @@ export function PermissionReview({
   initialSettings?: Record<string, JsonValue>;
   review: AbilityReview;
   dotName: string;
-  onTeach(settings: Record<string, JsonValue>): Promise<void>;
+  onTeach(
+    settings: Record<string, JsonValue>,
+    acceptedNotices?: string[],
+  ): Promise<void>;
   onCancel(): void;
 }) {
   const manifest = review.descriptor.manifest,
@@ -37,6 +40,14 @@ export function PermissionReview({
       JSON.stringify(initialSettings, null, 2),
     ),
     [error, setError] = useState('');
+  const [consent, setConsent] = useState({
+    reviewId: review.id,
+    ids: [] as string[],
+  });
+  const accepted = consent.reviewId === review.id ? consent.ids : [];
+  const missingConsent = (manifest.notices ?? []).some(
+    (notice) => notice.required && !accepted.includes(notice.id),
+  );
   const runtimes = [
     ...new Set([
       manifest.entrypoint.runtime,
@@ -51,7 +62,7 @@ export function PermissionReview({
       })[runtime],
   );
   const submit = async () => {
-    if (active.current) return;
+    if (active.current || missingConsent) return;
     active.current = true;
     setBusy(true);
     setError('');
@@ -60,7 +71,8 @@ export function PermissionReview({
         manifest.settings,
         JSON.parse(settings),
       ) as Record<string, JsonValue>;
-      await onTeach(value);
+      if (accepted.length) await onTeach(value, accepted);
+      else await onTeach(value);
     } catch {
       setError(
         'Could not teach this Ability. Check the settings or review the release again.',
@@ -161,12 +173,38 @@ export function PermissionReview({
           </small>
         </label>
       )}
+      {(manifest.notices ?? []).map((notice) => (
+        <div key={notice.id} className="ability-notice">
+          <details>
+            <summary>{notice.title}</summary>
+            <div className="ability-notice-text">{notice.text}</div>
+          </details>
+          {notice.required && (
+            <label>
+              <input
+                type="checkbox"
+                checked={accepted.includes(notice.id)}
+                disabled={busy}
+                onChange={(event) =>
+                  setConsent({
+                    reviewId: review.id,
+                    ids: event.target.checked
+                      ? [...accepted, notice.id]
+                      : accepted.filter((id) => id !== notice.id),
+                  })
+                }
+              />
+              I agree to {notice.title}.
+            </label>
+          )}
+        </div>
+      ))}
       {error && <p role="alert">{error}</p>}
       <div className="ability-actions">
         <button
           type="button"
           className="primary"
-          disabled={busy}
+          disabled={busy || missingConsent}
           onClick={submit}
         >
           {busy ? 'Teaching…' : 'Teach'}

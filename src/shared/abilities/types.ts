@@ -56,6 +56,7 @@ export interface InvocationContext {
   invocationId: string;
   tool: string;
   threadId: string;
+  channel?: 'text' | 'voice';
 }
 export interface InvocationRequest {
   context: InvocationContext;

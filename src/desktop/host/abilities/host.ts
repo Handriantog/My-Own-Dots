@@ -92,8 +92,8 @@ export class AbilityHost implements DesktopAbilityHandlers {
       options.http ??
       new AbilityHttp({
         authorize: (context) => this.authorize(context),
-        credential: (context, rule, signal) =>
-          this.accounts.authorize(context, rule, signal),
+        credential: (context, rule, signal, rejectedToken) =>
+          this.accounts.authorize(context, rule, signal, rejectedToken),
       });
     this.supervisor = new AbilitySupervisor({
       launcher: options.launcher,
@@ -155,7 +155,12 @@ export class AbilityHost implements DesktopAbilityHandlers {
       binding.dotId === context.dotId &&
       binding.digest === context.digest &&
       binding.revision === context.grantRevision &&
-      context.grantRevision > (this.revoked.get(binding.id) ?? 0)
+      context.grantRevision > (this.revoked.get(binding.id) ?? 0) &&
+      binding.manifest.tools.some(
+        (tool) =>
+          tool.id === context.tool &&
+          (!tool.channels || tool.channels.includes(context.channel ?? 'text')),
+      )
     );
   }
   private async authorize(context: InvocationContext): Promise<Binding> {
