@@ -115,6 +115,7 @@ const config: PlatformConfig = {
   slackDotId: process.env.SLACK_DOT_ID || undefined,
   runtimeUrl: `http://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/api/copilotkit`,
   ownerToken,
+  workspaceId,
 };
 const desktopBrowser =
   process.env.DOTS_DESKTOP_BROWSER === '1' && process.send && process.connected

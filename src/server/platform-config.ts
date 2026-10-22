@@ -122,6 +122,7 @@ export interface PlatformConfig extends WebConfig, LocalAiConfig {
   slackDotId?: string;
   runtimeUrl: string;
   ownerToken?: string;
+  workspaceId?: string;
 }
 export function setupStatus(
   config: PlatformConfig,

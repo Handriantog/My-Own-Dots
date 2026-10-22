@@ -37,6 +37,8 @@ import { SetupTelemetry } from './setup-telemetry.js';
 import { VoiceService } from './voice.js';
 import { VoiceDelegationCoordinator } from './local-voice/delegation.js';
 import { NativeVoiceRuntime } from './local-voice/native-runtime.js';
+import { AbilityHostBridge } from './abilities/host-bridge.js';
+import { AbilityService } from './abilities/service.js';
 export class Platform {
   readonly maintenance = new MaintenanceGate();
   readonly voice = new VoiceService(this);
@@ -49,6 +51,8 @@ export class Platform {
   localConversations?: ConversationRepository;
   memory?: MemoryMaintenance;
   nativeVoice?: NativeVoiceRuntime;
+  abilityHost?: AbilityHostBridge;
+  abilities?: AbilityService;
   private delegations?: VoiceDelegationCoordinator;
   get voiceDelegations() {
     return this.delegations?.jobs;
@@ -83,6 +87,15 @@ export class Platform {
     openWebsite?: OpenWebsite;
   }) {
     const { store, workspace, config } = this;
+    if (config.workspaceId) {
+      this.abilityHost = new AbilityHostBridge(config.workspaceId);
+      this.abilities = new AbilityService(workspace, this.abilityHost, {
+        workspaceId: config.workspaceId,
+      });
+      this.abilityHost.setAuthority((context) =>
+        this.abilities!.authorize(context),
+      );
+    }
     this.setupTelemetry = await SetupTelemetry.create(
       store,
       undefined,
@@ -263,6 +276,7 @@ export class Platform {
         this.voice.close(),
         this.nativeVoice?.close(),
         this.localRunner?.close(),
+        this.abilities?.stop(),
       ]);
     } finally {
       await this.memory?.stop();

@@ -148,3 +148,16 @@ claims, stale/foreign contexts, uncertain interrupted receipts, both storage
 engines, schema-4 migration, historical restore compatibility, and workspace move
 regressions. Receipts contain generic statuses, not provider/model payloads or
 host package paths. The feature is not yet connected to the desktop UI or agent.
+
+The bridge/service gate passes 15 real-loopback tests and a platform-route test.
+It covers owner authentication, browser-header rejection, workspace identity,
+session expiry/replay/replacement, reconnect, durable revocation, actual process
+termination, concurrent authority checks, shared-package uninstall races, and
+owner-only response filtering. The disposable process fixture here tests bridge
+lifecycle only; OS confinement remains the separate native acceptance gate.
+
+After connecting the backend routes, the full suite exposed a missing module in
+the packaged backend. GitHub metadata review and the existing public-address
+classifier now live in shared modules, with the old exports preserved. The real
+owned-backup integration passes again. The full suite passes 219 files and 1,793
+tests, with one existing certificate-identity skip; typecheck and lint pass.
