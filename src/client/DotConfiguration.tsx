@@ -87,6 +87,12 @@ export function DotConfiguration({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [desktopDotId, setDesktopDotId] = useState(workspace.desktopDotId);
+  const [selectingDesktop, setSelectingDesktop] = useState(false);
+  useEffect(
+    () => setDesktopDotId(workspace.desktopDotId),
+    [workspace.desktopDotId],
+  );
   const root = useRef<HTMLElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const saving = useRef(false);
@@ -266,7 +272,12 @@ export function DotConfiguration({
       >
         <header className="dot-config-header">
           <div className="dot-config-avatar" aria-hidden="true">
-            <Mascot identity={dot?.id} name={dot?.name} small decorative />
+            <Mascot
+              identity={dot?.id ?? 'new-dot'}
+              name={dot?.name}
+              small
+              decorative
+            />
           </div>
           <div>
             <h2 id="dot-config-title">{dot ? 'Dot settings' : 'New Dot'}</h2>
@@ -329,14 +340,13 @@ export function DotConfiguration({
                   />
                   {typeof window !== 'undefined' && window.dotWorkspace && (
                     <div className="dot-config-appearance">
-                      <span>
-                        Appearance <small>Shared with desktop Dot</small>
-                      </span>
+                      <span>Appearance</span>
                       <button
                         type="button"
+                        disabled={!dot}
                         onClick={() => {
                           void window
-                            .dotWorkspace!.openPreferences()
+                            .dotWorkspace!.openPreferences(dot!.id)
                             .catch((cause) =>
                               setError(
                                 cause instanceof Error
@@ -348,6 +358,36 @@ export function DotConfiguration({
                       >
                         Customize…
                       </button>
+                      {dot ? (
+                        <button
+                          type="button"
+                          disabled={selectingDesktop || desktopDotId === dot.id}
+                          onClick={async () => {
+                            setSelectingDesktop(true);
+                            setError('');
+                            try {
+                              await window.dotWorkspace!.selectDesktopDot(
+                                dot.id,
+                              );
+                              setDesktopDotId(dot.id);
+                            } catch (cause) {
+                              setError(
+                                cause instanceof Error
+                                  ? cause.message
+                                  : 'Could not select desktop Dot.',
+                              );
+                            } finally {
+                              setSelectingDesktop(false);
+                            }
+                          }}
+                        >
+                          {desktopDotId === dot.id
+                            ? 'On desktop'
+                            : 'Use on desktop'}
+                        </button>
+                      ) : (
+                        <small>Create this Dot to customize it.</small>
+                      )}
                     </div>
                   )}
                   <label className="field-label" htmlFor="entity-text">

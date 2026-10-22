@@ -757,6 +757,7 @@ export function Chat({
           )}
           <ChatTranscript
             messages={visible}
+            dotId={dot.id}
             dotName={dot.name}
             marks={saved.marks.filter((mark) => mark.threadId === thread.id)}
             marksDisabled={saved.loading || saved.saving || running || !loaded}

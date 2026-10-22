@@ -1,6 +1,9 @@
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { afterEach, expect, it, vi } from 'vitest';
 import { Mascot } from '../src/client/Mascot';
+import { DotAppearanceContext } from '../src/client/dot-appearance';
+import { DEFAULT_DOT_CUSTOMIZATION } from '../src/shared/dot-customization';
+import type { Dot } from '../src/shared/types';
 import type { Accessories } from '../src/desktop/shared/accessories';
 const render = vi.hoisted(() =>
   vi.fn(
@@ -61,4 +64,49 @@ it('updates every Dot from native customization and shares one image render per 
       .every((img) => img.props.src === outfitImage),
   ).toBe(true);
   expect(render).toHaveBeenCalledTimes(3);
+});
+
+it('updates only the customized Dot across repeated avatars, ignoring the desktop color', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.stubGlobal('window', new EventTarget());
+  vi.stubGlobal('location', {
+    search: '?surface=workspace&dotColor=%23000000',
+  });
+  const dots = [
+    {
+      id: 'a',
+      customization: { ...DEFAULT_DOT_CUSTOMIZATION, color: '#ab1234' },
+    },
+    {
+      id: 'b',
+      customization: { ...DEFAULT_DOT_CUSTOMIZATION, color: '#cd5678' },
+    },
+  ] as Dot[];
+  const scene = (items: Dot[]) => (
+    <DotAppearanceContext.Provider value={items}>
+      <Mascot identity="a" />
+      <Mascot identity="b" />
+      <Mascot identity="a" />
+    </DotAppearanceContext.Provider>
+  );
+  await act(async () => {
+    root = create(scene(dots));
+  });
+  const colors = () =>
+    root.root
+      .findAll((node) => node.props?.className === 'companion-avatar')
+      .map((node) => node.props['data-color']);
+  expect(colors()).toEqual(['#ab1234', '#cd5678', '#ab1234']);
+  await act(async () => {
+    root.update(
+      scene([
+        {
+          ...dots[0],
+          customization: { ...dots[0].customization!, color: '#ef9012' },
+        },
+        dots[1],
+      ]),
+    );
+  });
+  expect(colors()).toEqual(['#ef9012', '#cd5678', '#ef9012']);
 });

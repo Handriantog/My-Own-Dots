@@ -1,4 +1,5 @@
 import { setupInputSchema } from './setup-telemetry.js';
+import { dotCustomizationChangeSchema } from '../shared/dot-customization.js';
 import { messageMarkRoutes } from './message-mark-routes.js';
 import { pageRoutes } from './page-routes.js';
 import { Hono } from 'hono';
@@ -50,12 +51,51 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
     c.json({
       spaces: await platform.workspace.spaces(),
       dots: await platform.workspace.dots(),
+      desktopDotId: (await platform.workspace.desktopDot()).dotId,
       conversations: await platform.workspace.conversations(),
       deletedConversations: await platform.workspace.deletedConversations(),
       setup: platform.setup(),
       calls: await platform.workspace.calls(),
     }),
   );
+  app.get('/desktop-dot', async (c) =>
+    c.json(await platform.workspace.desktopDot()),
+  );
+  app.post('/desktop-dot/initialize', async (c) => {
+    const input = dotCustomizationChangeSchema.safeParse(
+      await c.req.json().catch(() => null),
+    );
+    if (!input.success)
+      return c.json({ error: 'Invalid Dot customization.' }, 400);
+    return c.json(
+      await platform.workspace.initializeDotCustomization(input.data),
+    );
+  });
+  app.put('/desktop-dot', async (c) => {
+    const input = z
+      .object({ dotId: z.string().min(1).max(128) })
+      .strict()
+      .safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return c.json({ error: 'Select a Dot.' }, 400);
+    if (!(await platform.workspace.dot(input.data.dotId)))
+      return c.json({ error: 'Dot not found.' }, 404);
+    return c.json(await platform.workspace.selectDesktopDot(input.data.dotId));
+  });
+  app.patch('/dots/:id/customization', async (c) => {
+    const input = dotCustomizationChangeSchema.safeParse(
+      await c.req.json().catch(() => null),
+    );
+    if (!input.success)
+      return c.json({ error: 'Invalid Dot customization.' }, 400);
+    if (!(await platform.workspace.dot(c.req.param('id'))))
+      return c.json({ error: 'Dot not found.' }, 404);
+    return c.json(
+      await platform.workspace.setDotCustomization(
+        c.req.param('id'),
+        input.data,
+      ),
+    );
+  });
   app.post('/spaces', async (c) => {
     const data = z
       .object({

@@ -6,6 +6,10 @@ import { snapshot } from './fixtures.js';
 import type { PresentationFrame } from '../../src/desktop/shared/contracts.js';
 
 const host = vi.hoisted(() => ({
+  connection: undefined as { url: string; owned: boolean } | undefined,
+  customize: undefined as ((id?: string) => Promise<void>) | undefined,
+  select: undefined as ((id: string) => Promise<void>) | undefined,
+  fetcher: undefined as typeof fetch | undefined,
   windows: [] as Array<{
     visible: boolean;
     webContents: EventEmitter & { id: number; mainFrame: { url: string } };
@@ -43,6 +47,23 @@ vi.mock('../../src/desktop/host/workspace-backend.js', () => ({
 }));
 vi.mock('../../src/desktop/host/workspace-window.js', () => ({
   WorkspaceWindow: class {
+    constructor(
+      _bundle: string,
+      _data: string,
+      _backend: unknown,
+      customize: typeof host.customize,
+      _review: unknown,
+      _color: unknown,
+      _accessories: unknown,
+      select: typeof host.select,
+    ) {
+      host.customize = customize;
+      host.select = select;
+    }
+    get activeConnection() {
+      return host.connection;
+    }
+    customizationChanged() {}
     async open() {
       host.lifecycle.push('workspace-open');
     }
@@ -73,6 +94,7 @@ vi.mock('electron', async () => {
   host.power = new EventEmitter();
   class Window extends EventEmitter {
     visible = false;
+    destroyed = false;
     bounds = { x: 0, y: 0, width: 320, height: 320 };
     webContents = Object.assign(new EventEmitter(), {
       id: host.windows.length + 1,
@@ -115,9 +137,12 @@ vi.mock('electron', async () => {
       this.bounds = bounds;
     }
     isDestroyed() {
-      return false;
+      return this.destroyed;
     }
-    destroy() {}
+    destroy() {
+      this.destroyed = true;
+      this.emit('closed');
+    }
     isVisible() {
       return this.visible;
     }
@@ -156,6 +181,7 @@ vi.mock('electron', async () => {
     protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
     screen: Object.assign(new EventEmitter(), {
       getAllDisplays: () => [display],
+      getPrimaryDisplay: () => display,
       getCursorScreenPoint: () => host.cursor,
     }),
     shell: {},
@@ -202,6 +228,12 @@ beforeEach(async () => {
   // This suite models a macOS Electron host, including on Linux CI runners.
   Object.defineProperty(process, 'platform', { value: 'darwin' });
   vi.resetModules();
+  host.connection = undefined;
+  host.fetcher = undefined;
+  vi.stubGlobal('fetch', (...args: Parameters<typeof fetch>) => {
+    if (!host.fetcher) throw new Error('Unexpected fetch');
+    return host.fetcher(...args);
+  });
   host.windows = [];
   host.lifecycle = [];
   host.shutdown = null;
@@ -595,4 +627,99 @@ it('makes the workspace terminal before stopping the backend and ignores activat
   finish();
   await vi.advanceTimersByTimeAsync(0);
   expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
+});
+
+it('scopes settings windows and tray customization to one desktop Dot', async () => {
+  const { WorkspaceStore } = await import('../../src/server/workspace.js');
+  const { Hono } = await import('hono');
+  const { ipcMain } = await import('electron');
+  const ws = new WorkspaceStore(':memory:', 'owner');
+  const a = ws.dots()[0];
+  const b = ws.createDot(a.spaceId, 'Scout', 'Research carefully', true, true);
+  const app = new Hono();
+  app.get('/api/desktop-dot', (c) => c.json(ws.desktopDot()));
+  app.post('/api/desktop-dot/initialize', async (c) =>
+    c.json(ws.initializeDotCustomization(await c.req.json())),
+  );
+  let finishSelection!: () => void;
+  const selectionGate = new Promise<void>((resolve) => {
+    finishSelection = resolve;
+  });
+  app.put('/api/desktop-dot', async (c) => {
+    await selectionGate;
+    return c.json(ws.selectDesktopDot((await c.req.json()).dotId));
+  });
+  app.patch('/api/dots/:id/customization', async (c) =>
+    c.json(ws.setDotCustomization(c.req.param('id'), await c.req.json())),
+  );
+  host.connection = { url: 'http://localhost:4310', owned: false };
+  host.fetcher = ((url: URL, options: RequestInit) =>
+    app.request(url.href, options)) as typeof fetch;
+  const handler = (name: string) =>
+    vi
+      .mocked(ipcMain.handle)
+      .mock.calls.findLast(([channel]) => channel === name)![1];
+  const event = () => {
+    const window = host.windows.at(-1)!;
+    return {
+      sender: window.webContents,
+      senderFrame: window.webContents.mainFrame,
+    } as Electron.IpcMainInvokeEvent;
+  };
+  try {
+    await host.customize!(b.id);
+    const oldEvent = event();
+    expect(await handler('dot:preferences:read')(oldEvent)).toMatchObject({
+      dotId: b.id,
+      dotName: 'Scout',
+    });
+    await handler('dot:preferences:update')(oldEvent, {
+      color: '#aa33ff',
+      muted: true,
+      paused: true,
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(host.frame?.preferences).toMatchObject({
+      color: '#45a7ff',
+      muted: false,
+      paused: false,
+    });
+    await host.customize!();
+    expect(await handler('dot:preferences:read')(event())).toMatchObject({
+      dotId: a.id,
+    });
+    await expect(
+      handler('dot:preferences:update')(oldEvent, { color: '#ffffff' }),
+    ).rejects.toThrow('Invalid settings sender');
+    const selecting = host.select!(b.id);
+    await vi.advanceTimersByTimeAsync(0);
+    const count = host.windows.length;
+    host.menu.find((item) => item.label === 'Talk with Dot')!.click!();
+    host.menu.find((item) => item.label === 'Talk without a window')!.click!();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(host.windows).toHaveLength(count);
+    await expect(host.select!(a.id)).rejects.toThrow(/already switching/);
+    finishSelection();
+    await selecting;
+    await vi.advanceTimersByTimeAsync(50);
+    expect(ws.desktopDot().dotId).toBe(b.id);
+    expect(host.frame?.preferences).toMatchObject({
+      color: '#aa33ff',
+      muted: true,
+      paused: true,
+    });
+    await host.customize!();
+    expect(await handler('dot:preferences:read')(event())).toMatchObject({
+      dotId: b.id,
+    });
+    expect(
+      host.windows.filter(
+        (window) =>
+          window.webContents.mainFrame.url === 'dots://app/index.html',
+      ),
+    ).toHaveLength(1);
+  } finally {
+    host.connection = undefined;
+    ws.close();
+  }
 });

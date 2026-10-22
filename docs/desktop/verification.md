@@ -2,6 +2,15 @@
 
 Machine: Apple M3 Max, 14 CPU cores, 36 GiB RAM, macOS 26.6.2 (25G83), arm64. Runtime: Electron 44.8.0, PixiJS 8.22.0. Native helper compiled with the installed Swift toolchain, deployment target macOS 14.
 
+## Per-Dot customization — October 22, 2026
+
+Each Dot now owns its appearance and behavior in workspace storage. A single desktop Dot ID controls the companion and compact Chat/Talk, while the global Talk shortcut stays in machine preferences. Existing shared customization migrates once, and older workspace backups remain restorable before and after upgrading.
+
+- Full suite: **1,600 passed, 93 skipped**. Typecheck, lint, formatting, whitespace checks, the web/server build, and the desktop build passed. The inherited large frontend chunk advisory remains.
+- Regression coverage includes independent settings, exclusive selection across restart, untouched new-Dot defaults, owner API validation, stale settings senders, scoped avatars, compact chat identity, backup upgrade/restore, and delayed desktop switches racing with Talk.
+- A real Electron UI smoke used the compiled app with a disposable workspace/profile, blank provider keys, and no AI or microphone use. It customized Scout independently, selected it through **Use on desktop**, verified browsing another Dot did not change the selection, opened default customization for Scout, and confirmed exactly one overlay window. Screenshots in `artifacts/per-dot-customization/` were visually inspected.
+- Independent review found and verified fixes for backup schema ordering and Talk/selection concurrency; no Important or Critical findings remained. Live voice hardware and replacement of the owner's installed app were not part of this check.
+
 ## Minimal startup refinement — October 19, 2026
 
 At the owner's request, `af709dd` removes the startup headlines, slogans, descriptions, shortcut footer, visible branding and stage checklist. Normal loading now shows the animated mascot with one 11px status line and a thin progress animation. Setup controls remain hidden until a longer wait or recovery state; warnings and errors retain their actionable details. The separate configuration window keeps its fields and uses a smaller heading. The initial HTML already has the minimal presentation, preventing a flash of the old copy before the script runs.

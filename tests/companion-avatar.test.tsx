@@ -19,7 +19,7 @@ it('reads the shared color in workspace, companion and legacy desktop URLs', () 
   expect(companionColorFromSearch('?desktop=1&dotColor=red')).toBe('#45a7ff');
 });
 
-it('renders the companion avatar instead of a hashed specialist image when customized', () => {
+it('does not apply an app-wide color override to an identified Dot', () => {
   const desktop = renderToStaticMarkup(
     createElement(Mascot, {
       identity: 'specialist',
@@ -28,9 +28,10 @@ it('renders the companion avatar instead of a hashed specialist image when custo
   );
   expect(desktop).toContain('companion-avatar');
   expect(desktop).toContain('/dots/blue.png');
+  expect(desktop).toContain('data-color="#45a7ff"');
   const browser = renderToStaticMarkup(
     createElement(Mascot, { identity: 'specialist' }),
   );
   expect(browser).toContain('/dots/');
-  expect(browser).not.toContain('companion-avatar');
+  expect(browser).toContain('companion-avatar');
 });

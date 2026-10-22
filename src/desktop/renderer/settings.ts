@@ -21,7 +21,7 @@ import {
 declare global {
   interface Window {
     dotSettings: {
-      read(): Promise<Preferences>;
+      read(): Promise<Preferences & { dotId: string; dotName: string }>;
       update(change: Partial<Preferences>): Promise<Preferences>;
       shortcutStatus(): Promise<string>;
       captureShortcut(active: boolean): Promise<void>;
@@ -278,7 +278,10 @@ for (const name of switches)
     );
 void window.dotSettings
   .read()
-  .then(render)
+  .then((preferences) => {
+    document.querySelector('#dot-name')!.textContent = preferences.dotName;
+    render(preferences);
+  })
   .catch(() => {
     error.textContent = 'Could not load preferences.';
   });

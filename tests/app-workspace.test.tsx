@@ -48,6 +48,9 @@ import type {
 let navigate: (destination: WorkspaceDestination) => void;
 let command: (command: WorkspaceCommand) => void;
 let statusChanged: (status: WorkspaceStatus) => void;
+let customizationChanged: (
+  state: import('../src/shared/dot-customization').DesktopDotState,
+) => void;
 
 const thread = (id: string): Conversation => ({
   id,
@@ -127,6 +130,10 @@ beforeEach(() => {
   Object.assign(window, {
     confirm: vi.fn(() => false),
     dotWorkspace: {
+      onCustomization: (fn: typeof customizationChanged) => {
+        customizationChanged = fn;
+        return () => {};
+      },
       onNavigate: (fn: typeof navigate) => {
         navigate = fn;
         return () => {};
@@ -167,6 +174,50 @@ const createdCalls = () =>
   harness.api.mock.calls.filter(
     ([path, method]) => path === '/conversations' && method === 'POST',
   );
+
+it('binds desktop chat to the desktop choice instead of the last browsed Dot', async () => {
+  const { DEFAULT_DOT_CUSTOMIZATION } =
+    await import('../src/shared/dot-customization');
+  const normal = harness.api.getMockImplementation()!;
+  const dots = [
+    {
+      id: 'dot',
+      name: 'Dot',
+      spaceId: 'space',
+      spaceIds: ['space'],
+      customization: DEFAULT_DOT_CUSTOMIZATION,
+    },
+    {
+      id: 'second',
+      name: 'Scout',
+      spaceId: 'space',
+      spaceIds: ['space'],
+      customization: { ...DEFAULT_DOT_CUSTOMIZATION, color: '#aabbcc' },
+    },
+  ];
+  harness.api.mockImplementation(async (path: string, method?: string) => {
+    const value = await normal(path, method);
+    return path === '/workspace'
+      ? { ...value, dots, desktopDotId: 'dot' }
+      : value;
+  });
+  storage.set('companion-dot', 'second');
+  storage.set('companion-thread', 'first');
+  await act(async () => {
+    root = create(createElement(App, { surface: 'companion' }));
+  });
+  expect(root.root.findByType(Chat).props.dot.id).toBe('dot');
+  await act(async () =>
+    customizationChanged({ dotId: 'second', initialized: true, dots }),
+  );
+  expect(root.root.findByType(VoiceSettings).props.dotId).toBe('second');
+  expect(root.root.findAllByType(Chat)).toHaveLength(0);
+  expect(
+    harness.api.mock.calls.some(
+      ([path, method]) => path === '/desktop-dot' && method === 'PUT',
+    ),
+  ).toBe(false);
+});
 it('keeps a successful rename and pin when an older workspace poll finishes late', async () => {
   await mount();
   const normal = harness.api.getMockImplementation()!;

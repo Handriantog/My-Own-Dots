@@ -1,4 +1,10 @@
 import { beginSQLiteTransaction } from './storage/sqlite-transaction.js';
+import {
+  DEFAULT_DOT_CUSTOMIZATION,
+  dotCustomizationSchema,
+  dotCustomizationChangeSchema,
+  type DesktopDotState,
+} from '../shared/dot-customization.js';
 import type {
   MarkableMessage,
   MessageMark,
@@ -54,6 +60,7 @@ export class WorkspaceStore {
       CREATE TABLE IF NOT EXISTS calls(id TEXT PRIMARY KEY, threadId TEXT NOT NULL, startedAt INTEGER NOT NULL, endedAt INTEGER, status TEXT NOT NULL, transcript TEXT NOT NULL, error TEXT);
       CREATE TABLE IF NOT EXISTS local_voice_delivery(callId TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS dot_voice_settings(dotId TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS desktop_dot(id INTEGER PRIMARY KEY CHECK(id=1), dotId TEXT, initialized INTEGER NOT NULL DEFAULT 0);
       CREATE TABLE IF NOT EXISTS captures(threadId TEXT PRIMARY KEY, value TEXT NOT NULL);`);
     this.db.exec(`CREATE TABLE IF NOT EXISTS message_marks(
       threadId TEXT NOT NULL, messageId TEXT NOT NULL, role TEXT NOT NULL,
@@ -66,6 +73,7 @@ export class WorkspaceStore {
       ['dots', 'composioToolkits', "TEXT NOT NULL DEFAULT '[]'"],
       ['dots', 'composioSessionId', 'TEXT'],
       ['dots', 'composioPolicyHash', 'TEXT'],
+      ['dots', 'customization', 'TEXT'],
       ['thread_bindings', 'learningContainerId', 'TEXT'],
       ['thread_bindings', 'pinnedAt', 'INTEGER'],
       ['thread_bindings', 'deletedAt', 'INTEGER'],
@@ -151,6 +159,11 @@ export class WorkspaceStore {
       .all()
       .map((row) => ({
         ...row,
+        customization: dotCustomizationSchema.parse(
+          row.customization
+            ? JSON.parse(String(row.customization))
+            : DEFAULT_DOT_CUSTOMIZATION,
+        ),
         spaceIds: this.db
           .prepare(
             'SELECT spaceId FROM dot_spaces WHERE dotId=? ORDER BY spaceId',
@@ -166,6 +179,70 @@ export class WorkspaceStore {
   }
   dot(id: string) {
     return this.dots().find((dot) => dot.id === id);
+  }
+  desktopDot(): DesktopDotState {
+    const row = this.db
+      .prepare('SELECT dotId, initialized FROM desktop_dot WHERE id=1')
+      .get();
+    const dots = this.dots().map(({ id, name, customization }) => ({
+      id,
+      name,
+      customization: customization!,
+    }));
+    return {
+      dotId:
+        dots.find((dot) => dot.id === row?.dotId)?.id ?? dots[0]?.id ?? null,
+      initialized: !!row?.initialized,
+      dots,
+    };
+  }
+  selectDesktopDot(dotId: string): DesktopDotState {
+    if (!this.dot(dotId)) throw new Error('Dot not found.');
+    this.db
+      .prepare(
+        'INSERT INTO desktop_dot(id,dotId) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET dotId=excluded.dotId',
+      )
+      .run(dotId);
+    return this.desktopDot();
+  }
+  setDotCustomization(dotId: string, input: unknown): DesktopDotState {
+    const dot = this.dot(dotId);
+    if (!dot) throw new Error('Dot not found.');
+    const change = dotCustomizationChangeSchema.parse(input);
+    const value = dotCustomizationSchema.parse({
+      ...dot.customization,
+      ...change,
+    });
+    this.db
+      .prepare('UPDATE dots SET customization=? WHERE id=?')
+      .run(JSON.stringify(value), dotId);
+    return this.desktopDot();
+  }
+  initializeDotCustomization(input: unknown): DesktopDotState {
+    const value = dotCustomizationSchema.parse({
+      ...DEFAULT_DOT_CUSTOMIZATION,
+      ...dotCustomizationChangeSchema.parse(input),
+    });
+    const transaction = beginSQLiteTransaction(this.db);
+    try {
+      if (!this.desktopDot().initialized) {
+        this.db
+          .prepare(
+            'UPDATE dots SET customization=? WHERE customization IS NULL',
+          )
+          .run(JSON.stringify(value));
+        this.db
+          .prepare(
+            'INSERT INTO desktop_dot(id,initialized) VALUES(1,1) ON CONFLICT(id) DO UPDATE SET initialized=1',
+          )
+          .run();
+      }
+      transaction.commit();
+    } catch (error) {
+      transaction.rollback();
+      throw error;
+    }
+    return this.desktopDot();
   }
   voiceSettings(dotId: string): VoiceSettings {
     if (!this.dot(dotId)) throw new Error('Dot not found.');

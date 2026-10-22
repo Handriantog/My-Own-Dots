@@ -189,12 +189,14 @@ it('queues native workspace handoffs and commands until React subscribes, withou
     'chooseWorkspace',
     'configure',
     'onCommand',
+    'onCustomization',
     'onNavigate',
     'onStatus',
     'openBackendSettings',
     'openPreferences',
     'openWorkspace',
     'retry',
+    'selectDesktopDot',
     'status',
   ]);
   await bridge.openWorkspace(destination);
