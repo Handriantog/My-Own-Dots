@@ -472,6 +472,23 @@ describe('PKCE callback authority', () => {
   );
 });
 describe('refresh and revocation ordering', () => {
+  it('cancels pending sign-in on disable while preserving an idle approved account', async () => {
+    const f = await fixture();
+    await f.connect();
+    await f.oauth.cancelBinding(f.binding.id);
+    expect((await f.oauth.presence(f.binding.id, 'account')).connected).toBe(
+      true,
+    );
+    const pending = f.oauth
+      .connect(f.binding.id, 'personal-client')
+      .catch((error) => error);
+    await expect.poll(() => f.state.urls.length).toBe(2);
+    await f.oauth.cancelBinding(f.binding.id);
+    expect(await pending).toMatchObject({ code: 'cancelled' });
+    expect((await f.oauth.presence(f.binding.id, 'account')).connected).toBe(
+      true,
+    );
+  });
   it('finishes an old refresh before opening a replacement account connection', async () => {
     const f = await fixture();
     await f.connect();

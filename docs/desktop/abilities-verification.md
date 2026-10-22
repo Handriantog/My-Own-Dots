@@ -232,3 +232,25 @@ and [literal loopback redirect rules](https://developer.spotify.com/documentatio
 An omitted scope field retains the requested/previous set as specified by
 [RFC 6749](https://www.rfc-editor.org/rfc/rfc6749); an explicitly different set
 is rejected. No client secret or token is part of the worker/renderer contract.
+
+## Host assembly and private results
+
+Fifteen result/IPC tests and ten assembled-host tests pass. Real confined Node
+workers emit owner-only sentinel content through success, partial results, raw
+errors, stderr, and cancellation. The privacy case uses the authenticated real
+loopback desktop/backend bridge; its received outcomes contain only fixed status
+codes and opaque references. Owner payload remains available only in the correct
+Dot context, with current binding/session authority. Late results after access
+changes are discarded and reported uncertain.
+
+Selections are single-use, scoped to the workspace, session, Dot, binding,
+digest, grant revision and thread. Display items use host-generated IDs; private
+action data is not included in the UI reply. Plain text remains plain text, and
+links must pass independent HTTPS validation. The store actively expires results
+after ten minutes and also caps them at 128 entries / 16 MiB; old results may be
+evicted earlier. Revoke, disconnect and quit clear results. Model-visible values
+are independently checked against the declared output schema and frame ceiling.
+
+The OAuth regression suite now has 22 tests, including cancellation of a pending
+sign-in on disable while retaining an idle approved account. These fixtures do
+not establish live Spotify account behavior or packaged-runtime acceptance.

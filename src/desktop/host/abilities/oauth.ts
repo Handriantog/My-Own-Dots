@@ -578,6 +578,21 @@ export class AbilityOAuth {
         : new AbilityFailure(failureCode(error));
     }
   }
+  async cancelBinding(bindingId: string): Promise<void> {
+    this.epochs.set(bindingId, this.epoch(bindingId) + 1);
+    const connection = this.connections.get(bindingId);
+    connection?.controller.abort(new AbilityFailure('cancelled'));
+    const refreshing = [...this.refreshes.values()].filter(
+      (item) => item.bindingId === bindingId,
+    );
+    for (const item of refreshing)
+      item.controller.abort(new AbilityFailure('cancelled'));
+    this.options.clearResults(bindingId);
+    await Promise.all([
+      connection?.promise.catch(() => {}),
+      ...refreshing.map((item) => item.promise.catch(() => {})),
+    ]);
+  }
   async disconnect(bindingId: string): Promise<void> {
     this.epochs.set(bindingId, this.epoch(bindingId) + 1);
     this.connections
