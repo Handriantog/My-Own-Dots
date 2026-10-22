@@ -1,6 +1,6 @@
 # Dot Abilities: platform design
 
-Status: proposed for written-spec review; no runtime implementation yet.
+Status: approved by the owner on October 23, 2026; no runtime implementation yet.
 
 ## Outcome and agreed constraints
 
