@@ -371,3 +371,36 @@ On macOS 26.6.2 arm64, Node 24.20.0, Python.org 3.14.3 and Electron 44.8.0 (embe
 Sealed Python execution exposed a framework bin launcher that re-execs; selection now inspects the actual same-framework interpreter without relaxing process creation. A real SIGSTOP desktop regression exposed a worker surviving backend lease expiry: production launchers now require three-second native renewals after current authority checks, with TERM/two-second KILL and an independent sixty-second ceiling. Normal long invocations remain alive through renewals. A prequeued-renewal regression also verifies startup accepts valid renewal bytes and rejects malformed bytes.
 
 Visual/keyboard inspection remains unavailable: CUA explicitly denied Safari access and exposed no browser surface, including the Task 13 recheck. Automated component/IPC/privacy tests pass, but they are not visual evidence. Final independent review, current-SHA GitHub checks, Developer ID/notarization, older OS/Intel/non-macOS acceptance, published release delivery and live Spotify actions remain distinct gates.
+
+## Spotify package integration (October 23)
+
+The host now enforces optional per-tool text/voice channels and digest-bound
+plain-text notices before Teach/Update. Spotify declares text only because its
+[Developer Policy III.3](https://developer.spotify.com/policy) prohibits third-party
+voice control. Required terms must be accepted before installation. Authenticated
+HTTP requests retry once after a confirmed 401 and a host-owned refresh; unknown
+mutation delivery and 5xx responses are never retried automatically.
+
+Nine real-worker scenarios install the committed sealed Spotify development
+artifact from source `dcf2de644e1b78d24d4768f0a18619dcbfad37cf`, archive SHA-256
+`45d5d09308a0276d2fc110f9daa976fa2bd22303c44b153dbe3486c536e38428`.
+Only GitHub download bytes and DNS/TLS provider transport are synthetic; the
+production installer, broker, browser PKCE callback, encrypted account store,
+bridge, runtime, grants and result projection execute normally. The fixture
+transport is an in-process constructor dependency, unavailable to manifests,
+settings or IPC. No live account or Keychain access is used.
+
+These scenarios cover all eleven tools, cross-Dot isolation, notice agreement,
+direct/delegated voice exclusion, 401 refresh/revocation, expired selections,
+disable/re-enable/disconnect, uncertain mutation duplicate prevention across
+service restart, backend disconnection and survival of an unrelated playback
+stand-in. Captured model requests, durable events, memory/compaction, diagnostics
+and speech inputs contain neither synthetic Spotify metadata nor credentials,
+including provider-error and partial-creation paths.
+
+The full host suite passes **233 files / 1,966 tests**, with one existing
+certificate-identity skip. Format, lint and typecheck pass. Speech checks pass
+31 worker and 17 native-worker tests. Final native/package reruns, independent
+review and exact-commit remote checks are still being recorded. Visual/keyboard
+inspection remains unavailable; live Spotify acceptance and publication remain
+separate gates.

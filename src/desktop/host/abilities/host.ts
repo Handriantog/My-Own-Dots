@@ -31,7 +31,11 @@ import type {
 import type { ProtectedStorage } from '../backup-keys.js';
 import type { DesktopAbilityHandlers } from './bridge.js';
 import { AbilityCredentials } from './credentials.js';
-import { AbilityHttp } from './http.js';
+import {
+  AbilityHttp,
+  requestAbilityHttps,
+  type AbilityHttpsTransport,
+} from './http.js';
 import { AbilityInstaller } from './installer.js';
 import { AbilityOAuth } from './oauth.js';
 import { DirectoryAnchor } from './package.js';
@@ -55,6 +59,8 @@ type Options = {
   authorize(context: InvocationContext): Promise<Binding>;
   open(url: string): Promise<void>;
   http?: Pick<AbilityHttp, 'request'>;
+  /** In-process acceptance transport; never read from a manifest, IPC or settings. */
+  transport?: AbilityHttpsTransport;
   installer?: Pick<AbilityInstaller, 'prepare'>;
 };
 export class AbilityHost implements DesktopAbilityHandlers {
@@ -87,10 +93,14 @@ export class AbilityHost implements DesktopAbilityHandlers {
       authorize: (context) => this.authorize(context),
       open: options.open,
       clearResults: (id) => this.results.clearBinding(id),
+      ...(options.transport
+        ? { exchange: (input) => requestAbilityHttps(input, options.transport) }
+        : {}),
     });
     this.http =
       options.http ??
       new AbilityHttp({
+        transport: options.transport,
         authorize: (context) => this.authorize(context),
         credential: (context, rule, signal, rejectedToken) =>
           this.accounts.authorize(context, rule, signal, rejectedToken),
