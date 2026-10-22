@@ -39,6 +39,16 @@ static double monotonic(void) {
     return (double)value.tv_sec + (double)value.tv_nsec / 1e9;
 }
 
+static bool consume_renewal(int control, const struct kevent *event, bool leased) {
+    if (!leased || event->filter != EVFILT_READ || (event->flags & (EV_EOF | EV_ERROR)) ||
+        event->data <= 0 || event->data > 32) return false;
+    char renewals[32];
+    ssize_t count = read(control, renewals, (size_t)event->data);
+    if (count <= 0) return false;
+    for (ssize_t i = 0; i < count; i++) if (renewals[i] != 'R') return false;
+    return true;
+}
+
 static char *read_profile(const char *path) {
     if (*path != '/') return NULL;
     int fd = open(path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
@@ -136,8 +146,11 @@ static void child_exec(int gate, const char *profile, char **command, int fd_lim
 }
 
 int main(int argc, char **argv) {
+    bool leased = argc >= 10 && !strcmp(argv[7], "--lease");
+    int separator = leased ? 8 : 7, executable = separator + 1;
     if (argc < 9 || strcmp(argv[1], "--profile") || strcmp(argv[3], "--control-fd") ||
-        strcmp(argv[5], "--status-fd") || strcmp(argv[7], "--") || argv[8][0] != '/') {
+        strcmp(argv[5], "--status-fd") || argc <= executable ||
+        strcmp(argv[separator], "--") || argv[executable][0] != '/') {
         fputs("Invalid Ability launcher arguments\n", stderr);
         return 125;
     }
@@ -145,7 +158,7 @@ int main(int argc, char **argv) {
     if (control < 0 || status < 0 || control == status ||
         !pipe_descriptor(control, O_RDONLY) || !pipe_descriptor(status, O_WRONLY)) return 125;
     char canonical[PATH_MAX];
-    if (!realpath(argv[8], canonical) || strcmp(canonical, argv[8])) return 125;
+    if (!realpath(argv[executable], canonical) || strcmp(canonical, argv[executable])) return 125;
     char *profile = read_profile(argv[2]);
     if (!profile) return 125;
     signal(SIGTERM, requested_stop);
@@ -167,7 +180,8 @@ int main(int argc, char **argv) {
     /* Reject an already-dead owner before releasing any child code. */
     struct kevent event;
     struct timespec immediate = {0, 0};
-    if (kevent(queue, NULL, 0, &event, 1, &immediate) != 0) {
+    int initial = kevent(queue, NULL, 0, &event, 1, &immediate);
+    if (initial < 0 || (initial > 0 && !consume_renewal(control, &event, leased))) {
         free(profile);
         return 125;
     }
@@ -177,7 +191,7 @@ int main(int argc, char **argv) {
     if (child < 0) { free(profile); return 125; }
     if (!child) {
         close(gate[1]);
-        child_exec(gate[0], profile, &argv[8], limit);
+        child_exec(gate[0], profile, &argv[executable], limit);
     }
     free(profile);
     close(gate[0]);
@@ -195,11 +209,13 @@ int main(int argc, char **argv) {
     }
     close(gate[1]);
     double deadline = 0;
+    double lease_until = monotonic() + 3.0, hard_deadline = monotonic() + 60.0;
     int child_status = 0;
     for (;;) {
         pid_t reaped = waitpid(child, &child_status, WNOHANG);
         if (reaped == child) break;
         if (reaped < 0 && errno != EINTR) return 125;
+        if (monotonic() >= hard_deadline || (leased && monotonic() >= lease_until)) stopping = 1;
         if (stopping && !deadline) {
             kill(child, SIGTERM);
             deadline = monotonic() + 2.0;
@@ -208,8 +224,11 @@ int main(int argc, char **argv) {
         struct timespec interval = {0, 25000000};
         int ready = kevent(queue, NULL, 0, &event, 1, &interval);
         if (ready < 0) { if (errno != EINTR) stopping = 1; continue; }
-        if (ready && (event.filter == EVFILT_READ ||
-            (event.filter == EVFILT_PROC && event.ident == (uintptr_t)owner))) stopping = 1;
+        if (ready && event.filter == EVFILT_READ) {
+            if (!consume_renewal(control, &event, leased)) stopping = 1;
+            if (!stopping) lease_until = monotonic() + 3.0;
+        }
+        if (ready && event.filter == EVFILT_PROC && event.ident == (uintptr_t)owner) stopping = 1;
         if (getppid() != owner) stopping = 1;
     }
     int code = WIFEXITED(child_status) ? WEXITSTATUS(child_status) : 128 + WTERMSIG(child_status);

@@ -58,6 +58,21 @@ _Ask Scout to open a website, summarize it, save notes, and verify the file. Eve
 
 Ask a Dot to show a draft before saving it. A CopilotKit human-in-the-loop card pauses the conversation for **Approve & save** or **Decline**. Approval creates the page in an authorized Space and returns a link; retries with the same draft recover that saved page. A changed draft needs a new review. The agent continues after your decision.
 
+### Abilities
+
+Teach an Ability to one Dot from **Dot settings → Abilities** using its public
+GitHub release descriptor link. Review the publisher, sealed package and actual
+permissions, then choose **Teach**. Approved actions run without repeated prompts;
+each Dot keeps separate access, settings and private state. **Disable** stops its
+workers, and quitting the desktop stops all Ability-owned processes.
+
+The first host supports confined JavaScript, optional local Python and native
+arm64 executables, with scoped HTTPS, browser OAuth and declared helpers. Desktop
+manipulation and printing capabilities are future work. Current execution evidence
+is macOS 26 Apple Silicon; no Spotify release or live account verification is
+claimed here. See [authoring](docs/abilities/authoring.md) and
+[verification](docs/desktop/abilities-verification.md).
+
 ### Connections
 
 Give a Dot tools from any MCP server, such as email, calendar, GitHub, or your own services. Read-only tools run on their own. Any other tool pauses for an **Approve & run** card in chat, and only your approval runs it. You can turn each tool on or off per Dot. See [Connections](docs/CONNECTIONS.md).

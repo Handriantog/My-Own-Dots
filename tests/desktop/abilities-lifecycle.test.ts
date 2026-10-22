@@ -191,10 +191,20 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ op: 'hold' }),
         });
+        let earlyResult: unknown;
+        void response
+          .then((result) => result.clone().json())
+          .then((result) => {
+            earlyResult = result;
+          });
         let pid = 0;
         await expect
           .poll(
             async () => {
+              if (earlyResult)
+                throw new Error(
+                  `Worker ended before readiness: ${JSON.stringify(earlyResult)}`,
+                );
               pid = Number(
                 (
                   await readFile(join(statePath, 'started'), 'utf8').catch(
@@ -207,7 +217,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
               );
               return pid;
             },
-            { interval: 20 },
+            { interval: 20, timeout: 5000 },
           )
           .toBeGreaterThan(0);
         expect(alive(pid)).toBe(true);
@@ -237,7 +247,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       expect(workerPidsAlive).toEqual([]);
       expect(externalBackendAlive).toBe(true);
       expect(f.controller.available).toBe(false);
-    });
+    }, 15000);
     it('suspends and revalidates a fresh session on resume without stopping the backend', async () => {
       const f = await fixture();
       await f.controller.attach(f.connection);
@@ -320,34 +330,46 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       await unavailable.attach(f.connection);
       expect(unavailable.available).toBe(false);
     });
-    it('reaps workers after hard desktop death even while the external backend stays alive', async () => {
-      const f = await fixture();
-      const configFile = join(f.home, 'owner.json');
-      await writeFile(
-        configFile,
-        JSON.stringify({ options: f.options, connection: f.connection }),
-      );
-      const owner = fork(
-        'tests/fixtures/abilities/lifecycle-owner.mjs',
-        [configFile],
-        {
-          execArgv: ['--import', 'tsx'],
-          stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
-        },
-      );
-      cleanups.push(() => stop(owner));
-      const [ready] = await once(owner, 'message');
-      expect(ready).toEqual({ attached: true });
-      const worker = await f.worker();
-      const dead = once(owner, 'exit');
-      owner.kill('SIGKILL');
-      await dead;
-      await expect
-        .poll(() => alive(worker.pid), { timeout: 5000, interval: 25 })
-        .toBe(false);
-      await worker.response;
-      expect(alive(f.backend.pid!)).toBe(true);
-      expect((await fetch(`${f.connection.url}/alive`)).ok).toBe(true);
-    });
+    it.each(['SIGKILL', 'SIGSTOP'] as const)(
+      'reaps workers after desktop %s even while the external backend stays alive',
+      async (signal) => {
+        const f = await fixture();
+        const configFile = join(f.home, 'owner.json');
+        await writeFile(
+          configFile,
+          JSON.stringify({ options: f.options, connection: f.connection }),
+        );
+        const owner = fork(
+          'tests/fixtures/abilities/lifecycle-owner.mjs',
+          [configFile],
+          {
+            execArgv: ['--import', 'tsx'],
+            stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+          },
+        );
+        cleanups.push(async () => {
+          owner.kill('SIGCONT');
+          await stop(owner);
+        });
+        const [ready] = await once(owner, 'message');
+        expect(ready).toEqual({ attached: true });
+        const worker = await f.worker();
+        if (signal === 'SIGSTOP') {
+          // Successful authority renewals must keep a normal long invocation alive.
+          await new Promise((resolve) => setTimeout(resolve, 3500));
+          expect(alive(worker.pid)).toBe(true);
+        }
+        const dead = signal === 'SIGKILL' ? once(owner, 'exit') : undefined;
+        owner.kill(signal);
+        await dead;
+        await expect
+          .poll(() => alive(worker.pid), { timeout: 6000, interval: 25 })
+          .toBe(false);
+        await worker.response;
+        expect(alive(f.backend.pid!)).toBe(true);
+        expect((await fetch(`${f.connection.url}/alive`)).ok).toBe(true);
+      },
+      15000,
+    );
   },
 );

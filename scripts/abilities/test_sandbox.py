@@ -129,13 +129,16 @@ class SandboxTests(unittest.TestCase):
                 f"(literal {literal(command[0])})" for command in self.executables.values()) + ")",
         ])
 
-    def start(self, runtime, operation, *args, extra_fds=(), low_fd_limit=False):
+    def start(self, runtime, operation, *args, extra_fds=(), low_fd_limit=False, renewal=None):
         control_read, control_write = os.pipe()
         status_read, status_write = os.pipe()
+        if renewal is not None:
+            os.write(control_write, renewal)
         try:
             process = subprocess.Popen([
                 str(self.launcher), "--profile", str(self.profiles[runtime]),
                 "--control-fd", str(control_read), "--status-fd", str(status_write),
+                *(["--lease"] if renewal is not None else []),
                 "--", *self.executables[runtime], operation, *map(str, args),
             ], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 pass_fds=(control_read, status_write, *extra_fds), cwd=self.state,
@@ -162,6 +165,18 @@ class SandboxTests(unittest.TestCase):
         report = self.run_probe(runtime, operation, *args)
         self.assertEqual(report["result"], -1, report)
         self.assertIn(report["errno"], (errno.EPERM, errno.EACCES), report)
+
+    def test_initial_lease_renewal(self):
+        # A busy scheduler may deliver the first renewal before the watchdog arms.
+        for renewal, code in [(b"R", 0), (b"invalid", 125)]:
+            with self.subTest(renewal=renewal):
+                process, _, _ = self.start("native", "env", renewal=renewal)
+                output, errors = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, code, errors.decode(errors="replace"))
+                if code == 0:
+                    self.assertEqual(json.loads(output)["result"], 0)
+                else:
+                    self.assertEqual(output, b"")
 
     def test_private_paths(self):
         for runtime in self.executables:

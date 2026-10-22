@@ -12,11 +12,33 @@ export const runtimeSchema = z.strictObject({
 });
 /** Inspect only: never run a candidate interpreter, shim or startup script. */
 export async function inspectPython(path: string): Promise<AbilityRuntime> {
-  const executable = await realpath(path);
+  let executable = await realpath(path);
   const framework = executable.match(
     /^(.*\/Python\.framework\/Versions\/[^/]+)\//,
   )?.[1];
   const root = framework ?? dirname(dirname(executable));
+  // python.org's bin/python is a launcher that re-execs Python.app. Select
+  // that inspected interpreter directly; do not grant worker process creation.
+  if (
+    framework &&
+    /^\/bin\/python[0-9.]*$/.test(executable.slice(framework.length))
+  ) {
+    const interpreter = join(
+      framework,
+      'Resources/Python.app/Contents/MacOS/Python',
+    );
+    const resolved = await realpath(interpreter).catch(
+      (error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return undefined;
+        throw error;
+      },
+    );
+    if (resolved) {
+      if (!resolved.startsWith(framework + '/'))
+        throw new AbilityFailure('permission_denied');
+      executable = resolved;
+    }
+  }
   if (
     root.split('/').length < 4 ||
     ['/usr', '/usr/local', '/opt/homebrew'].includes(root)

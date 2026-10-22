@@ -286,7 +286,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
                 () => '',
               )
             ).length,
-          { interval: 10 },
+          { interval: 10, timeout: 5000 },
         )
         .toBeGreaterThan(0);
       await f.backend!.quiesce();

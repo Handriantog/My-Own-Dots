@@ -8,6 +8,8 @@
     "test": "tests"
   },
   "scripts": {
+    "abilities:acceptance": "node scripts/abilities/acceptance.mjs",
+    "abilities:package:smoke": "node scripts/abilities/package-smoke.mjs",
     "desktop:runtime:smoke": "node scripts/smoke-desktop-runtime.mjs",
     "desktop:runtime": "node scripts/build-desktop-runtime.mjs",
     "desktop:build": "node scripts/build-desktop.mjs",

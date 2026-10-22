@@ -151,6 +151,10 @@ Neither needs an acknowledgment. Authority is revoked before delivery; cooperati
 with shutdown does not grant extra time or capabilities. After two seconds the
 host kills and reaps remaining workers. Desktop death, disconnect, disable, and
 workspace replacement also revoke authority. Closing/hiding a window does not.
+Native watchdog leases expire after three seconds without an authorized renewal;
+they still work when the desktop event loop is frozen. Expiry starts the same
+two-second TERM/KILL cleanup. The native watchdog also caps execution at sixty
+seconds; helpers cannot extend their parent's deadline.
 
 Do not automatically retry a mutation after a timeout/disconnect: it may have
 reached the provider. Return `uncertain` when the effect cannot be established.

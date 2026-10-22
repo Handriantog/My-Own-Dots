@@ -87,6 +87,7 @@ class ProtocolWorker {
   pid?: number;
   private stopping = false;
   private readonly control: Duplex;
+  private renewal?: ReturnType<typeof setInterval>;
   constructor(
     launcher: string,
     profile: string,
@@ -98,6 +99,7 @@ class ProtocolWorker {
     signal: AbortSignal,
     capability: (request: CapabilityRequest) => Promise<CapabilityReply>,
     started: () => void,
+    authorize: () => Promise<unknown>,
   ) {
     const child = (this.child = spawn(
       launcher,
@@ -108,6 +110,7 @@ class ProtocolWorker {
         '3',
         '--status-fd',
         '4',
+        '--lease',
         '--',
         executable,
         ...args,
@@ -262,10 +265,31 @@ class ProtocolWorker {
       }
     });
     const abort = () => fail(new AbilityFailure('cancelled'));
+    let checking = false;
+    this.renewal = setInterval(() => {
+      if (checking || this.stopping || signal.aborted || phase === 'done')
+        return;
+      checking = true;
+      void authorize()
+        .then(
+          () => {
+            if (!this.stopping && !signal.aborted && phase !== 'done')
+              this.control.write('R', (error) => {
+                if (error) fail(new AbilityFailure('host_unavailable'));
+              });
+          },
+          () => fail(new AbilityFailure('permission_denied')),
+        )
+        .finally(() => {
+          checking = false;
+        });
+    }, 500);
+    this.renewal.unref?.();
     signal.addEventListener('abort', abort, { once: true });
     if (signal.aborted) abort();
     this.closed = new Promise((resolve) => {
       const close = () => {
+        if (this.renewal) clearInterval(this.renewal);
         signal.removeEventListener('abort', abort);
         if (phase !== 'done') fail(new AbilityFailure('invalid_response'));
         resolve();
@@ -283,6 +307,7 @@ class ProtocolWorker {
   stop(): void {
     if (this.stopping) return;
     this.stopping = true;
+    if (this.renewal) clearInterval(this.renewal);
     // Only the native watchdog signals its unreaped child identity. Closing this
     // descriptor starts TERM -> two-second grace -> KILL -> waitpid cleanup.
     this.control.destroy();
@@ -561,6 +586,7 @@ export class AbilitySupervisor {
         () => {
           scope.started = true;
         },
+        () => this.authority(scope),
       );
       scope.workers.add(worker);
       const result = await worker.result;

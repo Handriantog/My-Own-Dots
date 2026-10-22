@@ -1,6 +1,7 @@
 # Dot Abilities: platform design
 
-Status: approved by the owner on October 23, 2026; no runtime implementation yet.
+Status: approved by the owner on October 23, 2026; implementation and verification
+are tracked in [the evidence record](abilities-verification.md). Not a release announcement.
 
 ## Outcome and agreed constraints
 
