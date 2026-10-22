@@ -102,6 +102,13 @@ export class OwnerResultStore {
     this.bytes += bytes;
     return handle;
   }
+  recent(dotId: string, threadId: string): string[] {
+    return [...this.entries.keys()]
+      .filter(
+        (handle) => this.entry(dotId, handle)?.context.threadId === threadId,
+      )
+      .slice(-8);
+  }
   read(dotId: string, handle: string): OwnerView | undefined {
     const entry = this.entry(dotId, handle);
     return entry ? structuredClone(entry.view) : undefined;

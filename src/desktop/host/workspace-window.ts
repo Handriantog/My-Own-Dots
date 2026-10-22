@@ -103,6 +103,30 @@ export class WorkspaceWindow {
       bundle,
       storage: safeStorage,
       open: (url) => shell.openExternal(url),
+      choosePython: async () => {
+        const window = this.window;
+        if (!window || this.disposed || !window.isVisible()) return;
+        const result = await dialog.showOpenDialog(window, {
+          title: 'Choose a Python executable',
+          properties: ['openFile'],
+        });
+        return result.canceled || this.disposed
+          ? undefined
+          : result.filePaths[0];
+      },
+      approvePython: async (runtime) => {
+        const window = this.window;
+        if (!window || this.disposed) return false;
+        const result = await dialog.showMessageBox(window, {
+          type: 'question',
+          message: 'Use this Python for Abilities?',
+          detail: `Executable: ${runtime.executable}\n\nRead-only access: ${runtime.readRoots.join('\n')}\n\nPython Abilities will use this interpreter. This does not grant access to other personal folders.`,
+          buttons: ['Cancel', 'Use Python'],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        return !this.disposed && result.response === 1;
+      },
     });
     this.storage = new StorageController({
       profile: data,

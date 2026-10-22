@@ -13,6 +13,11 @@ bridge.setAuthority(async () => ({
 }));
 const app = new Hono();
 app.route('/ability-host/v1', bridge.routes(config.ownerToken));
+app.post('/api/abilities/:id/configure', async (c) => {
+  config.binding.settings = (await c.req.json()).settings;
+  config.binding.revision++;
+  return c.json(config.binding);
+});
 app.get('/api/abilities/:id', (c) => c.json(config.binding));
 app.get('/api/dots/:id/abilities', (c) =>
   c.json({ bindings: [config.binding] }),

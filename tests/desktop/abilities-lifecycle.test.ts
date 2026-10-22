@@ -279,6 +279,25 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       );
       expect(listed).toMatchObject({ ok: true, value: { available: true } });
     });
+    it('saves the personal client ID in the same trusted Connect action before OAuth begins', async () => {
+      const f = await fixture();
+      await f.controller.attach(f.connection);
+      await f.controller.invoke(
+        'connect',
+        {
+          dotId: 'dot',
+          bindingId: f.binding.id,
+          accountId: 'account',
+          clientId: 'personal-client',
+        },
+        { trusted: () => true },
+      );
+      const binding = await (
+        await fetch(`${f.connection.url}/api/abilities/${f.binding.id}`)
+      ).json();
+      expect(binding.settings.clientId).toBe('personal-client');
+      expect(binding.grants).toEqual(f.binding.grants);
+    });
     it('fails closed without a supported launcher or verified workspace identity', async () => {
       const f = await fixture();
       await f.controller.attach({ ...f.connection, workspaceId: undefined });

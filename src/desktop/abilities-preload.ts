@@ -4,7 +4,12 @@ import {
   type DesktopAbilities,
   type DesktopAbilityMethod,
 } from '../shared/abilities/desktop.js';
-const reads = new Set<DesktopAbilityMethod>(['list', 'account', 'results']);
+const reads = new Set<DesktopAbilityMethod>([
+  'list',
+  'account',
+  'results',
+  'recent',
+]);
 export function createAbilitiesPreload(): DesktopAbilities {
   return Object.fromEntries(
     (Object.keys(desktopAbilityMethods) as DesktopAbilityMethod[]).map(

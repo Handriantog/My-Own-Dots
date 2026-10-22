@@ -550,7 +550,7 @@ export class DotAgent extends AbstractAgent {
               ? await abilityTools(
                   this.abilities,
                   dot.id,
-                  input.threadId,
+                  delegation?.parentThreadId ?? input.threadId,
                   check,
                   controller.signal,
                 )

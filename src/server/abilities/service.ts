@@ -98,9 +98,14 @@ export class AbilityService {
     this.reviews.delete(reviewId);
     return entry.review;
   }
-  async teach(dotId: string, reviewId: string): Promise<Binding> {
+  async teach(
+    dotId: string,
+    reviewId: string,
+    settings: Record<string, JsonValue> = {},
+  ): Promise<Binding> {
     this.session();
     const review = this.takeReview(dotId, reviewId);
+    validateValue(review.descriptor.manifest.settings, settings);
     return this.serial(`teach:${dotId}`, async () => {
       const previous = (await this.workspace.abilities.list(dotId)).find(
         (binding) =>
@@ -125,15 +130,23 @@ export class AbilityService {
             dotId,
             pkg.digest,
             pkg.manifest.permissions.map((p) => p.id),
-            {},
+            settings,
           );
         },
       );
     });
   }
-  async update(id: string, reviewId: string): Promise<Binding> {
+  async update(
+    id: string,
+    reviewId: string,
+    settings?: Record<string, JsonValue>,
+  ): Promise<Binding> {
     const original = await this.binding(id);
     const review = this.takeReview(original.dotId, reviewId);
+    validateValue(
+      review.descriptor.manifest.settings,
+      settings ?? original.settings,
+    );
     if (
       review.descriptor.manifest.id !== original.manifest.id ||
       canonicalJson(review.descriptor.manifest.source) !==
@@ -151,7 +164,7 @@ export class AbilityService {
           throw new AbilityFailure('invalid_response');
         return this.serial(`mutation:${id}`, async () => {
           const current = await this.binding(id);
-          validateValue(pkg.manifest.settings, current.settings);
+          validateValue(pkg.manifest.settings, settings ?? current.settings);
           await this.revoke(current);
           return this.serial(id, async () => {
             await this.workspace.abilities.recordPackage(pkg);
@@ -159,7 +172,7 @@ export class AbilityService {
               current.dotId,
               pkg.digest,
               pkg.manifest.permissions.map((p) => p.id),
-              current.settings,
+              settings ?? current.settings,
             );
           });
         });

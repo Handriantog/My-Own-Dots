@@ -295,6 +295,17 @@ export class AbilityHost implements DesktopAbilityHandlers {
       if (id) this.active.delete(id);
     }
   }
+  async recentResults(dotId: string, threadId: string): Promise<string[]> {
+    const handles = this.results.recent(dotId, threadId),
+      valid: string[] = [];
+    for (const handle of handles)
+      if (await this.readResult(dotId, handle)) valid.push(handle);
+    return valid;
+  }
+  running(bindingId: string): boolean {
+    const status = this.supervisor.status(bindingId);
+    return status.active || status.queued > 0;
+  }
   async readResult(dotId: string, handle: string) {
     const context = this.results.context(dotId, handle);
     if (!context) return;

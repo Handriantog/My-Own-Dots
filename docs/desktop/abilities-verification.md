@@ -281,3 +281,30 @@ restore-authority rules remain the next storage gate.
 The controller refuses to attach without a verified workspace identity,
 a supported native launcher and a validated runtime. This is source/fixture
 verification; packaging and user-facing management are not complete yet.
+
+### Teach, setup, and private result UI (Task 11)
+
+The selected Dot has an Abilities section with release review, explicit Teach,
+per-Dot enable/disable/forget, optional private-data erasure, personal OAuth client
+setup, generic nonsecret settings, and native Python selection when needed.
+The host supplies real package/state locations in the review. Python executable
+and read roots are reviewed in a native dialog and stored privately; candidate
+interpreters are inspected without execution. Voice delegations use the validated
+parent conversation for private choices; only opaque handles cross the backend.
+
+- UI tests: 11 passing, including consent-before-install, duplicate submission,
+  selected-Dot changes, setup and runtime states, expired results, escaped text,
+  and host-issued selection references.
+- Privacy integration: five real confined-worker scenarios traverse the actual
+  authenticated bridge, DotAgent, LocalAgentRunner, SQLite storage worker,
+  memory indexing/model projection, compaction inference, canonical voice and
+  persisted voice-event inputs. Hostile provider text, split protocol frames,
+  raw errors, stderr, uncertain results, and cancelled late output do not reach
+  those sinks. The owner card displays escaped sample text. No live provider
+  account or model inference is used.
+- Full suite: 229 files, 1,929 passed, one existing certificate-identity skip.
+  Typecheck and lint pass.
+- Visual/keyboard inspection remains pending: computer access to Safari was
+  denied and the in-app browser was unavailable. A disposable local Vite fixture
+  is prepared for normal and 360px views. Automated React checks are not a
+  substitute for that inspection.

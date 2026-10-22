@@ -519,3 +519,39 @@ describe('serialized admission and revocation', () => {
     expect((await old.app.request('/api/unrelated')).status).toBe(200);
   });
 });
+
+it('validates required settings before installation and carries them through teaching and updates', async () => {
+  const f = await fixture();
+  await f.client.start();
+  const manifest = f.archive.review.descriptor.manifest;
+  manifest.settings = {
+    type: 'object',
+    properties: {
+      ...manifest.settings.properties,
+      label: { type: 'string', maxLength: 32 },
+    },
+    required: ['label'],
+    additionalProperties: false,
+  };
+  f.pkg.manifest = structuredClone(manifest);
+  f.pkg.descriptor = structuredClone(f.archive.review.descriptor);
+  let installs = 0;
+  f.handlers.install = async () => {
+    installs++;
+    return f.pkg;
+  };
+  let review = await f.service.review(f.dot.id, f.archive.review.descriptorUrl);
+  await expect(f.service.teach(f.dot.id, review.id, {})).rejects.toThrow();
+  expect(installs).toBe(0);
+  review = await f.service.review(f.dot.id, f.archive.review.descriptorUrl);
+  const binding = await f.service.teach(f.dot.id, review.id, {
+    label: 'first',
+  });
+  expect(binding.settings).toEqual({ label: 'first' });
+  review = await f.service.review(f.dot.id, f.archive.review.descriptorUrl);
+  const updated = await f.service.update(binding.id, review.id, {
+    label: 'second',
+  });
+  expect(updated.settings).toEqual({ label: 'second' });
+  expect(installs).toBe(2);
+});

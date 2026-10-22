@@ -159,3 +159,28 @@ describe('transient owner results', () => {
     ).toThrow();
   });
 });
+
+it('lists only live handles for the exact Dot and visible conversation', () => {
+  const results = new OwnerResultStore();
+  const scope = {
+    workspaceId: 'workspace',
+    sessionId: 'session',
+    dotId: 'dot',
+    bindingId: randomUUID(),
+    digest: 'a'.repeat(64),
+    grantRevision: 1,
+    invocationId: randomUUID(),
+    tool: 'search',
+    threadId: 'parent',
+  };
+  const handle = results.put(scope, { kind: 'text', text: 'SPOTIFY_SENTINEL' });
+  expect(results.recent('dot', 'parent')).toEqual([handle]);
+  expect(results.recent('other', 'parent')).toEqual([]);
+  expect(results.recent('dot', 'child')).toEqual([]);
+  expect(JSON.stringify(results.recent('dot', 'parent'))).not.toContain(
+    'SPOTIFY_SENTINEL',
+  );
+  results.clearBinding(scope.bindingId);
+  expect(results.recent('dot', 'parent')).toEqual([]);
+  results.clear();
+});

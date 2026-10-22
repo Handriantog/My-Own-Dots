@@ -50,11 +50,28 @@ export const desktopAbilityMethods = {
       available: z.boolean(),
       reason: errorCodeSchema.optional(),
       bindings: z.array(bindingSchema).max(1000),
+      activity: z.record(uuid, z.boolean()).optional(),
+      python: z
+        .strictObject({
+          executable: z.string().max(4096),
+          readRoots: z.array(z.string().max(4096)).max(16),
+        })
+        .optional(),
     }),
+  },
+  choosePython: {
+    input: z.strictObject(dot),
+    output: z.strictObject({ selected: z.boolean() }),
   },
   review: {
     input: z.strictObject({ ...dot, url: z.string().min(1).max(2048) }),
     output: reviewSchema.extend({
+      storage: z
+        .strictObject({
+          packagePath: z.string().max(4096),
+          stateParent: z.string().max(4096),
+        })
+        .optional(),
       changes: z
         .array(
           z.strictObject({
@@ -67,12 +84,20 @@ export const desktopAbilityMethods = {
     }),
   },
   teach: {
-    input: z.strictObject({ ...dot, reviewId: uuid }),
+    input: z.strictObject({
+      ...dot,
+      reviewId: uuid,
+      settings: values.optional(),
+    }),
     output: bindingSchema,
   },
   enable: { input: z.strictObject(binding), output: bindingSchema },
   update: {
-    input: z.strictObject({ ...binding, reviewId: uuid }),
+    input: z.strictObject({
+      ...binding,
+      reviewId: uuid,
+      settings: values.optional(),
+    }),
     output: bindingSchema,
   },
   configure: {
@@ -100,6 +125,10 @@ export const desktopAbilityMethods = {
   uninstall: {
     input: z.strictObject({ digest: z.string().regex(/^[a-f0-9]{64}$/) }),
     output: ok,
+  },
+  recent: {
+    input: z.strictObject({ ...dot, threadId: id }),
+    output: z.array(uuid).max(8),
   },
   results: {
     input: z.strictObject({ ...dot, handle: uuid }),

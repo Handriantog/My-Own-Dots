@@ -21,7 +21,7 @@ afterEach(() => {
   for (const fn of cleanups.splice(0).reverse()) fn();
   vi.restoreAllMocks();
 });
-function fixture() {
+function fixture(delegated = false) {
   const store = new Store(':memory:'),
     workspace = new WorkspaceStore(':memory:', 'owner');
   cleanups.push(() => {
@@ -31,6 +31,7 @@ function fixture() {
   const dot = workspace.dots()[0],
     other = workspace.createDot(dot.spaceId, 'Other', 'Fixture', true, true);
   workspace.bindThread('thread', dot.id, 'Fixture');
+  if (delegated) workspace.bindThread('parent', dot.id, 'Parent');
   const manifest = parseManifest(manifestFixture),
     digest = 'a'.repeat(64);
   const pkg: VerifiedPackage = {
@@ -127,7 +128,12 @@ function fixture() {
     false,
     undefined,
     undefined,
-    undefined,
+    delegated
+      ? ({
+          forThread: async () => ({ parentThreadId: 'parent' }),
+          threadContext: async () => undefined,
+        } as never)
+      : undefined,
     undefined,
     service,
   );
@@ -340,4 +346,32 @@ describe('granted Ability tools', () => {
       status: 'success',
     });
   });
+});
+
+it('scopes a voice delegation result to its validated visible parent conversation', async () => {
+  const f = fixture(true);
+  engine.runAgent
+    .mockResolvedValueOnce({
+      result: {
+        text: '',
+        toolCalls: [
+          {
+            name: f.name,
+            argumentsJson: JSON.stringify({ arguments: { query: 'song' } }),
+          },
+        ],
+      },
+      usage: {},
+    })
+    .mockResolvedValueOnce({
+      result: { text: 'Choose in the conversation.', toolCalls: [] },
+      usage: {},
+    });
+  await lastValueFrom(f.agent.run(f.input).pipe(toArray()));
+  expect(f.invoke).toHaveBeenCalledWith(
+    expect.objectContaining({
+      context: expect.objectContaining({ threadId: 'parent' }),
+    }),
+    expect.any(AbortSignal),
+  );
 });

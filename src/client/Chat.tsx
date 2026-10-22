@@ -1,3 +1,8 @@
+import { ownerOutcomeSchema } from '../shared/abilities/protocol';
+import {
+  AbilityToolCard,
+  RecentAbilityResults,
+} from './abilities/AbilityResultCard';
 import { MemoryActivity, type MemoryActivityHandle } from './MemoryActivity';
 import { SavedMessages } from './SavedMessages';
 import { useMessageMarks } from './useMessageMarks';
@@ -566,9 +571,36 @@ export function Chat({
             showScreen={props.toolCallId === latestBrowserCall?.id}
             onExpand={onComputer}
           />
+        ) : props.name.startsWith('ability_') ? (
+          <AbilityToolCard
+            dotId={dot.id}
+            status={props.status}
+            result={props.result}
+            onSelect={(selectionRef) =>
+              send(
+                `Use my selected item for the previous Ability request. Selection reference: ${selectionRef}`,
+              )
+            }
+          />
         ) : null,
     },
     [dot.id, dot.name, running, latestBrowserCall?.id, onComputer],
+  );
+  const abilityHandles = new Set(
+    agent.messages.flatMap((message) => {
+      if (message.role !== 'tool' || typeof message.content !== 'string')
+        return [];
+      try {
+        const result = ownerOutcomeSchema.safeParse(
+          JSON.parse(message.content),
+        );
+        return result.success && result.data.resultRef
+          ? [result.data.resultRef]
+          : [];
+      } catch {
+        return [];
+      }
+    }),
   );
   const visible = agent.messages.filter(
     (message) =>
@@ -579,6 +611,7 @@ export function Chat({
           message.toolCalls?.some(
             (call) =>
               call.function.name.startsWith('computer_') ||
+              call.function.name.startsWith('ability_') ||
               call.function.name === 'COMPOSIO_MANAGE_CONNECTIONS' ||
               call.function.name === pageReviewTool.name ||
               call.function.name === connectionActionTool.name ||
@@ -772,6 +805,16 @@ export function Chat({
                 messages={agent.messages}
               />
             )}
+          />
+          <RecentAbilityResults
+            dotId={dot.id}
+            threadId={thread.id}
+            hiddenHandles={abilityHandles}
+            onSelect={(selectionRef) =>
+              send(
+                `Use my selected item for the previous Ability request. Selection reference: ${selectionRef}`,
+              )
+            }
           />
           {running && (
             <div className="thinking">

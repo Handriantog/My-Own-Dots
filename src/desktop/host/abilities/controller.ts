@@ -21,6 +21,8 @@ import type { WorkspaceBackendConnection } from '../workspace-backend.js';
 import { DesktopAbilityBridge } from './bridge.js';
 import { AbilityHost } from './host.js';
 import { DirectoryAnchor } from './package.js';
+import { inspectPython, loadPython, savePython } from './runtime.js';
+import type { AbilityRuntime } from './sandbox.js';
 import { validateExecutable, validateRuntime } from './sandbox.js';
 import type { AbilitySupervisorOptions } from './supervisor.js';
 type Current = {
@@ -28,17 +30,21 @@ type Current = {
   controller: AbortController;
   host: AbilityHost;
   bridge: DesktopAbilityBridge;
+  python?: AbilityRuntime;
 };
 type Options = {
   profile: string;
   bundle: string;
   storage: ProtectedStorage;
   open(url: string): Promise<void>;
+  choosePython?(): Promise<string | undefined>;
+  approvePython?(runtime: AbilityRuntime): Promise<boolean>;
   runtimes?: AbilitySupervisorOptions['runtimes'];
 };
 /** Desktop-main only. No renderer-provided URL, path, token or authority is accepted. */
 export class AbilityController {
   private current?: Current;
+  private choosingPython = false;
   private connection?: WorkspaceBackendConnection;
   private operations: Promise<unknown> = Promise.resolve();
   private generation = 0;
@@ -91,11 +97,13 @@ export class AbilityController {
         loopbackBackend(connection.url);
         const launcher = join(this.options.bundle, 'native/ability-launcher');
         await validateExecutable(launcher);
-        const runtime = this.options.runtimes ?? {
-          javascript: {
-            executable: await realpath(process.execPath),
-            readRoots: [dirname(dirname(await realpath(process.execPath)))],
-          },
+        const runtime: AbilitySupervisorOptions['runtimes'] = {
+          ...(this.options.runtimes ?? {
+            javascript: {
+              executable: await realpath(process.execPath),
+              readRoots: [dirname(dirname(await realpath(process.execPath)))],
+            },
+          }),
         };
         await validateRuntime(runtime.javascript);
         if (runtime.python) await validateRuntime(runtime.python);
@@ -111,6 +119,10 @@ export class AbilityController {
             },
           );
           await DirectoryAnchor.capture(directory);
+        }
+        if (!runtime.python) {
+          // Invalid or moved Python affects only Python abilities, never JavaScript.
+          runtime.python = await loadPython(privateRoot).catch(() => undefined);
         }
         if (this.stopped || generation !== this.generation) return;
         const controller = new AbortController();
@@ -144,7 +156,13 @@ export class AbilityController {
           },
           host,
         );
-        current = { connection: { ...connection }, controller, host, bridge };
+        current = {
+          connection: { ...connection },
+          controller,
+          host,
+          bridge,
+          python: runtime.python,
+        };
         this.current = current;
         await bridge.start();
         if (this.stopped || generation !== this.generation) {
@@ -261,6 +279,7 @@ export class AbilityController {
       const signal = current?.controller.signal ?? AbortSignal.timeout(3000);
       const api = (path: string, body?: unknown) =>
         this.api(connection, path, body, signal);
+      let boundBinding: z.infer<typeof bindingSchema> | undefined;
       if ('bindingId' in input) {
         const bound = z
           .object({ bindingId: z.uuid(), dotId: z.string() })
@@ -270,9 +289,49 @@ export class AbilityController {
         );
         if (binding.id !== bound.bindingId || binding.dotId !== bound.dotId)
           throw new AbilityFailure('permission_denied');
+        boundBinding = binding;
       }
       if (!authority.trusted() || (current && this.current !== current))
         throw new AbilityFailure('permission_denied');
+      if (method === 'choosePython') {
+        if (
+          this.choosingPython ||
+          !this.options.choosePython ||
+          !this.options.approvePython
+        )
+          throw new AbilityFailure('busy');
+        this.choosingPython = true;
+        try {
+          const path = await this.options.choosePython();
+          if (!path)
+            return {
+              ok: true,
+              value: { selected: false },
+            } as DesktopAbilityReply<M>;
+          const runtime = await inspectPython(path);
+          if (!authority.trusted() || this.current !== current)
+            throw new AbilityFailure('permission_denied');
+          if (!(await this.options.approvePython(runtime)))
+            return {
+              ok: true,
+              value: { selected: false },
+            } as DesktopAbilityReply<M>;
+          if (!authority.trusted() || this.current !== current)
+            throw new AbilityFailure('permission_denied');
+          await savePython(
+            join(await realpath(this.options.profile), 'abilities'),
+            runtime,
+          );
+          await this.suspend();
+          await this.attach(connection);
+          return {
+            ok: true,
+            value: { selected: true },
+          } as DesktopAbilityReply<M>;
+        } finally {
+          this.choosingPython = false;
+        }
+      }
       let value: unknown;
       switch (method) {
         case 'list': {
@@ -284,24 +343,45 @@ export class AbilityController {
             );
           value = {
             ...response,
+            activity: Object.fromEntries(
+              response.bindings.map((binding) => [
+                binding.id,
+                current?.host.running(binding.id) ?? false,
+              ]),
+            ),
             available: this.available,
+            ...(current?.python ? { python: current.python } : {}),
             ...(!this.available ? { reason: this.unavailable } : {}),
           };
           break;
         }
         case 'review': {
           const args = desktopAbilityMethods.review.input.parse(input);
-          value = await api(
-            `/dots/${encodeURIComponent(args.dotId)}/abilities/review`,
-            { url: args.url },
+          const review = desktopAbilityMethods.review.output.parse(
+            await api(
+              `/dots/${encodeURIComponent(args.dotId)}/abilities/review`,
+              { url: args.url },
+            ),
           );
+          value = {
+            ...review,
+            storage: {
+              packagePath: join(
+                connection.abilityRoot!,
+                'installation',
+                'packages',
+                review.descriptor.asset.sha256,
+              ),
+              stateParent: join(connection.abilityRoot!, 'state'),
+            },
+          };
           break;
         }
         case 'teach': {
           const args = desktopAbilityMethods.teach.input.parse(input);
           value = await api(
             `/dots/${encodeURIComponent(args.dotId)}/abilities/teach`,
-            { reviewId: args.reviewId },
+            { reviewId: args.reviewId, settings: args.settings },
           );
           break;
         }
@@ -314,6 +394,7 @@ export class AbilityController {
           const args = desktopAbilityMethods.update.input.parse(input);
           value = await api(`/abilities/${args.bindingId}/update`, {
             reviewId: args.reviewId,
+            settings: args.settings,
           });
           break;
         }
@@ -326,6 +407,25 @@ export class AbilityController {
         }
         case 'connect': {
           const args = desktopAbilityMethods.connect.input.parse(input);
+          const account = boundBinding!.manifest.permissions.find(
+            (p) => p.kind === 'oauth' && p.id === args.accountId,
+          );
+          if (
+            !account ||
+            account.kind !== 'oauth' ||
+            !boundBinding!.enabled ||
+            !boundBinding!.grants.includes(account.id)
+          )
+            throw new AbilityFailure('permission_denied');
+          if (boundBinding!.settings[account.clientIdSetting] !== args.clientId)
+            await api(`/abilities/${args.bindingId}/configure`, {
+              settings: {
+                ...boundBinding!.settings,
+                [account.clientIdSetting]: args.clientId,
+              },
+            });
+          if (!authority.trusted() || this.current !== current)
+            throw new AbilityFailure('permission_denied');
           await current!.host.accounts.connect(
             args.bindingId,
             args.clientId,
@@ -362,6 +462,11 @@ export class AbilityController {
           const args = desktopAbilityMethods.uninstall.input.parse(input);
           await api(`/abilities/packages/${args.digest}/uninstall`, {});
           value = { ok: true };
+          break;
+        }
+        case 'recent': {
+          const args = desktopAbilityMethods.recent.input.parse(input);
+          value = await current!.host.recentResults(args.dotId, args.threadId);
           break;
         }
         case 'results': {
