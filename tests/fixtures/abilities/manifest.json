@@ -1,0 +1,71 @@
+{
+  "formatVersion": 1,
+  "apiVersion": 1,
+  "id": "fixture",
+  "name": "Fixture Ability",
+  "description": "Disposable contract fixture.",
+  "publisher": "Dot tests",
+  "source": { "owner": "example", "repository": "abilities" },
+  "version": "0.1.0",
+  "license": "MIT",
+  "platforms": ["darwin-arm64"],
+  "entrypoint": { "runtime": "javascript", "path": "dist/worker.mjs" },
+  "helpers": [],
+  "settings": {
+    "type": "object",
+    "properties": { "clientId": { "type": "string", "maxLength": 128 } },
+    "required": [],
+    "additionalProperties": false
+  },
+  "tools": [
+    {
+      "id": "search",
+      "description": "Find an item.",
+      "input": {
+        "type": "object",
+        "properties": {
+          "query": { "type": "string", "minLength": 1, "maxLength": 200 }
+        },
+        "required": ["query"],
+        "additionalProperties": false
+      },
+      "output": { "type": "null" },
+      "visibility": "owner-only"
+    }
+  ],
+  "permissions": [
+    {
+      "id": "account",
+      "kind": "oauth",
+      "purpose": "Connect a fixture account.",
+      "authorizationUrl": "https://accounts.example.com/authorize",
+      "tokenUrl": "https://accounts.example.com/token",
+      "resourceOrigin": "https://api.example.com",
+      "clientIdSetting": "clientId",
+      "scopes": ["read-items"]
+    },
+    {
+      "id": "search",
+      "kind": "https",
+      "purpose": "Search items in this account.",
+      "origin": "https://api.example.com",
+      "method": "GET",
+      "path": ["v1", "items", { "param": "itemId" }],
+      "pathValues": {
+        "type": "object",
+        "properties": {
+          "itemId": { "type": "string", "minLength": 1, "maxLength": 64 }
+        },
+        "required": ["itemId"],
+        "additionalProperties": false
+      },
+      "query": {
+        "type": "object",
+        "properties": { "q": { "type": "string", "maxLength": 200 } },
+        "required": ["q"],
+        "additionalProperties": false
+      },
+      "account": "account"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "jsonrpc": "2.0",
+  "id": "call-1",
+  "method": "capability",
+  "params": {
+    "kind": "https",
+    "ruleId": "search",
+    "pathValues": { "itemId": "item123" },
+    "query": { "q": "fixture" }
+  }
+}
