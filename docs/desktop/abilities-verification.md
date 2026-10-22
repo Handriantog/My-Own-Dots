@@ -161,3 +161,31 @@ the packaged backend. GitHub metadata review and the existing public-address
 classifier now live in shared modules, with the old exports preserved. The real
 owned-backup integration passes again. The full suite passes 219 files and 1,793
 tests, with one existing certificate-identity skip; typecheck and lint pass.
+
+## Application worker supervisor
+
+Sixteen supervisor tests pass with real JavaScript, selected Python, and native
+fixture programs. They cover the eight-call queue, four-worker limit including
+helpers, malformed/oversized/unknown protocol frames, the exact 60-second timer
+boundary, real TERM grace and forced reaping, cancellation, native architecture,
+quoted paths, package replacement, environment isolation, native re-execution,
+helper authority ending with the main result, and failed profile-file cleanup.
+The 60-second test advances the host timer; the two-second native grace runs in
+real time and checks actual process survival.
+
+The native gate passes 13 checks with both its original fixture policies and the
+application profile generator. Node/libuv uses anonymous Unix socketpairs for
+child stdio, so the launcher accepts those as control/status channels while
+rejecting TCP and named Unix sockets. All extra worker descriptors are still
+closed. A racing symlink test now establishes safe writes before starting churn;
+all 5,000 racing attempts must leave the outside sentinel unchanged. This avoids
+requiring a scheduler-dependent successful write during churn.
+
+Selected interpreter code executes inside confinement. Owner/root-owned runtime
+trees may be group writable, as the installed python.org framework is; world
+writable runtimes remain rejected. The trusted watchdog retains the stricter
+non-group/world-writable check. Package files remain immutable to workers.
+
+The full suite passes 220 files and 1,809 tests, with the same one existing skip;
+typecheck and lint pass. Packaged Electron runtime acceptance and live provider
+use remain later gates; these results do not claim VM-grade resource isolation.

@@ -15,6 +15,8 @@
 #include <string.h>
 #include <sys/event.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -65,8 +67,19 @@ static char *read_profile(const char *path) {
 static bool pipe_descriptor(int fd, int mode) {
     struct stat info;
     int flags = fcntl(fd, F_GETFL);
-    return flags >= 0 && (flags & O_ACCMODE) == mode &&
-        fstat(fd, &info) == 0 && S_ISFIFO(info.st_mode);
+    if (flags < 0 || fstat(fd, &info)) return false;
+    if (S_ISFIFO(info.st_mode)) return (flags & O_ACCMODE) == mode;
+    /* Node/libuv's child stdio pipes are anonymous local socketpairs. Never
+     * accept network sockets or named Unix endpoints as watchdog channels. */
+    if (!S_ISSOCK(info.st_mode) || (flags & O_ACCMODE) != O_RDWR) return false;
+    struct sockaddr_un local = {0}, peer = {0};
+    socklen_t local_size = sizeof(local), peer_size = sizeof(peer), type_size = sizeof(int);
+    int type = 0;
+    return getsockname(fd, (struct sockaddr *)&local, &local_size) == 0 &&
+        getpeername(fd, (struct sockaddr *)&peer, &peer_size) == 0 &&
+        getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &type_size) == 0 &&
+        local.sun_family == AF_UNIX && peer.sun_family == AF_UNIX &&
+        local.sun_path[0] == 0 && peer.sun_path[0] == 0 && type == SOCK_STREAM;
 }
 
 /* RLIMIT_NOFILE can be lowered below already-open descriptors. Enumerate the
@@ -110,6 +123,7 @@ static void child_exec(int gate, const char *profile, char **command, int fd_lim
     char *environment[] = {
         "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LANG=en_US.UTF-8", "LC_ALL=en_US.UTF-8",
         "PYTHONNOUSERSITE=1", "PYTHONDONTWRITEBYTECODE=1", "PYTHONUNBUFFERED=1",
+        "ELECTRON_RUN_AS_NODE=1",
         home, temporary, NULL,
     };
     signal(SIGTERM, SIG_DFL);

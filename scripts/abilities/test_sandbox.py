@@ -83,6 +83,19 @@ class SandboxTests(unittest.TestCase):
         self.secret.write_text("disposable sentinel")
         self.profile = self.root / "profile.sb"
         self.profile.write_text(self.make_profile())
+        self.profiles = {runtime: self.profile for runtime in self.executables}
+        if os.environ.get("DOTS_ABILITY_APPLICATION_PROFILE") == "1":
+            inputs = [{"packageRoot": str(self.package), "stateRoot": str(self.state),
+                       "temporaryRoot": str(self.state / "tmp"), "executable": command[0],
+                       "runtimeReadRoots": [] if runtime == "native" else
+                       [str(self.node.parent)] if runtime == "node" else [str(Path(sys.base_prefix).resolve())]}
+                      for runtime, command in self.executables.items()]
+            generated = subprocess.run([str(self.node), "--import", "tsx", str(ROOT / "scripts/abilities/profile.mjs")],
+                                       input=json.dumps(inputs), check=True, capture_output=True, text=True)
+            for runtime, profile in zip(self.executables, json.loads(generated.stdout), strict=True):
+                target = self.profile if runtime == "native" else self.root / (runtime + ".sb")
+                target.write_text(profile)
+                self.profiles[runtime] = target
         self.processes = []
 
     def tearDown(self):
@@ -121,7 +134,7 @@ class SandboxTests(unittest.TestCase):
         status_read, status_write = os.pipe()
         try:
             process = subprocess.Popen([
-                str(self.launcher), "--profile", str(self.profile),
+                str(self.launcher), "--profile", str(self.profiles[runtime]),
                 "--control-fd", str(control_read), "--status-fd", str(status_write),
                 "--", *self.executables[runtime], operation, *map(str, args),
             ], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -173,6 +186,27 @@ class SandboxTests(unittest.TestCase):
                 with self.subTest(runtime=runtime):
                     self.denied(runtime, "network", tcp.getsockname()[1])
                     self.denied(runtime, "unix", endpoint)
+
+    def test_watchdog_rejects_network_and_named_unix_channels(self):
+        for family in (socket.AF_INET, socket.AF_UNIX):
+            with self.subTest(family=family), socket.socket(family) as listener, socket.socket(family) as client:
+                address = ("127.0.0.1", 0) if family == socket.AF_INET else str(self.root / "watchdog.sock")
+                listener.bind(address)
+                listener.listen()
+                client.connect(listener.getsockname())
+                accepted, _ = listener.accept()
+                status_read, status_write = os.pipe()
+                try:
+                    process = subprocess.run([str(self.launcher), "--profile", str(self.profile),
+                        "--control-fd", str(accepted.fileno()), "--status-fd", str(status_write),
+                        "--", *self.executables["native"], "write", str(self.state / "not-started")],
+                        pass_fds=(accepted.fileno(), status_write), capture_output=True, timeout=3, cwd=self.state)
+                    self.assertEqual(process.returncode, 125)
+                    self.assertFalse((self.state / "not-started").exists())
+                finally:
+                    accepted.close()
+                    os.close(status_read)
+                    os.close(status_write)
 
     def test_no_fork_or_daemon(self):
         for runtime in self.executables:
@@ -251,7 +285,7 @@ while True: time.sleep(1)
             with self.subTest(runtime=runtime):
                 control_read, control_write = os.pipe()
                 status_read, status_write = os.pipe()
-                command = [str(self.launcher), "--profile", str(self.profile),
+                command = [str(self.launcher), "--profile", str(self.profiles[runtime]),
                            "--control-fd", str(control_read), "--status-fd", str(status_write),
                            "--", *self.executables[runtime], "linger"]
                 owner = subprocess.Popen([sys.executable, "-I", "-S", "-c", owner_code,
@@ -303,6 +337,11 @@ while True: time.sleep(1)
         safe.write_text("safe")
         alias = self.state / "race"
         alias.symlink_to(safe)
+        # Establish a deterministic positive control. During replacement every
+        # attempted open may legitimately land on the forbidden target; requiring
+        # a lucky successful write made the security check scheduler-dependent.
+        for runtime in self.executables:
+            self.assertGreater(self.run_probe(runtime, "race", alias)["result"], 0)
         stop = threading.Event()
         def replace():
             next_path = self.state / "next-link"
@@ -315,9 +354,10 @@ while True: time.sleep(1)
         try:
             for runtime in self.executables:
                 with self.subTest(runtime=runtime):
-                    self.assertGreater(self.run_probe(runtime, "race", alias)["result"], 0)
+                    report = self.run_probe(runtime, "race", alias)
                     observed = {"outside_writes": int(self.secret.read_text() != "disposable sentinel")}
                     self.assertEqual(observed["outside_writes"], 0)
+                    self.assertGreaterEqual(report["result"], 0)
         finally:
             stop.set()
             thread.join(timeout=2)

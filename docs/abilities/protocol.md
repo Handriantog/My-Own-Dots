@@ -40,6 +40,11 @@ remain host-bound authority. Worker-supplied identity fields are rejected. One
 invocation runs per binding; up to eight wait, and four workers including helpers
 may be active. Every helper shares the 60-second invocation deadline.
 
+Each worker may have at most 16 capability requests outstanding and send at most
+2,048 protocol frames during one invocation. Exceeding either ceiling closes the
+worker; batch work or use another invocation. Cancellation and the main worker's
+final result end helper authority immediately, before process shutdown finishes.
+
 ## Capability calls
 
 While an invocation is active, a worker can send a request with a unique ID:
@@ -87,6 +92,11 @@ Other requests use the same envelope:
 - Helper: `{"kind":"helper","helperId":"parser","arguments":{}}`. Result is
   `{"ok":true,"kind":"helper","value":null}` with validated helper data, or
   the fixed failure envelope. It cannot choose a runtime/system executable.
+
+A helper uses the same `initialize` and `invoke` handshake. Its `tool` is the
+declared helper ID, `arguments` must match the helper schema, and `settings` are
+the current binding's nonsecret settings. The host returns its bounded JSON
+`value` to the requesting worker. Helpers receive no owner selection or tokens.
 
 ## Worker results and owner-only data
 
