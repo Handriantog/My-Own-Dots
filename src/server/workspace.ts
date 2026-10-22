@@ -13,6 +13,7 @@ import type {
 import { MemoryStore } from './memory-store.js';
 import { ComputerStore } from './computer-store.js';
 import { ConnectionStore } from './connection-store.js';
+import { AbilityStore } from './abilities/store.js';
 import { FolderAccessService } from './folder-access.js';
 import { Pages } from './pages.js';
 import { DatabaseSync } from 'node:sqlite';
@@ -41,6 +42,7 @@ export class WorkspaceStore {
   readonly pages: Pages;
   readonly computers: ComputerStore;
   readonly connections: ConnectionStore;
+  readonly abilities: AbilityStore;
   readonly folders: FolderAccessService;
   constructor(
     path: string,
@@ -102,6 +104,7 @@ export class WorkspaceStore {
     this.memory = new MemoryStore(this.db, ownerId);
     this.computers = new ComputerStore(this.db);
     this.connections = new ConnectionStore(this.db);
+    this.abilities = new AbilityStore(this.db, ownerId);
     this.folders = new FolderAccessService(this.db, ownerId, {
       requireDot: (id) => {
         if (!this.dot(id)) throw new Error('Dot not found.');

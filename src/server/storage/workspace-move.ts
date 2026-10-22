@@ -211,7 +211,7 @@ export class WorkspaceMoveService {
           original.manifest.ownerId,
           signal,
           'sqlite',
-          original.manifest.schema as 2 | 3,
+          original.manifest.schema as 2 | 3 | 4,
         );
         for (const file of artifacts)
           await copy(

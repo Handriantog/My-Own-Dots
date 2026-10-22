@@ -52,7 +52,11 @@ const manifestSchema = z.discriminatedUnion('version', [
     storage: z
       .object({
         engine: z.literal('sqlite'),
-        schema: z.union([z.literal(2), z.literal(sqliteStorageSchema)]),
+        schema: z.union([
+          z.literal(2),
+          z.literal(3),
+          z.literal(sqliteStorageSchema),
+        ]),
       })
       .strict(),
   }),

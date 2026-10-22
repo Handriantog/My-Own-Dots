@@ -148,6 +148,7 @@ export async function serveStorage(
     pages: workspace.pages,
     computers: workspace.computers,
     connections: workspace.connections,
+    abilities: workspace.abilities,
     folders: workspace.folders,
   };
   const handlers = new Map<string, (...args: unknown[]) => unknown>();

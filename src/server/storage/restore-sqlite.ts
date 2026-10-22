@@ -24,7 +24,7 @@ export async function copyValidatedSQLite(
   ownerId: string,
   signal: AbortSignal,
   engine: 'legacy-postgres' | 'sqlite' = 'legacy-postgres',
-  expectedSchema?: 2 | 3,
+  expectedSchema?: 2 | 3 | 4,
 ) {
   const baselineDirectory = await mkdtemp(
     join(dirname(destination), '.schema-'),
@@ -41,6 +41,8 @@ export async function copyValidatedSQLite(
       try {
         initializeSQLiteSchema(schema, 2);
         supported.set(2, inventory(schema));
+        initializeSQLiteSchema(schema, 3);
+        supported.set(3, inventory(schema));
         initializeSQLiteSchema(schema);
         supported.set(sqliteStorageSchema, inventory(schema));
       } finally {
@@ -78,22 +80,38 @@ export async function copyValidatedSQLite(
           ),
       ] as const,
     ]);
-    const match = variants.find(
+    // Ability metadata is absent in historical schema 2/3 and legacy backups.
+    // Only exact known inventories are accepted; archived DDL is never executed.
+    const compatible = variants.flatMap(([version, schema]) =>
+      version < 4
+        ? [
+            [version, schema] as const,
+            [
+              version,
+              schema.filter((row) => !String(row.name).startsWith('ability_')),
+            ] as const,
+          ]
+        : [[version, schema] as const],
+    );
+    const matching = compatible.filter(
       ([, expected]) => actual === JSON.stringify(expected),
     );
-    if (!match) throw new Error('Unsupported SQLite restore schema');
-    const [version, expected] = match;
-    if (
-      engine === 'sqlite' &&
-      Number(
-        original
-          .prepare(
-            'SELECT max(version) AS version FROM workspace_storage_schema',
+    if (!matching.length) throw new Error('Unsupported SQLite restore schema');
+    // Metadata repositories also exist in legacy workspaces, so additive
+    // schema versions may have the same DDL inventory. Match the version row too.
+    const storedVersion =
+      engine === 'sqlite'
+        ? Number(
+            original
+              .prepare(
+                'SELECT max(version) AS version FROM workspace_storage_schema',
+              )
+              .get()!.version,
           )
-          .get()!.version,
-      ) !== version
-    )
-      throw new Error('Unsupported SQLite storage version');
+        : 0;
+    const match = matching.find(([version]) => version === storedVersion);
+    if (!match) throw new Error('Unsupported SQLite storage version');
+    const [version, expected] = match;
     if (expectedSchema !== undefined && expectedSchema !== version)
       throw new Error('SQLite archive schema does not match its manifest');
     const check = original.prepare('PRAGMA integrity_check').all();
@@ -134,7 +152,7 @@ export async function restoreSQLite(
   ownerId: string,
   signal: AbortSignal,
   engine: 'legacy-postgres' | 'sqlite' = 'legacy-postgres',
-  expectedSchema?: 2 | 3,
+  expectedSchema?: 2 | 3 | 4,
 ) {
   await copyValidatedSQLite(
     source,

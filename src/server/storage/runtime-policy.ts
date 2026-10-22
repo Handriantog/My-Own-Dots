@@ -29,6 +29,7 @@ export class RuntimePolicy {
       dot: this.workspace.dot(dotId),
       memoryGeneration: this.workspace.memory.generation(),
       connections: this.workspace.connections.fingerprint(dotId),
+      abilities: this.workspace.abilities.fingerprint(dotId),
       sourcesAvailable: sourcePages.every(([id, spaces]) =>
         spaces.some((space) => this.workspace.pages.exists(space, id)),
       ),

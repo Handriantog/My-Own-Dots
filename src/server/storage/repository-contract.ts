@@ -16,6 +16,7 @@ import type { MemoryHistory } from '../memory-history.js';
 import type { Pages } from '../pages.js';
 import type { ComputerStore } from '../computer-store.js';
 import type { ConnectionStore } from '../connection-store.js';
+import type { AbilityStore } from '../abilities/store.js';
 import type { FolderAccessService } from '../folder-access.js';
 import type { ZodError } from 'zod';
 
@@ -33,6 +34,7 @@ interface Repositories {
   pages: Pages;
   computers: ComputerStore;
   connections: ConnectionStore;
+  abilities: AbilityStore;
   folders: FolderAccessService;
   conversations: SQLiteConversationRecords;
   evidence: SQLiteEvidence;
@@ -239,6 +241,24 @@ export const repositoryMethods = {
     'delete',
   ],
   computers: ['permissions', 'patch', 'begin', 'finish', 'audit'],
+  abilities: [
+    'recordPackage',
+    'package',
+    'packages',
+    'removePackage',
+    'bind',
+    'list',
+    'bindingsForDigest',
+    'get',
+    'revoke',
+    'enable',
+    'configure',
+    'forget',
+    'fingerprint',
+    'claimInvocation',
+    'settleInvocation',
+    'receipt',
+  ],
   connections: [
     'list',
     'get',
@@ -322,6 +342,7 @@ export type AsyncWorkspace = AsyncRepository<'workspace'> & {
   pages: AsyncRepository<'pages'>;
   computers: AsyncRepository<'computers'>;
   connections: AsyncRepository<'connections'>;
+  abilities: AsyncRepository<'abilities'>;
   folders: AsyncRepository<'folders'>;
 };
 export interface AsyncRepositories {

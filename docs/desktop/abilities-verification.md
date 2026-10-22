@@ -125,3 +125,26 @@ using the already installed official `postgres:17.6-bookworm` image at digest
 It binds only loopback on an ephemeral port and mounts no owner files or volumes.
 `LOCAL_TEST_DATABASE_URL` names `dots_abilities_test` with disposable fixture
 credentials. Owner application databases and .env files are untouched.
+
+## Contract, installation, and authority
+
+The contract gate passes 29 tests plus typecheck and lint. It exercises strict
+versioned manifests, constrained schemas, reference validation, permission
+changes, bounded protocol messages, and the separate owner-only outcome parser.
+The exported author schema is checked against the actual validator.
+
+Installation passes 29 tests. Real temporary tar/gzip fixtures cover traversal,
+links, devices, filename aliases, undeclared executables, changed manifests,
+hashes/sizes, concurrent installs, interrupted downloads, and replaced parents.
+No supplied worker is started. GitHub transport tests use injected DNS/HTTPS
+fixtures for pinning, private/mixed answers, redirects, streamed limits, and DNS
+cancellation; these are not a live GitHub release installation. Extraction roots
+are host-private and unavailable to Ability workers; no claim is made about a
+compromised host process running outside the Ability sandbox.
+
+The authority/storage gate passes 243 tests across 19 files, with typecheck and
+lint. Coverage includes per-Dot grants, monotonic revisions, duplicate invocation
+claims, stale/foreign contexts, uncertain interrupted receipts, both storage
+engines, schema-4 migration, historical restore compatibility, and workspace move
+regressions. Receipts contain generic statuses, not provider/model payloads or
+host package paths. The feature is not yet connected to the desktop UI or agent.
