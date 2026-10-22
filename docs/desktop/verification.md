@@ -2,6 +2,16 @@
 
 Machine: Apple M3 Max, 14 CPU cores, 36 GiB RAM, macOS 26.6.2 (25G83), arm64. Runtime: Electron 44.8.0, PixiJS 8.22.0. Native helper compiled with the installed Swift toolchain, deployment target macOS 14.
 
+## Voice requests to open websites — October 22, 2026
+
+The `open_website` tool opens requested HTTP(S) sites in the default browser through private IPC between the app-owned backend and Electron. Basic/Medium use the regular agent; High passes the capability into delegated tasks; Realtime uses its existing compute turn. Source selection and clarification remain agent decisions. Ordinary desktop chat can also use the tool. No extra package, UI control, public endpoint, or workspace schema change was added.
+
+- Full suite: **1,618 passed, 93 skipped**. Typecheck, lint, formatting, whitespace checks, the web/server build and desktop build passed. The existing large frontend chunk advisory remains. One concurrent full-suite run timed out in `tests/storage/archive.test.ts` → `round trips a large stream with bounded buffering`; the final full run passed without simultaneous build/lint work.
+- Tests exercise the actual agent/tool loop, a child-process IPC roundtrip, URL rejection, request expiry, stopped workspaces, matching acknowledgements, lost replies, duplicate suppression, failures, and scheduled/receipt exclusions. High coverage carries a prior source URL through the parent conversation into a delegated task and verifies its persisted browser receipt.
+- Realtime regression coverage uses VoiceService, the SDK/Hono runtime, the agent and native request handler: opening succeeds, later inference fails, retrying the same compute call opens no extra tab, and a fresh request can open again. Independent review verified the fix and found no remaining Critical or Important issues.
+- Native worker protocol tests: **17 passed**. The separate native launcher suite remains blocked by this environment's `getconf DARWIN_USER_CACHE_DIR` input/output error: `test_network_is_denied`, `test_reads_only_allowed_home_files_and_writes_only_cache`, and `test_worker_starts_from_private_cache_when_app_cwd_is_denied`. Launcher code was not changed to bypass this restriction.
+- Automated checks used fixture inference and a captured OS-open callback; no real websites, microphone or paid voice service were used. Live model routing/source selection, actual default-browser launch, and voice hardware remain desktop acceptance checks. Four routing corpus cases were added but have not been evaluated with the installed model in this session. “Opened” confirms OS acceptance, not page-load success. The existing installed app and the owner's workspace data were not changed.
+
 ## Per-Dot customization — October 22, 2026
 
 Each Dot now owns its appearance and behavior in workspace storage. A single desktop Dot ID controls the companion and compact Chat/Talk, while the global Talk shortcut stays in machine preferences. Existing shared customization migrates once, and older workspace backups remain restorable before and after upgrading.

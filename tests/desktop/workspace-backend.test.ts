@@ -27,7 +27,10 @@ async function freePort() {
   await new Promise<void>((resolve) => server.close(() => resolve()));
   return port;
 }
-async function fixture(script?: string) {
+async function fixture(
+  script?: string,
+  openWebsite?: (url: string) => Promise<void>,
+) {
   const root = await mkdtemp(path.join(tmpdir(), 'dots-owned-'));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
   const bundle = path.join(root, 'bundle');
@@ -51,6 +54,7 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
   );
   const backend = new WorkspaceBackend({
     bundle,
+    openWebsite,
     data: path.join(root, 'data'),
     sourceRoot: workspace,
     environment: {},
@@ -753,4 +757,38 @@ it('rejects a mismatched manifest owner before starting a backend', async () => 
   await writeFile(path.join(f.workspace, '.env'), config);
   await expect(f.backend.start()).rejects.toThrow(/owner does not match/);
   expect(await readFile(path.join(f.workspace, '.env'), 'utf8')).toBe(config);
+});
+
+it('opens websites only through its owned backend IPC and deduplicates retried requests', async () => {
+  const opened: string[] = [];
+  const f = await fixture(
+    `
+const http = require('node:http');
+const server = http.createServer((req,res) => {
+  res.setHeader('Content-Type','application/json');
+  if (req.url === '/open') {
+    if (!process.send) return res.end(JSON.stringify({error:'No desktop connection'}));
+    const id = 'a'.repeat(64);
+    process.once('message', reply => res.end(JSON.stringify(reply)));
+    process.send({type:'dots:open-website',id,url:'https://example.com/reference',expiresAt:Date.now()+5000});
+  } else res.end(JSON.stringify({service:'my-own-dots',protocol:1,workspaceId:process.env.DOTS_WORKSPACE_ID}));
+});
+server.listen(Number(process.env.PORT), process.env.HOST);
+process.on('SIGTERM', () => server.close(() => process.exit(0)));
+`,
+    async (url) => {
+      opened.push(url);
+    },
+  );
+  const connection = await f.backend.start();
+  for (let i = 0; i < 2; i++) {
+    const result = await fetch(`${connection.url}/open`, {
+      signal: AbortSignal.timeout(3000),
+    }).then((r) => r.json());
+    expect(result).toMatchObject({
+      type: 'dots:website-result',
+      result: { url: 'https://example.com/reference', status: 'opened' },
+    });
+  }
+  expect(opened).toEqual(['https://example.com/reference']);
 });

@@ -549,5 +549,43 @@
     "route": "chat",
     "history": [],
     "taskStatus": "none"
+  },
+  {
+    "id": "open-website",
+    "utterance": "Open Wikipedia in my browser.",
+    "route": "delegate",
+    "history": [],
+    "taskStatus": "none"
+  },
+  {
+    "id": "show-reference",
+    "utterance": "Show me the reference.",
+    "route": "delegate",
+    "history": [
+      {
+        "role": "assistant",
+        "text": "The reference is the guide at https://example.com/guide."
+      }
+    ],
+    "taskStatus": "completed"
+  },
+  {
+    "id": "open-all-references",
+    "utterance": "Open all of those sources.",
+    "route": "delegate",
+    "history": [
+      {
+        "role": "assistant",
+        "text": "The sources are https://example.com/one and https://example.org/two."
+      }
+    ],
+    "taskStatus": "completed"
+  },
+  {
+    "id": "do-not-open-website",
+    "utterance": "Do not open that website.",
+    "route": "chat",
+    "history": [],
+    "taskStatus": "none"
   }
 ]

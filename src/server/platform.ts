@@ -1,3 +1,4 @@
+import type { OpenWebsite } from '../shared/desktop-browser.js';
 import { MaintenanceGate } from './storage/maintenance.js';
 import { MemoryMaintenance } from './memory-maintenance.js';
 import { PostgresConversations } from './local-conversations.js';
@@ -58,12 +59,13 @@ export class Platform {
     readonly store: StoreRepository,
     readonly workspace: WorkspaceRepository,
     readonly config: PlatformConfig,
+    readonly openWebsite?: OpenWebsite,
   ) {}
   static async create(
     store: StoreRepository,
     workspace: WorkspaceRepository,
     config: PlatformConfig,
-    options: { storage?: StorageClient } = {},
+    options: { storage?: StorageClient; openWebsite?: OpenWebsite } = {},
   ): Promise<Platform> {
     const platform = new Platform(
       store,
@@ -71,11 +73,15 @@ export class Platform {
       options.storage
         ? { ...config, storageEngine: options.storage.engine }
         : config,
+      options.openWebsite,
     );
     await platform.initialize(options);
     return platform;
   }
-  private async initialize(options: { storage?: StorageClient }) {
+  private async initialize(options: {
+    storage?: StorageClient;
+    openWebsite?: OpenWebsite;
+  }) {
     const { store, workspace, config } = this;
     this.setupTelemetry = await SetupTelemetry.create(
       store,
@@ -185,6 +191,7 @@ export class Platform {
               this.setupTelemetry,
               this.memory,
               this.delegations?.jobs,
+              this.openWebsite,
             ),
           ]),
         ),

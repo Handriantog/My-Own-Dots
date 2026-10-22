@@ -1,4 +1,5 @@
 import './local-defaults.js';
+import { DesktopBrowserClient } from './desktop-browser.js';
 import {
   readWorkspaceManifest,
   updateWorkspaceManifestSchema,
@@ -115,7 +116,14 @@ const config: PlatformConfig = {
   runtimeUrl: `http://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/api/copilotkit`,
   ownerToken,
 };
-const platform = await Platform.create(store, workspace, config, { storage });
+const desktopBrowser =
+  process.env.DOTS_DESKTOP_BROWSER === '1' && process.send && process.connected
+    ? new DesktopBrowserClient(process)
+    : undefined;
+const platform = await Platform.create(store, workspace, config, {
+  storage,
+  openWebsite: desktopBrowser?.open,
+});
 const configurationPath = resolve(process.env.DOTS_WORKSPACE_ENV || '.env');
 const snapshotOptions = {
   sqlitePath: database,
@@ -226,6 +234,7 @@ const shutdown = createShutdown({
     await runner.stop();
   },
   stopPlatform: async () => {
+    desktopBrowser?.close();
     await snapshots?.close();
     await localVoice.close();
     try {

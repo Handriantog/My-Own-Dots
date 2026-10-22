@@ -144,6 +144,7 @@ async function start(): Promise<void> {
     }
   }
   const backend = new WorkspaceBackend({
+    openWebsite: (url) => shell.openExternal(url),
     bundle: path.join(__dirname, 'app'),
     data: app.getPath('userData'),
     sourceRoot,
