@@ -234,7 +234,7 @@ describe('durable Ability authority', () => {
       const raw = new DatabaseSync(database);
       if (engine === 'sqlite') initializeSQLiteSchema(raw, 3);
       raw.exec(
-        'DROP TABLE ability_receipts; DROP TABLE ability_bindings; DROP TABLE ability_packages;',
+        'DROP TRIGGER ability_deleted_dot; DROP TABLE ability_cleanup; DROP TABLE ability_receipts; DROP TABLE ability_bindings; DROP TABLE ability_packages;',
       );
       raw.close();
       const worker = await StorageClient.open({

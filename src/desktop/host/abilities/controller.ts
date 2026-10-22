@@ -45,6 +45,7 @@ type Options = {
 export class AbilityController {
   private current?: Current;
   private choosingPython = false;
+  private maintenance = false;
   private connection?: WorkspaceBackendConnection;
   private operations: Promise<unknown> = Promise.resolve();
   private generation = 0;
@@ -165,6 +166,7 @@ export class AbilityController {
         };
         this.current = current;
         await bridge.start();
+        await this.api(connection, '/abilities/cleanup', {}, controller.signal);
         if (this.stopped || generation !== this.generation) {
           controller.abort();
           await bridge.stop();
@@ -177,6 +179,16 @@ export class AbilityController {
         if (this.current === current) this.current = undefined;
       }
     });
+  }
+  async quiesce(): Promise<void> {
+    if (this.maintenance) return;
+    this.maintenance = true;
+    await this.current?.host.quiesce();
+  }
+  async resumeMaintenance(): Promise<void> {
+    if (!this.maintenance) return;
+    await this.current?.host.resume();
+    this.maintenance = false;
   }
   suspend(): Promise<void> {
     ++this.generation;
@@ -274,6 +286,8 @@ export class AbilityController {
       if (!connection || this.stopped)
         throw new AbilityFailure('host_unavailable');
       const current = this.current;
+      if (this.maintenance && method !== 'list')
+        throw new AbilityFailure('busy');
       if (method !== 'list' && (!current || !this.available))
         throw new AbilityFailure(this.unavailable);
       const signal = current?.controller.signal ?? AbortSignal.timeout(3000);

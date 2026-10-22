@@ -1,7 +1,8 @@
+import { captureAbilityState } from './ability-snapshot.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { chmod, mkdir, open, readFile, rm, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
 import { Pool } from 'pg';
 import type {
@@ -31,6 +32,7 @@ export interface LegacySnapshotOptions {
   owned: boolean;
   conversationBackend: string;
   configurationPath?: string;
+  quiesceAbilities?(): Promise<() => Promise<void>>;
   /** Injection boundary for crash/cancellation tests, never a renderer callback. */
   onSQLiteCaptured?: () => void | Promise<void>;
 }
@@ -134,6 +136,7 @@ export class LegacySnapshotSource implements SnapshotSource {
     await this.configurationUnchanged();
     const lease = await options.gate.acquire({ origin, signal });
     signal = lease.signal;
+    let resumeAbilities: (() => Promise<void>) | undefined;
     let created = false;
     let source: DatabaseSync | undefined;
     let pool: Pool | undefined;
@@ -146,6 +149,7 @@ export class LegacySnapshotSource implements SnapshotSource {
       });
       pool.on('error', () => {});
       signal.throwIfAborted();
+      resumeAbilities = await this.options.quiesceAbilities?.();
       await mkdir(directory, { mode: 0o700 });
       created = true;
       await mkdir(join(directory, 'core'), { mode: 0o700 });
@@ -302,10 +306,31 @@ export class LegacySnapshotSource implements SnapshotSource {
         }
         entries.push({ path, bytes, sha256: hash.digest('hex') });
       }
+      if (
+        !this.options.quiesceAbilities &&
+        (await stat(
+          join(dirname(this.options.sqlitePath), 'abilities/state'),
+        ).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error;
+        }))
+      )
+        throw new Error('Ability host must confirm shutdown before capture');
+      const abilities = await captureAbilityState(
+        dirname(this.options.sqlitePath),
+        directory,
+        signal,
+      );
+      entries.push(...abilities.entries);
       signal.throwIfAborted();
       return {
-        version: 1,
-        minimumReader: 1,
+        ...(abilities.entries.length
+          ? {
+              version: 3 as const,
+              minimumReader: 3 as const,
+              abilities: { version: 1 as const },
+              storage: { engine: 'legacy-postgres' as const },
+            }
+          : { version: 1 as const, minimumReader: 1 as const }),
         kind: 'workspace-backup',
         archiveId: randomUUID(),
         workspaceId: options.workspaceId,
@@ -316,6 +341,20 @@ export class LegacySnapshotSource implements SnapshotSource {
           { component: 'core-sqlite', state: 'included' },
           { component: 'local-conversations-memory', state: 'included' },
           { component: 'recovery-configuration', state: 'included' },
+          ...(abilities.entries.length
+            ? [
+                {
+                  component: 'ability-private-state',
+                  state: 'included' as const,
+                },
+                {
+                  component: 'ability-credentials-and-executables',
+                  state: 'excluded' as const,
+                  reason:
+                    'Account credentials stay on this desktop. Packages require digest verification and fresh consent.',
+                },
+              ]
+            : []),
           {
             component: 'computer-volumes',
             state: 'excluded',
@@ -340,7 +379,11 @@ export class LegacySnapshotSource implements SnapshotSource {
         try {
           await pool?.end();
         } finally {
-          lease.release();
+          try {
+            await resumeAbilities?.();
+          } finally {
+            lease.release();
+          }
         }
       }
     }

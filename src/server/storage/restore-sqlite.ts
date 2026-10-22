@@ -1,3 +1,4 @@
+import { invalidateAbilityTrust } from './ability-snapshot.js';
 import { copyFile, open, rm, chmod, mkdtemp } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
@@ -233,6 +234,7 @@ export async function restoreSQLite(
     } finally {
       await audit.close();
     }
+    invalidateAbilityTrust(db);
     const settings = JSON.parse(
       String(db.prepare('SELECT value FROM settings WHERE id=1').get()!.value),
     );

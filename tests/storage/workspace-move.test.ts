@@ -377,3 +377,51 @@ it.each(['staging', 'verified', 'switching', 'active'])(
   },
   10000,
 );
+
+it('moves only persistent Ability state beside the relocated database and keeps account secrets at source', async () => {
+  const f = await fixture(),
+    key = 'a'.repeat(64);
+  await mkdir(join(f.directory, 'abilities/state', key, 'tmp'), {
+    recursive: true,
+  });
+  await writeFile(
+    join(f.directory, 'abilities/state', key, 'remember.json'),
+    '{"keep":true}',
+  );
+  await writeFile(
+    join(f.directory, 'abilities/state', key, 'tmp/scratch'),
+    'temporary',
+  );
+  await mkdir(join(f.directory, 'abilities/credentials'));
+  await writeFile(
+    join(f.directory, 'abilities/credentials/account.enc'),
+    'TOKEN_SENTINEL',
+  );
+  const preview = await f.service.prepare(f.input);
+  expect(
+    await readFile(
+      join(f.input.destination, 'data/abilities/state', key, 'remember.json'),
+      'utf8',
+    ),
+  ).toBe('{"keep":true}');
+  await expect(
+    readFile(
+      join(f.input.destination, 'data/abilities/credentials/account.enc'),
+    ),
+  ).rejects.toThrow();
+  await expect(
+    readFile(
+      join(f.input.destination, 'data/abilities/state', key, 'tmp/scratch'),
+    ),
+  ).rejects.toThrow();
+  await new RestoreService({
+    profile: f.profile,
+    stopWorkspace: async () => {},
+  }).discardRestore(preview.operationId, f.input.signal);
+  expect(
+    await readFile(
+      join(f.directory, 'abilities/state', key, 'remember.json'),
+      'utf8',
+    ),
+  ).toBe('{"keep":true}');
+});

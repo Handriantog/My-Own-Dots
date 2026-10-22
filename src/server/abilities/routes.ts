@@ -34,6 +34,11 @@ export function abilityRoutes(
   guarded.use('/dots/:dotId/abilities', authenticate);
   guarded.use('/dots/:dotId/abilities/*', authenticate);
   guarded.onError((error, c) => c.json({ error: failureCode(error) }, 400));
+  guarded.post('/abilities/cleanup', async (c) => {
+    z.strictObject({}).parse(await c.req.json());
+    await service.cleanup();
+    return c.json({ ok: true });
+  });
   guarded.get('/dots/:dotId/abilities', async (c) =>
     c.json({ bindings: await service.list(c.req.param('dotId')) }),
   );

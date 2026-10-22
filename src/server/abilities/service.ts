@@ -28,6 +28,7 @@ export type AbilityInvocation = {
   selectionRef?: string;
 };
 export class AbilityService {
+  private maintenance = false;
   private readonly reviews = new Map<
     string,
     { dotId: string; review: InstallReview }
@@ -56,6 +57,7 @@ export class AbilityService {
     }
   }
   private session() {
+    if (this.maintenance) throw new AbilityFailure('busy');
     const session = this.host.session();
     if (!session || session.workspaceId !== this.options.workspaceId)
       throw new AbilityFailure('host_unavailable');
@@ -251,6 +253,7 @@ export class AbilityService {
   }
   async tools(dotId: string) {
     if (!this.host.session()) return [];
+    await this.cleanup();
     return (await this.workspace.abilities.list(dotId))
       .filter((binding) => binding.enabled && !binding.restored)
       .flatMap((binding) =>
@@ -294,6 +297,7 @@ export class AbilityService {
     signal: AbortSignal,
   ): Promise<InvocationOutcome> {
     try {
+      await this.cleanup();
       const admitted = await this.serial(input.bindingId, async () => {
         signal.throwIfAborted();
         const session = this.session(),
@@ -371,6 +375,44 @@ export class AbilityService {
             ? error.code
             : 'permission_denied',
       };
+    }
+  }
+  async cleanup(): Promise<void> {
+    this.session();
+    return this.serial('cleanup', async () => {
+      for (const id of await this.workspace.abilities.pendingCleanup()) {
+        this.session();
+        await this.host.eraseState(id);
+        await this.workspace.abilities.completeCleanup(id);
+      }
+    });
+  }
+  async quiesce(): Promise<() => Promise<void>> {
+    if (this.maintenance) throw new AbilityFailure('busy');
+    this.maintenance = true;
+    for (const entry of this.active.values()) entry.controller.abort();
+    let paused = false;
+    try {
+      if (this.host.session()) {
+        if (!this.host.quiesce || !this.host.resume)
+          throw new AbilityFailure('host_unavailable');
+        await this.host.quiesce();
+        paused = true;
+      } else if ((await this.workspace.abilities.packages()).length)
+        throw new AbilityFailure('host_unavailable');
+      let released = false;
+      return async () => {
+        if (released) return;
+        released = true;
+        try {
+          if (paused) await this.host.resume!();
+        } finally {
+          this.maintenance = false;
+        }
+      };
+    } catch (error) {
+      this.maintenance = false;
+      throw error;
     }
   }
   async stop(): Promise<void> {

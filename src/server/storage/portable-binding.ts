@@ -1,3 +1,4 @@
+import { invalidateAbilityTrust } from './ability-snapshot.js';
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 
@@ -35,6 +36,7 @@ export function bindPortableWorkspace(db: DatabaseSync, machineId: string) {
         ),
       );
   }
+  invalidateAbilityTrust(db);
   const settings = JSON.parse(
     String(db.prepare('SELECT value FROM settings WHERE id=1').get()!.value),
   );

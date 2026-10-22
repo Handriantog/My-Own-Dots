@@ -47,6 +47,22 @@ const legacyManifestSchema = z
 const manifestSchema = z.discriminatedUnion('version', [
   legacyManifestSchema,
   legacyManifestSchema.extend({
+    version: z.literal(3),
+    minimumReader: z.literal(3),
+    abilities: z.strictObject({ version: z.literal(1) }),
+    storage: z.discriminatedUnion('engine', [
+      z.strictObject({
+        engine: z.literal('sqlite'),
+        schema: z.union([
+          z.literal(2),
+          z.literal(3),
+          z.literal(sqliteStorageSchema),
+        ]),
+      }),
+      z.strictObject({ engine: z.literal('legacy-postgres') }),
+    ]),
+  }),
+  legacyManifestSchema.extend({
     version: z.literal(2),
     minimumReader: z.literal(2),
     storage: z

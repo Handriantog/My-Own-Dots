@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
   copyFile,
+  chmod,
   lstat,
   mkdir,
   open,
@@ -71,6 +72,9 @@ export class WorkspaceMoveService {
         'Workspace database was not fully closed; reopen and stop it before moving',
       );
     const paths = ['.env', 'workspace.json', identity.databasePath];
+    const abilityState = join(dirname(identity.databasePath), 'abilities/state')
+      .split(sep)
+      .join('/');
     const visit = async (prefix: string) => {
       const folder = await lstat(join(identity.directory, prefix)).catch(
         (error) => {
@@ -80,13 +84,25 @@ export class WorkspaceMoveService {
         },
       );
       if (!folder) return;
-      if (!folder.isDirectory())
+      if (
+        !folder.isDirectory() ||
+        (await realpath(join(identity.directory, prefix))) !==
+          join(identity.directory, prefix)
+      )
         throw new Error('Workspace files cannot contain symbolic links');
       for (const entry of await readdir(join(identity.directory, prefix), {
         withFileTypes: true,
       })) {
         signal.throwIfAborted();
         const path = `${prefix}/${entry.name}`;
+        if (prefix === abilityState && !/^[a-f0-9]{64}$/.test(entry.name))
+          throw new Error('Invalid Ability state binding');
+        if (
+          prefix.startsWith(abilityState + '/') &&
+          prefix.slice(abilityState.length + 1).split('/').length === 1 &&
+          entry.name === 'tmp'
+        )
+          continue;
         if (entry.isDirectory()) await visit(path);
         else if (entry.isFile()) paths.push(path);
         else
@@ -97,6 +113,7 @@ export class WorkspaceMoveService {
     };
     await visit('files');
     await visit('recovery');
+    await visit(abilityState);
     paths.sort();
     validateArchivePaths(paths);
     const files = [];
@@ -105,7 +122,7 @@ export class WorkspaceMoveService {
         path,
         sha256: await fileSeal(join(identity.directory, path), signal),
       });
-    return { ...identity, files };
+    return { ...identity, files, abilityState };
   }
   private async phase(journal: RestoreJournal, phase: RestoreJournal['phase']) {
     journal.phase = phase;
@@ -150,13 +167,17 @@ export class WorkspaceMoveService {
           .filter(
             (file) =>
               file.path.startsWith('files/') ||
-              file.path.startsWith('recovery/'),
+              file.path.startsWith('recovery/') ||
+              file.path.startsWith(original.abilityState + '/'),
           )
           .map((file) => ({
             ...file,
-            target: file.path.startsWith('recovery/')
-              ? 'recovery/prior/' + file.path.slice(9)
-              : file.path,
+            target: file.path.startsWith(original.abilityState + '/')
+              ? 'data/abilities/state/' +
+                file.path.slice(original.abilityState.length + 1)
+              : file.path.startsWith('recovery/')
+                ? 'recovery/prior/' + file.path.slice(9)
+                : file.path,
           }));
         const journal: RestoreJournal = {
           version: 1,
@@ -189,6 +210,8 @@ export class WorkspaceMoveService {
           signal.throwIfAborted();
           await mkdir(dirname(to), { recursive: true, mode: 0o700 });
           await copyFile(from, to, 1);
+          if (to.startsWith(join(destination, 'data/abilities/state') + sep))
+            await chmod(to, 0o600);
           const file = await open(to, 'r');
           try {
             await file.sync();

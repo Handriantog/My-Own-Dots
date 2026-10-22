@@ -69,6 +69,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
     { command: HostInvocation; controller: AbortController }
   >();
   private stopped = false;
+  private maintenance = 0;
   private stopping?: Promise<void>;
   constructor(private readonly options: Options) {
     this.installer =
@@ -144,6 +145,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
   private live(context: InvocationContext, binding: Binding): boolean {
     return (
       !this.stopped &&
+      this.maintenance === 0 &&
       !!this.options.session() &&
       context.workspaceId === this.options.workspaceId &&
       context.sessionId === this.options.session() &&
@@ -217,6 +219,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
     signal: AbortSignal,
   ): Promise<InvocationOutcome> {
     let id: string | undefined;
+    let authorityTimer: ReturnType<typeof setInterval> | undefined;
     const controller = new AbortController(),
       abort = () => controller.abort();
     try {
@@ -253,6 +256,17 @@ export class AbilityHost implements DesktopAbilityHandlers {
         : undefined;
       if (command.request.selectionRef && !selection)
         throw new AbilityFailure('permission_denied');
+      let checking = false;
+      authorityTimer = setInterval(() => {
+        if (checking || controller.signal.aborted) return;
+        checking = true;
+        void this.authorize(context)
+          .catch(abort)
+          .finally(() => {
+            checking = false;
+          });
+      }, 500);
+      authorityTimer.unref?.();
       const raw = await this.supervisor.invoke(
         { ...command.request, ...(selection ? { selection } : {}) },
         controller.signal,
@@ -291,6 +305,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
         ? { status: 'uncertain' }
         : { status: 'error', code: failureCode(error) };
     } finally {
+      if (authorityTimer) clearInterval(authorityTimer);
       signal.removeEventListener('abort', abort);
       if (id) this.active.delete(id);
     }
@@ -374,6 +389,19 @@ export class AbilityHost implements DesktopAbilityHandlers {
     );
     await root.check();
     await rm(join(root.path, digest), { recursive: true, force: true });
+  }
+  async quiesce(): Promise<void> {
+    this.maintenance++;
+    this.results.clear();
+    const ids = new Set<string>();
+    for (const entry of this.active.values()) {
+      ids.add(entry.command.binding.id);
+      entry.controller.abort();
+    }
+    await Promise.all([...ids].map((id) => this.supervisor.stopBinding(id)));
+  }
+  async resume(): Promise<void> {
+    this.maintenance = Math.max(0, this.maintenance - 1);
   }
   stop(): Promise<void> {
     if (this.stopping) return this.stopping;

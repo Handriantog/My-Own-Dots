@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import manifestFixture from '../fixtures/abilities/manifest.json';
+import { parseManifest } from '../../src/shared/abilities/manifest.ts';
 import fs, {
   mkdir,
   mkdtemp,
@@ -350,4 +353,77 @@ it
     );
   },
   15000,
+);
+
+it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
+  'preserves Ability records and private state through offline legacy migration without retaining execution consent',
+  async () => {
+    const f = await fixture(),
+      manifest = parseManifest(manifestFixture),
+      digest = 'a'.repeat(64);
+    f.workspace.abilities.recordPackage({
+      digest,
+      root: '/unused',
+      manifest,
+      descriptor: {
+        formatVersion: 1,
+        manifest,
+        sourceCommit: 'b'.repeat(40),
+        releaseTag: 'fixture/v0.1.0',
+        asset: {
+          id: 1,
+          name: 'fixture.tar.gz',
+          sha256: digest,
+          compressedBytes: 1,
+          extractedBytes: 1,
+          fileCount: 1,
+        },
+      },
+      files: [
+        {
+          path: 'dist/worker.mjs',
+          sha256: 'c'.repeat(64),
+          size: 1,
+          executable: false,
+        },
+      ],
+    });
+    const binding = f.workspace.abilities.bind(
+        f.dot.id,
+        digest,
+        manifest.permissions.map((p) => p.id),
+        {},
+      ),
+      key = createHash('sha256')
+        .update(JSON.stringify([f.workspaceId, binding.id]))
+        .digest('hex');
+    await mkdir(join(f.root, 'abilities/state', key), {
+      recursive: true,
+      mode: 0o700,
+    });
+    await writeFile(
+      join(f.root, 'abilities/state', key, 'remember'),
+      'private-state',
+    );
+    const preview = await f.service.prepare(f.input);
+    expect(
+      await readFile(
+        join(f.input.destination, 'data/abilities/state', key, 'remember'),
+        'utf8',
+      ),
+    ).toBe('private-state');
+    const db = new DatabaseSync(
+      join(f.input.destination, 'data/opendots.sqlite'),
+      { readOnly: true },
+    );
+    expect(
+      db.prepare('SELECT enabled,restored FROM ability_bindings').get(),
+    ).toMatchObject({ enabled: 0, restored: 1 });
+    db.close();
+    await new RestoreService({
+      profile: f.profile,
+      stopWorkspace: async () => {},
+    }).discardRestore(preview.operationId, f.input.signal);
+  },
+  30000,
 );

@@ -92,6 +92,7 @@ export const hostCommandSchema = z.discriminatedUnion('type', [
     bindingId: z.uuid(),
   }),
   z.strictObject({ type: z.literal('uninstall'), digest }),
+  z.strictObject({ type: z.enum(['quiesce', 'resume']) }),
   z.strictObject({ type: z.literal('cancel'), invocationId: id }),
 ]);
 export type HostCommand = z.infer<typeof hostCommandSchema>;

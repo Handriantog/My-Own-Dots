@@ -31,6 +31,10 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
   if (message.method !== 'invoke') return;
   appendFileSync('started', String(process.pid) + '\n');
   const op = message.params.arguments.op;
+  if (op === 'writing') {
+    setInterval(() => appendFileSync('writes', 'state\n'), 10);
+    return;
+  }
   if (op === 'hold') {
     setInterval(() => {}, 1000);
     return;

@@ -256,6 +256,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         );
       return {
         host,
+        backend,
         statePath: join(
           home,
           'state',
@@ -272,6 +273,56 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         },
       };
     }
+    it('acknowledges maintenance only after a real state-writing worker has stopped, then resumes admission', async () => {
+      const f = await fixture('owner-only', true),
+        running = f
+          .invoke('writing')
+          .catch(() => ({ status: 'uncertain' as const }));
+      await expect
+        .poll(
+          async () =>
+            (
+              await readFile(join(f.statePath, 'writes'), 'utf8').catch(
+                () => '',
+              )
+            ).length,
+          { interval: 10 },
+        )
+        .toBeGreaterThan(0);
+      await f.backend!.quiesce();
+      await running;
+      const before = await readFile(join(f.statePath, 'writes'), 'utf8');
+      expect(f.host.running(f.binding.id)).toBe(false);
+      expect(await f.invoke('success')).toMatchObject({ status: 'error' });
+      expect(await readFile(join(f.statePath, 'writes'), 'utf8')).toBe(before);
+      await f.backend!.resume();
+      expect(await f.invoke('success')).toMatchObject({ status: 'success' });
+    });
+    it('stops a state writer when its binding is revoked outside the normal command path', async () => {
+      const f = await fixture('owner-only', true),
+        running = f
+          .invoke('writing')
+          .catch(() => ({ status: 'uncertain' as const }));
+      await expect
+        .poll(
+          async () =>
+            (
+              await readFile(join(f.statePath, 'writes'), 'utf8').catch(
+                () => '',
+              )
+            ).length,
+          { interval: 10 },
+        )
+        .toBeGreaterThan(0);
+      f.binding.enabled = false;
+      await expect
+        .poll(() => f.host.running(f.binding.id), {
+          interval: 25,
+          timeout: 3000,
+        })
+        .toBe(false);
+      expect(await running).toMatchObject({ status: 'uncertain' });
+    });
     it('projects success, partial, errors, stderr and late results before the bridge', async () => {
       const f = await fixture('owner-only', true),
         bridgeResponses: InvocationOutcome[] = [];

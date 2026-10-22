@@ -131,6 +131,8 @@ const snapshotOptions = {
   ownerId: workspace.ownerId,
   workspaceId,
   gate: platform.maintenance,
+  quiesceAbilities: () =>
+    platform.abilities?.quiesce() ?? Promise.resolve(async () => {}),
   configurationPath: existsSync(configurationPath)
     ? configurationPath
     : undefined,

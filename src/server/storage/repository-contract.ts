@@ -249,6 +249,8 @@ export const repositoryMethods = {
     'bind',
     'list',
     'bindingsForDigest',
+    'pendingCleanup',
+    'completeCleanup',
     'get',
     'revoke',
     'enable',

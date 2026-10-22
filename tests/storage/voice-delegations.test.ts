@@ -464,7 +464,7 @@ it('restores known schema-2 history into schema 4 without mutating the source', 
   await f.storage.close();
   const old = new DatabaseSync(f.database);
   old.exec(
-    'DROP TABLE voice_delegations; DROP TABLE ability_receipts; DROP TABLE ability_bindings; DROP TABLE ability_packages; DELETE FROM workspace_storage_schema WHERE version>=3',
+    'DROP TABLE voice_delegations; DROP TRIGGER ability_deleted_dot; DROP TABLE ability_cleanup; DROP TABLE ability_receipts; DROP TABLE ability_bindings; DROP TABLE ability_packages; DELETE FROM workspace_storage_schema WHERE version>=3',
   );
   old.close();
   const destination = join(f.root, 'restored');

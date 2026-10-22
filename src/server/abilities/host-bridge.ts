@@ -42,6 +42,8 @@ export interface AbilityHostPort {
   disconnect(bindingId: string): Promise<void>;
   eraseState(bindingId: string): Promise<void>;
   uninstall(digest: string): Promise<void>;
+  quiesce?(): Promise<void>;
+  resume?(): Promise<void>;
   stop(): Promise<void>;
 }
 type Pending = {
@@ -215,6 +217,12 @@ export class AbilityHostBridge implements AbilityHostPort {
   }
   async uninstall(digest: string): Promise<void> {
     await this.call({ type: 'uninstall', digest });
+  }
+  async quiesce(): Promise<void> {
+    await this.call({ type: 'quiesce' }, undefined, 6000);
+  }
+  async resume(): Promise<void> {
+    await this.call({ type: 'resume' }, undefined, 6000);
   }
   async stop(): Promise<void> {
     if (this.current) this.end(this.current);

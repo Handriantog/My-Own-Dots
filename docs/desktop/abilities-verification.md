@@ -308,3 +308,38 @@ parent conversation for private choices; only opaque handles cross the backend.
   denied and the in-app browser was unavailable. A disposable local Vite fixture
   is prepared for normal and 360px views. Automated React checks are not a
   substitute for that inspection.
+
+### Storage portability and shutdown acknowledgements (Task 12)
+
+Backups with private Ability state use archive version/minimumReader 3. Existing
+inventories remain v1/v2, and known SQLite schemas 2/3/4 remain readable. Captures
+exclude account credentials, result memory, executable packages, and temporary
+state; package descriptors and inventory records remain in the core database.
+State is hash-verified and remapped to the new workspace identity on restoration.
+Restored, moved, migrated, and host-rebound bindings require fresh review before
+execution. Consumed invocation IDs remain consumed after fresh consent.
+
+The desktop now keeps its authenticated bridge available during storage work so
+the backend can receive an explicit quiesce acknowledgement after workers stop.
+Headless backups with installed Ability records require reconnecting the desktop;
+missing heartbeats alone do not prove that a frozen desktop stopped its workers.
+The existing offline move/migration paths stop the desktop/backend and hold an
+exclusive source ownership claim. Active workers additionally recheck authority
+every 500 ms with one outstanding check, covering binding revocation outside the
+normal desktop command path.
+
+A known SQLite trigger queues cleanup when a Dot row is removed. Attachment and
+tool admission erase its host credentials/state before clearing the tombstone;
+failed acknowledgement keeps cleanup pending. This adds no Dot-delete UI.
+
+Verification includes decoded archive inventories, private-data exclusion,
+changed bytes and rejected links, remapped restored state, interrupted restore,
+workspace moves, real PostgreSQL-to-SQLite migration, historical schemas,
+consumed receipts, cleanup acknowledgement failure, and real confined state
+writers stopping before capture/resuming afterwards. The packaged-runtime tests
+also caught and verified a fix moving the shared directory check out of the
+desktop-only module graph.
+
+Full suite: 230 files, 1,942 passed, one existing certificate-identity skip.
+Format, lint, and typecheck pass. These are disposable fixture checks, not live
+Spotify-account or release-publication evidence.

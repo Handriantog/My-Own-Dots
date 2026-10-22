@@ -36,6 +36,8 @@ export interface DesktopAbilityHandlers {
   disconnect(bindingId: string): Promise<void>;
   eraseState(bindingId: string): Promise<void>;
   uninstall(digest: string): Promise<void>;
+  quiesce?(): Promise<void>;
+  resume?(): Promise<void>;
   stop(): Promise<void>;
 }
 export class DesktopAbilityBridge {
@@ -295,6 +297,12 @@ export class DesktopAbilityBridge {
     try {
       if (!this.connected) throw new AbilityFailure('host_unavailable');
       switch (command.type) {
+        case 'quiesce':
+        case 'resume':
+          if (!this.handlers[command.type])
+            throw new AbilityFailure('host_unavailable');
+          await this.handlers[command.type]!();
+          break;
         case 'install':
           result = verifiedPackageSchema.parse(
             await this.handlers.install(command.review, this.controller.signal),

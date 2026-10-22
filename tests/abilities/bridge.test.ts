@@ -555,3 +555,48 @@ it('validates required settings before installation and carries them through tea
   expect(updated.settings).toEqual({ label: 'second' });
   expect(installs).toBe(2);
 });
+
+it('blocks all new Ability admission during capture and refuses missing shutdown acknowledgement', async () => {
+  const f = await fixture();
+  await f.client.start();
+  await f.teach();
+  await expect(f.service.quiesce()).rejects.toThrow();
+  let paused = false;
+  f.handlers.quiesce = async () => {
+    paused = true;
+  };
+  f.handlers.resume = async () => {
+    paused = false;
+  };
+  const resume = await f.service.quiesce();
+  expect(paused).toBe(true);
+  await expect(
+    f.service.review(f.dot.id, f.archive.review.descriptorUrl),
+  ).rejects.toThrow();
+  await resume();
+  expect(paused).toBe(false);
+  expect(
+    await f.service.review(f.dot.id, f.archive.review.descriptorUrl),
+  ).toBeDefined();
+});
+
+it('keeps deleted-Dot cleanup pending until the desktop confirms credential/state erasure', async () => {
+  const f = await fixture();
+  await f.client.start();
+  const binding = await f.teach();
+  (f.workspace as unknown as { db: import('node:sqlite').DatabaseSync }).db
+    .prepare('DELETE FROM dots WHERE id=?')
+    .run(f.dot.id);
+  f.handlers.eraseState = async () => {
+    throw new Error('offline');
+  };
+  await expect(f.service.cleanup()).rejects.toThrow();
+  expect(f.workspace.abilities.pendingCleanup()).toEqual([binding.id]);
+  let erased: string | undefined;
+  f.handlers.eraseState = async (id) => {
+    erased = id;
+  };
+  await f.service.cleanup();
+  expect(erased).toBe(binding.id);
+  expect(f.workspace.abilities.pendingCleanup()).toEqual([]);
+});

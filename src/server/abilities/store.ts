@@ -32,7 +32,13 @@ export function initializeAbilitySchema(db: DatabaseSync): void {
       state TEXT NOT NULL CHECK(state IN ('running','settled')),outcome TEXT CHECK(outcome IS NULL OR json_valid(outcome)),
       createdAt INTEGER NOT NULL,settledAt INTEGER,
       CHECK((state='running' AND outcome IS NULL AND settledAt IS NULL) OR (state='settled' AND outcome IS NOT NULL AND settledAt IS NOT NULL))) STRICT;
-    CREATE INDEX IF NOT EXISTS ability_receipts_binding ON ability_receipts(bindingId,state);`);
+    CREATE INDEX IF NOT EXISTS ability_receipts_binding ON ability_receipts(bindingId,state);
+    CREATE TABLE IF NOT EXISTS ability_cleanup(bindingId TEXT PRIMARY KEY,dotId TEXT NOT NULL,createdAt INTEGER NOT NULL) STRICT;
+    CREATE TRIGGER IF NOT EXISTS ability_deleted_dot BEFORE DELETE ON dots BEGIN
+      INSERT OR IGNORE INTO ability_cleanup SELECT id,dotId,CAST(unixepoch('subsec')*1000 AS INTEGER) FROM ability_bindings WHERE dotId=OLD.id;
+      UPDATE ability_receipts SET state='settled',outcome='{"status":"uncertain"}',settledAt=coalesce(settledAt,createdAt) WHERE state='running' AND bindingId IN (SELECT id FROM ability_bindings WHERE dotId=OLD.id);
+      DELETE FROM ability_bindings WHERE dotId=OLD.id;
+    END;`);
 }
 const boundedId = z.string().min(1).max(256);
 const contextSchema = z.strictObject({
@@ -286,6 +292,16 @@ export class AbilityStore {
       this.interrupt(id);
       this.db.prepare('DELETE FROM ability_bindings WHERE id=?').run(id);
     });
+  }
+  pendingCleanup(): string[] {
+    return this.db
+      .prepare('SELECT bindingId FROM ability_cleanup ORDER BY bindingId')
+      .all()
+      .map((row) => z.uuid().parse(row.bindingId));
+  }
+  completeCleanup(id: string): void {
+    z.uuid().parse(id);
+    this.db.prepare('DELETE FROM ability_cleanup WHERE bindingId=?').run(id);
   }
   fingerprint(dotId: string): string {
     return this.db

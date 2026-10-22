@@ -369,15 +369,17 @@ export function AbilitiesSection({
           binding.manifest.entrypoint,
           ...binding.manifest.helpers.map((helper) => helper.entrypoint),
         ].some((entry) => entry.runtime === 'python');
-        const phase = !binding.enabled
-          ? 'Disabled'
-          : !state.available
-            ? 'Blocked'
-            : state.activity?.[binding.id]
-              ? 'Running'
-              : connected && (!needsPython || !!state.python)
-                ? 'Ready'
-                : 'Setup needed';
+        const phase = binding.restored
+          ? 'Review needed'
+          : !binding.enabled
+            ? 'Disabled'
+            : !state.available
+              ? 'Blocked'
+              : state.activity?.[binding.id]
+                ? 'Running'
+                : connected && (!needsPython || !!state.python)
+                  ? 'Ready'
+                  : 'Setup needed';
         const change = async (method: 'disable' | 'enable' | 'disconnect') => {
           await run(binding.id, async () => {
             unwrap<unknown>(
@@ -403,10 +405,22 @@ export function AbilitiesSection({
                 {phase}
               </span>
             </div>
+            {binding.restored && (
+              <p>
+                Review the release URL above to teach this restored Ability.{' '}
+                <a
+                  href={`https://github.com/${binding.manifest.source.owner}/${binding.manifest.source.repository}/releases`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Find its release
+                </a>
+              </p>
+            )}
             <div className="ability-actions">
               <button
                 type="button"
-                disabled={!!busy || !state.available}
+                disabled={!!busy || !state.available || binding.restored}
                 onClick={() => change(binding.enabled ? 'disable' : 'enable')}
               >
                 {binding.enabled ? 'Disable' : 'Enable'}

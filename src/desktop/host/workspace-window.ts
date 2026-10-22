@@ -143,10 +143,11 @@ export class WorkspaceWindow {
       connection: () => this.connection,
       beforeMaintenance: async () => {
         this.storageMaintenance = true;
-        await this.abilities.suspend();
+        await this.abilities.quiesce();
       },
       afterMaintenance: async () => {
         this.storageMaintenance = false;
+        await this.abilities.resumeMaintenance();
         if (!this.disposed && !this.abilitiesSuspended && this.connection)
           await this.abilities.attach(this.connection);
       },
