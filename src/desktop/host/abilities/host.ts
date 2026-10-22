@@ -234,6 +234,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
     signal: AbortSignal,
   ): Promise<InvocationOutcome> {
     let id: string | undefined;
+    let dispatched = false;
     let authorityTimer: ReturnType<typeof setInterval> | undefined;
     const controller = new AbortController(),
       abort = () => controller.abort();
@@ -282,6 +283,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
           });
       }, 500);
       authorityTimer.unref?.();
+      dispatched = true;
       const raw = await this.supervisor.invoke(
         { ...command.request, ...(selection ? { selection } : {}) },
         controller.signal,
@@ -316,7 +318,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
         ...(resultRef ? { resultRef } : {}),
       });
     } catch (error) {
-      return controller.signal.aborted
+      return dispatched || controller.signal.aborted
         ? { status: 'uncertain' }
         : { status: 'error', code: failureCode(error) };
     } finally {

@@ -122,7 +122,10 @@ export async function abilityTools(
             if ('visibility' in outcome)
               validateValue(tool.output, outcome.value);
             return outcome;
-          });
+          })
+          // After dispatch, suppress stale private data without claiming the
+          // action did not happen. Input/admission errors still use the outer catch.
+          .catch((): InvocationOutcome => ({ status: 'uncertain' }));
         pending.set(callId, { input: encoded, promise });
         return await promise;
       } catch (error) {

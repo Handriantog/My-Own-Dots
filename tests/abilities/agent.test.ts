@@ -325,8 +325,69 @@ describe('granted Ability tools', () => {
     );
     await expect.poll(() => f.invoke.mock.calls.length).toBe(1);
     f.controller.abort();
-    await pending;
+    expect(await pending).toEqual({ status: 'uncertain' });
     expect(cancelled).toBe(true);
+  });
+  it('keeps post-dispatch receipt failures uncertain at the service and model boundary', async () => {
+    const f = fixture();
+    vi.spyOn(f.workspace.abilities, 'settleInvocation').mockImplementation(
+      () => {
+        throw new Error('Fixture receipt write failed');
+      },
+    );
+    const input = {
+      dotId: f.dot.id,
+      bindingId: f.binding.id,
+      threadId: 'thread',
+      tool: 'search',
+      invocationId: randomUUID(),
+      arguments: { query: 'song' },
+    };
+    expect(await f.service.invoke(input, f.controller.signal)).toEqual({
+      status: 'uncertain',
+    });
+    expect(f.workspace.abilities.receipt(input.invocationId)?.state).toBe(
+      'running',
+    );
+    expect(await f.service.invoke(input, f.controller.signal)).toMatchObject({
+      status: 'error',
+    });
+    expect(f.invoke).toHaveBeenCalledTimes(1);
+    const [tool] = await abilityTools(
+      f.service,
+      f.dot.id,
+      'thread',
+      f.check,
+      f.controller.signal,
+    );
+    expect(
+      await tool.execute!(
+        { arguments: { query: 'song' } },
+        { toolCallId: 'receipt-failure', emitCustomEvent() {} },
+      ),
+    ).toEqual({ status: 'uncertain' });
+    expect(f.invoke).toHaveBeenCalledTimes(2);
+  });
+  it('drops revoked result references while retaining post-dispatch uncertainty', async () => {
+    const f = fixture();
+    f.invoke.mockImplementation(async () => {
+      f.workspace.abilities.revoke(f.binding.id);
+      return { status: 'success', resultRef: randomUUID() };
+    });
+    const [tool] = await abilityTools(
+      f.service,
+      f.dot.id,
+      'thread',
+      f.check,
+      f.controller.signal,
+    );
+    expect(
+      await tool.execute!(
+        { arguments: { query: 'song' } },
+        { toolCallId: 'revoked-result', emitCustomEvent() {} },
+      ),
+    ).toEqual({ status: 'uncertain' });
+    expect(f.invoke).toHaveBeenCalledTimes(1);
   });
   it('runs through the actual Dot tool loop with only a generic result', async () => {
     const f = fixture();

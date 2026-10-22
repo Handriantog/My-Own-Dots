@@ -450,7 +450,8 @@ export class AbilitySupervisor {
         scope.job.request,
       );
     } catch (error) {
-      return scope.started && scope.job.controller.signal.aborted
+      // Once worker code ran, a crash or protocol failure cannot undo its effects.
+      return scope.started
         ? { status: 'uncertain' }
         : {
             status: 'error',

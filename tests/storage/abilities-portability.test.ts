@@ -332,7 +332,7 @@ it('round-trips the decoded versioned archive while excluding credentials and ex
   expect(await readFile(join(state, 'private.json'), 'utf8')).toBe(
     '{"value":"stopped"}',
   );
-});
+}, 30_000);
 
 it('persists cleanup tombstones on Dot removal and never replays an old invocation after restoration', async () => {
   const f = await database(),

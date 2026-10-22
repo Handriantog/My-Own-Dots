@@ -318,6 +318,7 @@ export class AbilityService {
     input: AbilityInvocation,
     signal: AbortSignal,
   ): Promise<InvocationOutcome> {
+    let dispatched = false;
     try {
       await this.cleanup();
       const admitted = await this.serial(input.bindingId, async () => {
@@ -358,6 +359,7 @@ export class AbilityService {
         signal.addEventListener('abort', abort, { once: true });
         if (signal.aborted) controller.abort();
         this.active.set(context.invocationId, { context, controller });
+        dispatched = true;
         const pending = this.host
           .invoke(
             {
@@ -394,6 +396,8 @@ export class AbilityService {
         this.active.delete(input.invocationId);
       }
     } catch (error) {
+      // A lost receipt write or response after dispatch cannot prove no effect.
+      if (dispatched) return { status: 'uncertain' };
       return {
         status: 'error',
         code: signal.aborted

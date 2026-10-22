@@ -331,7 +331,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       expect(bridgeResponses.map((r) => r.status)).toEqual([
         'success',
         'uncertain',
-        'error',
+        'uncertain',
         'success',
       ]);
       for (const result of bridgeResponses)
@@ -355,7 +355,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         'OWNER_ONLY_SENTINEL',
       );
     });
-    it('returns only fixed errors for invalid model-visible values and enforces the frame ceiling', async () => {
+    it('returns only uncertainty for invalid post-execution values and enforces the frame ceiling', async () => {
       const f = await fixture('model-visible');
       expect(await f.invoke('model')).toEqual({
         status: 'success',
@@ -363,10 +363,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         value: 42,
       });
       for (const op of ['model-invalid', 'model-oversize'])
-        expect(await f.invoke(op)).toEqual({
-          status: 'error',
-          code: 'invalid_response',
-        });
+        expect(await f.invoke(op)).toEqual({ status: 'uncertain' });
     });
     it('reports uncertain and discards a late result after authority changes', async () => {
       const f = await fixture();
@@ -399,10 +396,8 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       });
       const account = await f.invoke('account');
       expect(account.status).toBe('success');
-      expect(await f.invoke('identity')).toEqual({
-        status: 'error',
-        code: 'invalid_response',
-      });
+      expect(await f.invoke('identity')).toEqual({ status: 'uncertain' });
+      expect(f.calls).toHaveLength(1);
     });
     it('keeps selections local, one-use, and bound to current authority', async () => {
       const f = await fixture(),

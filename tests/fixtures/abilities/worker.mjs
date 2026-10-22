@@ -40,6 +40,12 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     appendFileSync('ready', 'ready\n');
     return;
   }
+  if (args.op === 'effect-crash' || args.op === 'effect-malformed') {
+    await capability('effect', { kind: 'account', accountId: 'account' });
+    if (args.op === 'effect-crash') process.exit(17);
+    process.stdout.write('{bad\n');
+    return;
+  }
   if (args.op === 'malformed') {
     process.stdout.write('{bad\n');
     return;

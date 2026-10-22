@@ -381,9 +381,9 @@ voice control. Required terms must be accepted before installation. Authenticate
 HTTP requests retry once after a confirmed 401 and a host-owned refresh; unknown
 mutation delivery and 5xx responses are never retried automatically.
 
-Nine real-worker scenarios install the committed sealed Spotify development
-artifact from source `dcf2de644e1b78d24d4768f0a18619dcbfad37cf`, archive SHA-256
-`45d5d09308a0276d2fc110f9daa976fa2bd22303c44b153dbe3486c536e38428`.
+Eleven real-worker scenarios install the committed sealed Spotify development
+artifact from source `89573743f1be4accd4e1a643fcae1fb960b72a7e`, archive SHA-256
+`672dc437bf767efa974a9f15569770b15baa8b782d083ae080216b041e04619f`.
 Only GitHub download bytes and DNS/TLS provider transport are synthetic; the
 production installer, broker, browser PKCE callback, encrypted account store,
 bridge, runtime, grants and result projection execute normally. The fixture
@@ -398,12 +398,39 @@ stand-in. Captured model requests, durable events, memory/compaction, diagnostic
 and speech inputs contain neither synthetic Spotify metadata nor credentials,
 including provider-error and partial-creation paths.
 
-The full host suite passes **233 files / 1,966 tests**, with one existing
+The full host suite passes **233 files / 1,972 tests**, with one existing
 certificate-identity skip. Format, lint and typecheck pass. Speech checks pass
 31 worker and 17 native-worker tests. The final native rerun passes 14 checks
-in each of two profiles and 242 integration tests in 18 files. Build and desktop
+in each of two profiles and 248 integration tests in 18 files. Build and desktop
 packaging pass. The relocated, ad-hoc-signed actual app passes all three
-runtimes again with no development-source link. Independent review and
-exact-commit remote checks remain pending. Visual/keyboard
+runtimes again with no development-source link. Independent review and its fix pass are complete; exact-commit remote checks
+remain pending. Visual/keyboard
 inspection remains unavailable; live Spotify acceptance and publication remain
 separate gates.
+
+## Independent review and fix pass
+
+One fresh read-only review covered both complete branches, including four focused
+reproductions. It found no Critical or Minor issues and three Important issues:
+abnormal worker completion, post-dispatch cancellation/receipt/projection failures,
+and playlist creation followed by an additions rejection could report ordinary
+failure despite possible completed effects.
+
+Regression tests first reproduced those failures. The fix pass preserves generic
+uncertainty after execution or dispatch, suppresses revoked private payloads and
+references, and keeps definite errors for pre-execution rejection. Playlist partial
+creation keeps its link in the owner card and sends only uncertainty to the model.
+Crash, malformed output, cancellation, receipt-write failure and revoked-result
+regressions pass. Real sealed Spotify/agent captures cover additions rejected with
+403, 503 or connection loss; each reports uncertainty and creates only one playlist.
+The final full suite passes 1,972 tests with the same one existing skip.
+
+The first push's macOS acceptance/package job passed. Linux passed 1,907 tests
+but timed out the new multi-stage encrypted restore case at the default five
+seconds. That case now uses the existing encrypted archive suite's 30-second
+budget; runtime limits and all content/privacy assertions are unchanged. Current
+commit push/PR checks must still pass before draft handoff.
+
+All implementation rulings and costs are retained in [the decision record](abilities-decisions.md).
+Visual/keyboard inspection, live account acceptance, provider branding, signed
+release publication and broader platform support remain explicit gates.

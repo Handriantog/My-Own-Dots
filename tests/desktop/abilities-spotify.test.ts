@@ -431,7 +431,13 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       expect(f.host.running(f.binding.id)).toBe(false);
       await expect.poll(() => restarted.tools(f.dot.id)).toEqual([]);
     }, 20000);
-    it.each(['search', 'provider-error', 'partial'])(
+    it.each([
+      'search',
+      'provider-error',
+      'partial',
+      'partial-403',
+      'partial-transport',
+    ])(
       'keeps %s worker metadata out of model requests, durable events, memory, compaction, diagnostics and speech inputs',
       async (mode) => {
         const f = await fixture(),
@@ -488,18 +494,18 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
           context: [],
           forwardedProps: {},
         };
-        const targetTool = mode === 'partial' ? 'create_playlist' : 'search';
-        const targetArguments =
-          mode === 'partial'
-            ? { name: 'Synthetic private list', uris: [trackUri] }
-            : { query: 'Synthetic Song' };
+        const partial = mode.startsWith('partial');
+        const targetTool = partial ? 'create_playlist' : 'search';
+        const targetArguments = partial
+          ? { name: 'Synthetic private list', uris: [trackUri] }
+          : { query: 'Synthetic Song' };
         if (mode === 'provider-error')
           f.state.failure = { path: '/v1/search', kind: 'reject', status: 403 };
-        if (mode === 'partial')
+        if (partial)
           f.state.failure = {
             path: '/v1/playlists/' + '3'.repeat(22) + '/items',
-            kind: 'reject',
-            status: 503,
+            kind: mode === 'partial-transport' ? 'drop' : 'reject',
+            status: mode === 'partial-403' ? 403 : 503,
           };
         const name = abilityToolName(
           f.descriptor.manifest.source,
@@ -531,6 +537,16 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         const events = await lastValueFrom(
           runner.run({ threadId: f.threadId, agent, input }).pipe(toArray()),
         );
+        if (partial) {
+          const event = events.find(
+            (value) => value.type === 'TOOL_CALL_RESULT',
+          );
+          expect(event).toBeDefined();
+          expect(JSON.parse(String(event!.content))).toMatchObject({
+            status: 'uncertain',
+          });
+          expect(f.state.creations).toBe(1);
+        }
         const snapshot = await f.conversations.getSnapshot(f.threadId);
         await f.evidence.indexRun(input.runId);
         const projected = await f.evidence.modelMessages(

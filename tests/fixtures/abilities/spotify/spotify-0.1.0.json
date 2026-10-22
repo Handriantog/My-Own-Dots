@@ -1,11 +1,11 @@
 {
   "asset": {
-    "compressedBytes": 22831,
-    "extractedBytes": 90024,
+    "compressedBytes": 24252,
+    "extractedBytes": 91031,
     "fileCount": 20,
     "id": 1,
     "name": "spotify-0.1.0.dot-ability.tar.gz",
-    "sha256": "45d5d09308a0276d2fc110f9daa976fa2bd22303c44b153dbe3486c536e38428"
+    "sha256": "672dc437bf767efa974a9f15569770b15baa8b782d083ae080216b041e04619f"
   },
   "formatVersion": 1,
   "manifest": {
@@ -723,6 +723,6 @@
     ],
     "version": "0.1.0"
   },
-  "releaseTag": "spotify/development-dcf2de644e1b",
-  "sourceCommit": "dcf2de644e1b78d24d4768f0a18619dcbfad37cf"
+  "releaseTag": "spotify/development-89573743f1be",
+  "sourceCommit": "89573743f1be4accd4e1a643fcae1fb960b72a7e"
 }

@@ -354,6 +354,25 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         clearInterval(timer);
       }
     });
+    it.each(['effect-crash', 'effect-malformed'])(
+      'reports uncertainty after a confirmed effect followed by %s',
+      async (op) => {
+        const f = await setup();
+        let effects = 0;
+        f.capabilities.handle = async () => {
+          effects++;
+          return { ok: true, kind: 'account', connected: false };
+        };
+        expect(
+          await f.supervisor.invoke(
+            f.request(op),
+            new AbortController().signal,
+          ),
+        ).toEqual({ status: 'uncertain' });
+        expect(effects).toBe(1);
+        expect((await f.pids()).filter(alive)).toEqual([]);
+      },
+    );
     it.each(['malformed', 'oversize', 'unknown'])(
       'closes a worker sending %s protocol data',
       async (op) => {
@@ -363,7 +382,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
             f.request(op),
             new AbortController().signal,
           ),
-        ).toEqual({ status: 'error', code: 'invalid_response' });
+        ).toEqual({ status: 'uncertain' });
         expect((await f.pids()).length).toBe(1);
         expect((await f.pids()).filter(alive)).toEqual([]);
       },
