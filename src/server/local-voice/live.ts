@@ -15,6 +15,9 @@ import type {
   NativeVoiceSession,
 } from './native-contract.js';
 
+// Input frames contain 512 samples at 16 kHz (32 ms each).
+const interruptionSpeechFrames = Math.ceil(1500 / 32);
+
 type Utterance = {
   messageId: string;
   text: string;
@@ -187,6 +190,7 @@ export class LiveVoiceCall {
   private generation = 0;
   private outputSequence = 0;
   private positives = 0;
+  private speechStartFrames = 3;
   private silence = 0;
   private speaking = false;
   private lastVoiceAt = performance.now();
@@ -371,10 +375,15 @@ export class LiveVoiceCall {
     const voiced = probability >= 0.5;
     if (voiced) this.lastVoiceAt = performance.now();
     if (!this.speaking) {
-      this.preRoll.push(pcm);
-      if (this.preRoll.length > 8) this.preRoll.shift();
+      if (!this.positives) this.speechStartFrames = 3;
+      // Once speech overlaps a reply, keep confirming it even if playback ends.
+      if (this.outputActive) this.speechStartFrames = interruptionSpeechFrames;
       this.positives = voiced ? this.positives + 1 : 0;
-      if (this.positives < 3) return;
+      this.preRoll.push(pcm);
+      // Retain the whole confirmation window so interruption loses no words.
+      while (this.preRoll.length > Math.max(8, this.positives))
+        this.preRoll.shift();
+      if (this.positives < this.speechStartFrames) return;
       this.speaking = true;
       this.silence = 0;
       this.frames = this.preRoll;
@@ -708,6 +717,7 @@ export class LiveVoiceCall {
     this.preRoll = [];
     this.speaking = false;
     this.positives = 0;
+    this.speechStartFrames = 3;
     this.silence = 0;
   }
   private async checkpoint(line: string) {
@@ -744,6 +754,7 @@ export class LiveVoiceCall {
     reason: 'interrupted' | 'speaker_muted' = 'interrupted',
   ) {
     if (this.ended) return;
+    if (!this.speaking) this.resetInput();
     const utterance = this.utterance;
     if (utterance && (!utterance.answered || this.outputActive))
       utterance.timing.mark(reason);

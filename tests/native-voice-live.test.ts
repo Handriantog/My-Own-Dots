@@ -109,58 +109,72 @@ it.each([false, true])(
   },
 );
 
-it('barge-in stops a spoken task receipt without ending the High call', async () => {
-  const events: LocalVoiceEvent[] = [];
-  const native = {
-    warm: async () => {},
-    close: async () => {},
-    interpret: async (): Promise<NativeUnderstanding> => ({
-      route: 'ignore',
-      text: '',
-    }),
-    respond: vi.fn(),
-    speak: async (text: string) => ({ text, pcm: Buffer.alloc(8000) }),
-  };
-  const call = new LiveVoiceCall(
-    {
-      id: 'call',
-      token: 'token',
-      dotId: 'dot',
-      threadId: 'thread',
-      quality: 'high',
-    },
-    {
-      requireThread: () => ({ dotId: 'dot' }),
-      paused: () => false,
-      foreground: async () => () => {},
-      snapshot: async () => ({ messages: [], state: {} }),
-      stop: vi.fn(),
-      receipt: vi.fn(),
-      delivery: vi.fn(),
-    },
-    () => ({
-      native,
-      vad: {
-        warm: async () => {},
-        close: async () => {},
-        reset: async () => {},
-        detect: async () => 0,
+it.each(['manual', 'speech'] as const)(
+  '%s interruption stops a spoken task receipt without ending the High call',
+  async (source) => {
+    const events: LocalVoiceEvent[] = [];
+    let probability = 0;
+    const native = {
+      warm: async () => {},
+      close: async () => {},
+      interpret: async (): Promise<NativeUnderstanding> => ({
+        route: 'ignore',
+        text: '',
+      }),
+      respond: vi.fn(),
+      speak: async (text: string) => ({ text, pcm: Buffer.alloc(8000) }),
+    };
+    const call = new LiveVoiceCall(
+      {
+        id: 'call',
+        token: 'token',
+        dotId: 'dot',
+        threadId: 'thread',
+        quality: 'high',
       },
-    }),
-  );
-  call.listen(async (event) => {
-    events.push(event);
-  });
-  try {
-    await call.start();
-    call.nativeUpdate('receipt', 'Your task finished. The label is amber fox.');
-    await vi.waitFor(() =>
-      expect(events.some((e) => e.type === 'audio')).toBe(true),
+      {
+        requireThread: () => ({ dotId: 'dot' }),
+        paused: () => false,
+        foreground: async () => () => {},
+        snapshot: async () => ({ messages: [], state: {} }),
+        stop: vi.fn(),
+        receipt: vi.fn(),
+        delivery: vi.fn(),
+      },
+      () => ({
+        native,
+        vad: {
+          warm: async () => {},
+          close: async () => {},
+          reset: async () => {},
+          detect: async () => probability,
+        },
+      }),
     );
-    await call.interrupt();
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(call.ended).toBe(false);
-  } finally {
-    await call.end();
-  }
-});
+    call.listen(async (event) => {
+      events.push(event);
+    });
+    try {
+      await call.start();
+      call.nativeUpdate(
+        'receipt',
+        'Your task finished. The label is amber fox.',
+      );
+      await vi.waitFor(() =>
+        expect(events.some((e) => e.type === 'audio')).toBe(true),
+      );
+      if (source === 'manual') await call.interrupt();
+      else {
+        probability = 1;
+        for (let n = 0; n < 46; n++) await call.frame(n, Buffer.alloc(1024));
+        expect(events.some((event) => event.type === 'flush')).toBe(false);
+        await call.frame(46, Buffer.alloc(1024));
+      }
+      expect(events.filter((event) => event.type === 'flush')).toHaveLength(1);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(call.ended).toBe(false);
+    } finally {
+      await call.end();
+    }
+  },
+);
