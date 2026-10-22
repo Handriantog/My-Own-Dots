@@ -167,7 +167,7 @@ function fixture(
   const recognition = {
     warm: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
-    transcribe: vi.fn(async () => ({
+    transcribe: vi.fn(async (_pcm: Buffer) => ({
       text: 'Hello Dot',
       language: 'en',
       segments: [],
@@ -220,7 +220,7 @@ function fixture(
     vad,
     synthesis,
     release,
-    frame: () => call.frame(sequence++, Buffer.alloc(1024)),
+    frame: (pcm = Buffer.alloc(1024)) => call.frame(sequence++, pcm),
     speech: (value: number) => {
       probability = value;
     },
@@ -1077,6 +1077,123 @@ it('replaces only a failed recognizer once, retries the same utterance once, and
     await f.call.end();
   }
 });
+describe('speech-confirmed interruption', () => {
+  async function speakingCall() {
+    const f = fixture();
+    await f.call.start();
+    const event = await utterance(f);
+    await f.call.answer(event.messageId);
+    await vi.waitFor(() =>
+      expect(f.events.some((event) => event.type === 'audio')).toBe(true),
+    );
+    return f;
+  }
+
+  it('keeps playing until 1.5 seconds of speech and retains the opening audio', async () => {
+    const f = await speakingCall();
+    try {
+      const flushes = f.events.filter((event) => event.type === 'flush').length;
+      f.speech(1);
+      // 46 * 32 ms = 1,472 ms; the next frame crosses 1.5 seconds.
+      for (let i = 0; i < 46; i++) await f.frame(Buffer.alloc(1024, i + 1));
+      expect(f.events.filter((event) => event.type === 'flush')).toHaveLength(
+        flushes,
+      );
+      await f.frame(Buffer.alloc(1024, 47));
+      expect(f.events.filter((event) => event.type === 'flush')).toHaveLength(
+        flushes + 1,
+      );
+      f.speech(0);
+      for (let i = 0; i < 22; i++) await f.frame();
+      await vi.waitFor(() =>
+        expect(f.recognition.transcribe).toHaveBeenCalledTimes(2),
+      );
+      const captured = f.recognition.transcribe.mock.calls[1][0] as Buffer;
+      expect(captured.subarray(0, 1024)).toEqual(Buffer.alloc(1024, 1));
+      expect(captured.subarray(46 * 1024, 47 * 1024)).toEqual(
+        Buffer.alloc(1024, 47),
+      );
+      expect(f.call.ended).toBe(false);
+    } finally {
+      await f.call.end();
+    }
+  });
+
+  it('does not combine separate brief noises into an interruption', async () => {
+    const f = await speakingCall();
+    try {
+      const before = f.events.length;
+      for (let burst = 0; burst < 3; burst++) {
+        f.speech(1);
+        for (let i = 0; i < 20; i++) await f.frame();
+        f.speech(0);
+        for (let i = 0; i < 24; i++) await f.frame();
+      }
+      expect(
+        f.events
+          .slice(before)
+          .some(
+            (event) =>
+              event.type === 'flush' ||
+              event.type === 'transcript' ||
+              (event.type === 'phase' && event.phase === 'listening'),
+          ),
+      ).toBe(false);
+      expect(f.call.ended).toBe(false);
+    } finally {
+      await f.call.end();
+    }
+  });
+
+  it('keeps confirming an overlapping candidate when playback finishes', async () => {
+    const f = await speakingCall();
+    try {
+      const flushes = f.events.filter((event) => event.type === 'flush').length;
+      f.speech(1);
+      for (let i = 0; i < 20; i++) await f.frame();
+      for (const audio of f.events.filter((event) => event.type === 'audio'))
+        await f.call.played(audio.generation, audio.sequence, 960);
+      await vi.waitFor(() =>
+        expect(f.events.at(-1)).toEqual({ type: 'phase', phase: 'listening' }),
+      );
+      for (let i = 0; i < 26; i++) await f.frame();
+      expect(f.events.filter((event) => event.type === 'flush')).toHaveLength(
+        flushes,
+      );
+      await f.frame();
+      expect(f.events.filter((event) => event.type === 'flush')).toHaveLength(
+        flushes + 1,
+      );
+    } finally {
+      await f.call.end();
+    }
+  });
+
+  it('honors manual interruption immediately and clears unconfirmed speech', async () => {
+    const f = await speakingCall();
+    try {
+      const flushes = f.events.filter((event) => event.type === 'flush').length;
+      f.speech(1);
+      for (let i = 0; i < 20; i++) await f.frame();
+      await f.call.interrupt();
+      expect(f.events.filter((event) => event.type === 'flush')).toHaveLength(
+        flushes + 1,
+      );
+      await f.frame();
+      await f.frame();
+      expect(f.events.filter((event) => event.type === 'flush')).toHaveLength(
+        flushes + 1,
+      );
+      await f.frame();
+      expect(f.events.filter((event) => event.type === 'flush')).toHaveLength(
+        flushes + 2,
+      );
+    } finally {
+      await f.call.end();
+    }
+  });
+});
+
 describe('local call supervision', () => {
   it('records unused prefetched speech on barge-in without counting stale playback acknowledgements', async () => {
     const f = fixture();
@@ -1098,7 +1215,7 @@ describe('local call supervision', () => {
       await f.call.played(audio[0].generation, audio[0].sequence, 960);
 
       f.speech(1);
-      for (let i = 0; i < 3; i++) await f.frame();
+      for (let i = 0; i < 47; i++) await f.frame();
       await vi.waitFor(() =>
         expect(f.synthesis.close).toHaveBeenCalledTimes(1),
       );
