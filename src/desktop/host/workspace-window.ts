@@ -1,3 +1,8 @@
+import { AbilityController } from './abilities/controller.js';
+import {
+  desktopAbilityMethods,
+  type DesktopAbilityMethod,
+} from '../../shared/abilities/desktop.js';
 import {
   BrowserWindow,
   dialog,
@@ -63,6 +68,9 @@ export class WorkspaceWindow {
   private voice: CompanionVoiceSession;
   private folders: CompanionFolderPicker;
   private storage: StorageController;
+  private abilities: AbilityController;
+  private abilitiesSuspended = false;
+  private storageMaintenance = false;
   private unsubscribe: () => void;
   private saving?: ReturnType<typeof setTimeout>;
   private readonly context = (event: Electron.IpcMainEvent) => {
@@ -90,6 +98,12 @@ export class WorkspaceWindow {
       () => 'dots://workspace/',
       'dot:workspace-folders',
     );
+    this.abilities = new AbilityController({
+      profile: data,
+      bundle,
+      storage: safeStorage,
+      open: (url) => shell.openExternal(url),
+    });
     this.storage = new StorageController({
       profile: data,
       keys: (directory) =>
@@ -103,6 +117,15 @@ export class WorkspaceWindow {
       }),
       configuration: () => backend.configuration,
       connection: () => this.connection,
+      beforeMaintenance: async () => {
+        this.storageMaintenance = true;
+        await this.abilities.suspend();
+      },
+      afterMaintenance: async () => {
+        this.storageMaintenance = false;
+        if (!this.disposed && !this.abilitiesSuspended && this.connection)
+          await this.abilities.attach(this.connection);
+      },
       stopWorkspace: async () => {
         await this.resetDocuments();
         await backend.stop();
@@ -246,6 +269,17 @@ export class WorkspaceWindow {
         });
       });
     }
+    for (const method of Object.keys(
+      desktopAbilityMethods,
+    ) as DesktopAbilityMethod[]) {
+      ipcMain.handle(`dot:abilities:${method}`, (event, input: unknown) =>
+        this.abilities.invoke(method, input, {
+          trusted: () =>
+            this.trusted(event) &&
+            isWorkspacePage(event.senderFrame?.url ?? ''),
+        }),
+      );
+    }
     ipcMain.on('dot:workspace:context', this.context);
     const handle = (
       name: string,
@@ -371,8 +405,10 @@ export class WorkspaceWindow {
     this.unsubscribe = backend.subscribe((status) => {
       if (this.disposed) return;
       this.failure = undefined;
-      if (status.phase === 'error' || status.phase === 'stopped')
+      if (status.phase === 'error' || status.phase === 'stopped') {
         this.connection = undefined;
+        void this.abilities.suspend().catch(() => {});
+      }
       for (const window of this.windows)
         if (!window.isDestroyed())
           window.webContents.send('dot:workspace:status', status);
@@ -389,6 +425,7 @@ export class WorkspaceWindow {
         window.webContents.send('dot:workspace:customization', state);
   }
   private async resetDocuments() {
+    await this.abilities.suspend();
     this.pendingDestination = undefined;
     this.connection = undefined;
     this.loaded.clear();
@@ -471,6 +508,9 @@ export class WorkspaceWindow {
       if (this.disposed) return;
       const connection = await this.backend.start();
       if (this.disposed) return;
+      if (!this.abilitiesSuspended && !this.storageMaintenance)
+        await this.abilities.attach(connection);
+      if (this.disposed) return;
       if (
         this.connection === connection ||
         (this.connection?.url === connection.url &&
@@ -490,6 +530,7 @@ export class WorkspaceWindow {
   transportFailed() {
     if (this.disposed || this.failure) return;
     this.transportInterrupted = true;
+    void this.abilities.suspend().catch(() => {});
     this.failure = {
       phase: 'error',
       message:
@@ -620,7 +661,15 @@ export class WorkspaceWindow {
   }
   suspend() {
     if (this.disposed) return;
+    this.abilitiesSuspended = true;
     this.voice.stop('suspended');
+    void this.abilities.suspend().catch(() => {});
+  }
+  resume() {
+    if (this.disposed) return;
+    this.abilitiesSuspended = false;
+    if (this.connection && !this.storageMaintenance)
+      void this.abilities.attach(this.connection).catch(() => {});
   }
   async recover() {
     await this.openBackendSettings();
@@ -803,9 +852,12 @@ export class WorkspaceWindow {
     this.unsubscribe();
     this.voice.destroy();
     this.folders.destroy();
+    const abilities = this.abilities.stop();
     const storage = this.storage.close();
     for (const method of storageMethods)
       ipcMain.removeHandler(`dot:storage:${method}`);
+    for (const method of Object.keys(desktopAbilityMethods))
+      ipcMain.removeHandler(`dot:abilities:${method}`);
     ipcMain.removeListener('dot:workspace:context', this.context);
     for (const name of [
       'open',
@@ -825,6 +877,8 @@ export class WorkspaceWindow {
     this.windows.clear();
     this.loaded.clear();
     this.initializing.clear();
-    return (this.destroying = Promise.all([saved, storage]).then(() => {}));
+    return (this.destroying = Promise.all([saved, storage, abilities]).then(
+      () => {},
+    ));
   }
 }

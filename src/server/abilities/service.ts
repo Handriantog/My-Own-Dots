@@ -230,6 +230,9 @@ export class AbilityService {
       await this.workspace.abilities.removePackage(digest);
     });
   }
+  async get(id: string): Promise<Binding> {
+    return this.binding(id);
+  }
   async list(dotId: string) {
     return this.workspace.abilities.list(dotId);
   }
@@ -238,7 +241,12 @@ export class AbilityService {
     return (await this.workspace.abilities.list(dotId))
       .filter((binding) => binding.enabled && !binding.restored)
       .flatMap((binding) =>
-        binding.manifest.tools.map((tool) => ({ bindingId: binding.id, tool })),
+        binding.manifest.tools.map((tool) => ({
+          bindingId: binding.id,
+          source: binding.manifest.source,
+          abilityId: binding.manifest.id,
+          tool,
+        })),
       );
   }
   async authorize(context: InvocationContext): Promise<AuthorizedAbility> {

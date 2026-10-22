@@ -8,6 +8,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { AbilityController } from '../../src/desktop/host/abilities/controller.js';
 import {
   BrowserWindow,
   dialog,
@@ -202,6 +203,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await workspace.destroy();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   host.handlers.clear();
   host.ipc?.removeAllListeners();
@@ -233,6 +235,49 @@ it('opens a bundled isolated main window and reuses it for dirty-page-safe hando
   expect(window.visible).toBe(false);
   await workspace.open();
   expect(window.visible).toBe(true);
+});
+it('keeps Abilities attached on window close and suspends them on lock', async () => {
+  const suspend = vi.spyOn(AbilityController.prototype, 'suspend');
+  const stop = vi.spyOn(AbilityController.prototype, 'stop');
+  const attach = vi.spyOn(AbilityController.prototype, 'attach');
+  await workspace.open();
+  suspend.mockClear();
+  stop.mockClear();
+  attach.mockClear();
+  host.windows[0].emit('close', { preventDefault() {} });
+  expect(suspend).not.toHaveBeenCalled();
+  expect(stop).not.toHaveBeenCalled();
+  workspace.suspend();
+  expect(suspend).toHaveBeenCalledTimes(1);
+  workspace.resume();
+  expect(attach).toHaveBeenCalledTimes(1);
+  await workspace.destroy();
+  expect(stop).toHaveBeenCalledTimes(1);
+});
+it('rejects Ability IPC from remote documents and subframes', async () => {
+  await workspace.open();
+  const window = host.windows[0];
+  const read = host.handlers.get('dot:abilities:results')!;
+  const input = {
+    dotId: 'dot',
+    handle: 'a3405850-1319-4d0c-bd89-2b762cb7bb7d',
+  };
+  expect(
+    await read(
+      {
+        sender: window.webContents,
+        senderFrame: { url: window.webContents.mainFrame.url },
+      },
+      input,
+    ),
+  ).toEqual({ ok: false, code: 'permission_denied' });
+  window.webContents.mainFrame.url = 'https://example.com/';
+  expect(
+    await read(
+      { sender: window.webContents, senderFrame: window.webContents.mainFrame },
+      input,
+    ),
+  ).toEqual({ ok: false, code: 'permission_denied' });
 });
 it('binds storage IPC to the current trusted focused document', async () => {
   await workspace.open();

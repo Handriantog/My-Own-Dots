@@ -212,7 +212,11 @@ app.get('/api/desktop/identity', (c) =>
     service: 'my-own-dots',
     protocol: 1,
     workspaceId,
-    capabilities: snapshots ? ['workspace-snapshot-v1'] : [],
+    abilityRoot: join(dirname(resolve(database)), 'abilities'),
+    capabilities: [
+      ...(snapshots ? ['workspace-snapshot-v1'] : []),
+      ...(platform.abilities ? ['abilities-v1'] : []),
+    ],
     setup: platform.setup(),
   }),
 );

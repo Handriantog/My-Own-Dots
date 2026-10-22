@@ -43,6 +43,8 @@ async function fixture(backend = 'gnome_libsecret') {
   const worker = { run: vi.fn() };
   const request = vi.fn();
   const afterRestore = vi.fn();
+  const beforeMaintenance = vi.fn(async () => {}),
+    afterMaintenance = vi.fn(async () => {});
   let ready = true;
   const controller = new StorageController({
     profile: root,
@@ -64,6 +66,8 @@ async function fixture(backend = 'gnome_libsecret') {
     request,
     stopWorkspace: vi.fn(),
     afterRestore,
+    beforeMaintenance,
+    afterMaintenance,
   });
   const context: StorageInvocation = {
     trusted: () => true,
@@ -83,6 +87,8 @@ async function fixture(backend = 'gnome_libsecret') {
     worker,
     request,
     afterRestore,
+    beforeMaintenance,
+    afterMaintenance,
     encryptString,
     controller,
     context,
@@ -109,6 +115,30 @@ it('reports a starting workspace without treating its saved backup settings as u
     await realpath(f.root),
   );
   expect(await readFile(file, 'utf8')).toBe(original);
+});
+it('stops Ability admission before maintenance and resumes even if snapshot setup fails', async () => {
+  const f = await fixture(),
+    order: string[] = [];
+  vi.mocked(f.context.chooseDirectory).mockResolvedValue(f.root);
+  await f.controller.invoke('chooseBackupDirectory', undefined, f.context);
+  f.beforeMaintenance.mockImplementation(async () => {
+    order.push('stop');
+  });
+  f.request.mockImplementation(async () => {
+    order.push('snapshot');
+    throw new Error('Fixture failure');
+  });
+  f.afterMaintenance.mockImplementation(async () => {
+    order.push('resume');
+  });
+  await expect(
+    f.controller.invoke(
+      'backupNow',
+      { passphrase: 'fixture', remember: false },
+      f.context,
+    ),
+  ).rejects.toThrow('Fixture failure');
+  expect(order).toEqual(['stop', 'snapshot', 'resume']);
 });
 it('rejects remembering an empty recovery password before starting a backup', async () => {
   const f = await fixture();

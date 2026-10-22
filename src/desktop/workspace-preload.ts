@@ -1,3 +1,4 @@
+import { createAbilitiesPreload } from './abilities-preload.js';
 import { contextBridge, ipcRenderer } from 'electron';
 import type {
   DesktopWorkspaceBridge,
@@ -83,6 +84,8 @@ if (
     },
   };
   contextBridge.exposeInMainWorld('dotWorkspace', bridge);
+  if (location.hostname === 'workspace' && location.pathname === '/')
+    contextBridge.exposeInMainWorld('dotAbilities', createAbilitiesPreload());
   const userAction = (channel: string, value?: unknown) => {
     if (!navigator.userActivation?.isActive)
       return Promise.reject(

@@ -254,3 +254,30 @@ are independently checked against the declared output schema and frame ceiling.
 The OAuth regression suite now has 22 tests, including cancellation of a pending
 sign-in on disable while retaining an idle approved account. These fixtures do
 not establish live Spotify account behavior or packaged-runtime acceptance.
+
+## Dot tools and desktop lifecycle
+
+The complete suite passes 226 files / 1,906 tests, with one existing signing
+identity skip. Typecheck and lint pass. The native sandbox gate passes all 13
+checks again. Six agent tests exercise the real Dot tool loop, including grant
+changes aborting inference, per-Dot enablement, forged authority, cancellation,
+source-scoped names and duplicate delivery without repeated approval prompts.
+
+Five lifecycle tests use a separate backend process and real confined workers.
+Normal desktop stop, suspend and a SIGKILL of the desktop owner all leave no live
+worker while the independent backend remains alive and answers HTTP requests.
+Resume establishes a fresh host session. UI lifecycle tests verify that closing
+the workspace hides it without stopping Abilities; lock suspends them, and quit
+waits for workspace/Ability cleanup before backend shutdown. Remote documents and
+subframes cannot call Ability IPC, and consent actions require a user gesture.
+
+The authenticated backend identity advertises its Ability storage root beside
+its database. Shared packages and per-Dot state live there, including when the
+backend was attached rather than launched by Dot. Credentials and watchdog
+control files remain in the desktop profile. Storage maintenance hooks stop
+Ability admission before work and resume afterward. Snapshot inventory and
+restore-authority rules remain the next storage gate.
+
+The controller refuses to attach without a verified workspace identity,
+a supported native launcher and a validated runtime. This is source/fixture
+verification; packaging and user-facing management are not complete yet.

@@ -66,6 +66,9 @@ export class DesktopAbilityBridge {
   ) {
     this.url = loopbackBackend(configuration.url);
   }
+  get session(): string | undefined {
+    return this.connected ? this.sessionId : undefined;
+  }
   get connected(): boolean {
     return this.attached && !this.controller.signal.aborted;
   }

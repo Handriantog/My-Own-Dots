@@ -48,6 +48,7 @@ export const desktopAbilityMethods = {
     input: z.strictObject(dot),
     output: z.strictObject({
       available: z.boolean(),
+      reason: errorCodeSchema.optional(),
       bindings: z.array(bindingSchema).max(1000),
     }),
   },

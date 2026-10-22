@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { DesktopStorageBridge } from '../../src/desktop/shared/storage-contract.js';
+import type { DesktopAbilities } from '../../src/shared/abilities/desktop.js';
 const host = vi.hoisted(() => ({
   trusted: true,
   exposed: new Map<string, unknown>(),
@@ -61,4 +62,20 @@ it('requires a user gesture for storage actions and sends no chooser paths', asy
     'dot:storage:chooseBackupDirectory',
     undefined,
   );
+});
+it('exposes Abilities only to a trusted bundled frame and requires a gesture for consent', async () => {
+  await import('../../src/desktop/workspace-preload.js');
+  const bridge = host.exposed.get('dotAbilities') as DesktopAbilities;
+  expect(bridge).toBeDefined();
+  vi.stubGlobal('navigator', { userActivation: { isActive: false } });
+  expect(await bridge.teach({ dotId: 'dot', reviewId: 'fixture' })).toEqual({
+    ok: false,
+    code: 'permission_denied',
+  });
+  expect(host.invoke).not.toHaveBeenCalled();
+  vi.resetModules();
+  host.exposed.clear();
+  vi.stubGlobal('location', new URL('https://example.com/'));
+  await import('../../src/desktop/workspace-preload.js');
+  expect(host.exposed.has('dotAbilities')).toBe(false);
 });

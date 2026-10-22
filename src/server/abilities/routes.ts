@@ -58,6 +58,9 @@ export function abilityRoutes(
         },
       );
     });
+  guarded.get('/abilities/:id', async (c) =>
+    c.json(await service.get(z.uuid().parse(c.req.param('id')))),
+  );
   guarded.post('/abilities/:id/update', async (c) => {
     const body = z
       .strictObject({ reviewId: z.uuid() })

@@ -1,7 +1,7 @@
 import { createInterface } from 'node:readline';
 import { appendFileSync } from 'node:fs';
 import process from 'node:process';
-import { setTimeout } from 'node:timers';
+import { setTimeout, setInterval } from 'node:timers';
 const send = (id, result) =>
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
 const pending = new Map();
@@ -31,6 +31,10 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
   if (message.method !== 'invoke') return;
   appendFileSync('started', String(process.pid) + '\n');
   const op = message.params.arguments.op;
+  if (op === 'hold') {
+    setInterval(() => {}, 1000);
+    return;
+  }
   const owner = { kind: 'text', text: 'OWNER_ONLY_SENTINEL' };
   if (op === 'raw-error') {
     process.stdout.write(

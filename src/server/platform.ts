@@ -205,6 +205,7 @@ export class Platform {
               this.memory,
               this.delegations?.jobs,
               this.openWebsite,
+              this.abilities,
             ),
           ]),
         ),
