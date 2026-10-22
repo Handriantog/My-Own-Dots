@@ -400,7 +400,10 @@ including provider-error and partial-creation paths.
 
 The full host suite passes **233 files / 1,966 tests**, with one existing
 certificate-identity skip. Format, lint and typecheck pass. Speech checks pass
-31 worker and 17 native-worker tests. Final native/package reruns, independent
-review and exact-commit remote checks are still being recorded. Visual/keyboard
+31 worker and 17 native-worker tests. The final native rerun passes 14 checks
+in each of two profiles and 242 integration tests in 18 files. Build and desktop
+packaging pass. The relocated, ad-hoc-signed actual app passes all three
+runtimes again with no development-source link. Independent review and
+exact-commit remote checks remain pending. Visual/keyboard
 inspection remains unavailable; live Spotify acceptance and publication remain
 separate gates.
