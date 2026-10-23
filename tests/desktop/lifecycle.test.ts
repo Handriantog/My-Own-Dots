@@ -775,3 +775,67 @@ it('stops desktop activity when macOS hides the application', async () => {
   expect(host.activityDriver!.status('fixture')).toBe('inactive');
   expect(powerSaveBlocker.stop).toHaveBeenCalledWith(1);
 });
+
+it.each(['pause', 'stop'] as const)(
+  'discards a queued activity pose on %s while native ack is delayed',
+  async (release) => {
+    const child = host.children.at(-1) as EventEmitter & {
+      stdout: PassThrough;
+    };
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        JSON.stringify(snapshot([], { observedAtMs: performance.now() })) +
+          '\n',
+      ),
+    );
+    let seq = 2;
+    const refresh = setInterval(
+      () =>
+        child.stdout.emit(
+          'data',
+          Buffer.from(
+            JSON.stringify(
+              snapshot([], { seq: seq++, observedAtMs: performance.now() }),
+            ) + '\n',
+          ),
+        ),
+      100,
+    );
+    const env = host.activityEnvironment!,
+      driver = host.activityDriver!;
+    env.selectedDot = () => 'fixture';
+    env.accessibility = () => true;
+    const physical = {
+      point: { x: 650, y: 400 },
+      down: false,
+      revision: 1,
+      sampledAtMs: 1000,
+      idleMs: 10000,
+    };
+    let finishMove!: (value: boolean) => void;
+    env.pointer = {
+      begin: async () => physical,
+      move: () =>
+        new Promise((resolve) => {
+          finishMove = resolve;
+        }),
+      end: () => {},
+    };
+    await driver.start({ bindingId: 'fixture', dotId: 'fixture' }, definition);
+    await vi.advanceTimersByTimeAsync(550);
+    expect(driver.status('fixture')).toBe('running');
+    const painted = host.frame!;
+    await vi.advanceTimersByTimeAsync(75);
+    expect(host.frame).toBe(painted); // future poses are queued behind native ack
+    if (release === 'pause')
+      driver.physical({ ...physical, revision: 2, down: true, idleMs: 0 });
+    else await driver.stop();
+    host.autoAck = false;
+    finishMove(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(host.frame).toBe(painted); // no obsolete future activity pose dispatched
+    await driver.stop();
+    clearInterval(refresh);
+  },
+);

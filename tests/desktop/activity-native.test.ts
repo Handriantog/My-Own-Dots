@@ -60,7 +60,19 @@ trusted = true
 pointer.invalidate()
 precondition(!accepted(command("move",2,move)))
 precondition(pointer.command(String(repeating:"x", count:2049)) == nil)
-print("20 native guard probes passed; fake warp count=2")
+func text(_ value: [String: Any]) -> String { String(data:try! JSONSerialization.data(withJSONObject:value),encoding:.utf8)! }
+precondition(accepted(command("begin",3)))
+precondition(pointer.submit(text(command("move",3,move))).isEmpty)
+precondition(warps == 2) // receiving a move only buffers it
+let retired = pointer.submit(text(command("end",3)))
+precondition(retired.contains { $0["ok"] as? Bool == true })
+precondition(pointer.flush().isEmpty && warps == 2) // stop before execution cancels buffered move
+precondition(accepted(command("begin",4)))
+_ = pointer.submit(text(command("move",4,move)))
+precondition(pointer.flush().first?["ok"] as? Bool == true && warps == 3)
+_ = pointer.submit(text(command("end",4)))
+precondition(warps == 3) // already-executed movement cannot be undone retroactively
+print("buffered cancellation probes passed; fake warp count=3")
 `,
       );
       execFileSync(
@@ -73,7 +85,7 @@ print("20 native guard probes passed; fake warp count=2")
         encoding: 'utf8',
       });
       expect(output).toContain(
-        '20 native guard probes passed; fake warp count=2',
+        'buffered cancellation probes passed; fake warp count=3',
       );
     } finally {
       rmSync(dir, { recursive: true, force: true });

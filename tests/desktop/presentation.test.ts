@@ -35,6 +35,16 @@ function frame(sequence: number): PresentationFrame {
   };
 }
 describe('presentation sequencing', () => {
+  it('drops queued activity poses during a delayed native acknowledgement', () => {
+    const box = new PresentationMailbox(),
+      painted = frame(1);
+    box.offer(painted);
+    box.beginAck(1);
+    box.offer(frame(2));
+    box.discardPending();
+    expect(box.ack(1)).toBeNull();
+    expect(box.offer(frame(3))?.sequence).toBe(3);
+  });
   it('returns the exact painted frame before advancing a queued presentation', () => {
     const box = new PresentationMailbox(),
       painted = frame(1),

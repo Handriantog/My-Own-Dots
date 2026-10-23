@@ -20,6 +20,7 @@ final class ActivityPointerSession {
     let warp: (CGPoint) -> Bool
     private(set) var active: Int?
     private var retired = 0
+    private var pendingMove: String?
     init(session: String, sample: @escaping () -> NativePointerSample, allowed: @escaping () -> Bool, bounds: @escaping () -> [CGRect], warp: @escaping (CGPoint) -> Bool) {
         self.session=session; self.sample=sample; self.allowed=allowed; self.bounds=bounds; self.warp=warp
     }
@@ -28,7 +29,36 @@ final class ActivityPointerSession {
         guard let n=value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite else { return nil }
         return n.doubleValue
     }
-    func command(_ text: String) -> [String: Any]? {
+    // Receiving a command never executes movement. Retirement can cancel work
+    // buffered earlier in the same input batch before the next execution tick.
+    func submit(_ text: String) -> [[String: Any]] {
+        guard text.utf8.count <= 2048, let data=text.data(using:.utf8),
+              let value=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any] else { return [] }
+        if value["op"] as? String == "move" {
+            let previous=pendingMove
+            pendingMove=text
+            return previous.flatMap { command($0, allowWarp:false) }.map { [$0] } ?? []
+        }
+        guard let reply=command(text) else { return [] }
+        if value["op"] as? String == "end", reply["ok"] as? Bool == true,
+           let pending=pendingMove {
+            // Leave a replacement generation queued; retiring an older start
+            // must not cancel newer activity.
+            let pendingData=pending.data(using:.utf8)!
+            let queued=(try? JSONSerialization.jsonObject(with:pendingData)) as? [String:Any]
+            if let generation=number(queued?["generation"]), generation <= Double(retired) {
+                pendingMove=nil
+                return (command(pending, allowWarp:false).map { [$0] } ?? []) + [reply]
+            }
+        }
+        return [reply]
+    }
+    func flush() -> [[String: Any]] {
+        guard let pending=pendingMove else { return [] }
+        pendingMove=nil
+        return command(pending).map { [$0] } ?? []
+    }
+    func command(_ text: String, allowWarp: Bool = true) -> [String: Any]? {
         guard text.utf8.count<=2048, let data=text.data(using:.utf8),
               let value=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any],
               value["kind"] as? String == "activity", value["helperSession"] as? String == session,
@@ -60,6 +90,7 @@ final class ActivityPointerSession {
         let physical=sample()
         guard !physical.down, physical.revision==revision,
               physical.sampledAtMs>=sampledAt, physical.sampledAtMs-sampledAt<=200 else { return reply }
+        guard allowWarp else { return reply }
         reply["ok"]=warp(target)
         return reply
     }
@@ -268,7 +299,7 @@ final class DesktopObserver {
               "down": CGEventSource.buttonState(.combinedSessionState, button: .left), "observedAtMs": clock])
     }
     func command(_ value: String) {
-        if value.first == "{" { if let reply=activityPointer.command(value) { emit(reply) }; return }
+        if value.first == "{" { for reply in activityPointer.submit(value) { emit(reply) }; return }
         switch value {
         case "active": requestedActive = true
         case "idle": requestedActive = false
@@ -303,6 +334,7 @@ final class DesktopObserver {
             guard let self = self else { return }
             let now = self.clock
             self.pointer()
+            for reply in self.activityPointer.flush() { self.emit(reply) }
             if now >= self.nextObserverRefresh { self.refreshObservers(); self.nextObserverRefresh = now + 2000 }
             if (self.dirty && now - self.lastObservation >= 34) || now - self.lastObservation >= self.cadence { self.dirty = false; self.snapshot() }
         }

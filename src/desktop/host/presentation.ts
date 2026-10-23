@@ -56,6 +56,9 @@ export class PresentationMailbox {
   stalled(nowMs: number): boolean {
     return !!this.inFlight && nowMs - this.inFlight.sentAtMs > 500;
   }
+  discardPending(): void {
+    this.pending = null;
+  }
   reset(): void {
     this.acknowledging = false;
     this.inFlight = null;

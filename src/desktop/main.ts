@@ -383,6 +383,8 @@ async function start(): Promise<void> {
       systemPreferences.getAnimationSettings().prefersReducedMotion,
     handoff: (frame) => simulation.adoptActivity(frame),
     changed: () => {
+      // A phase/authority change makes every queued activity pose obsolete.
+      mailbox.discardPending();
       if (activity.driver?.animating && overlay && !overlay.isDestroyed()) {
         overlay.setIgnoreMouseEvents(true, { forward: true });
         ignored = true;

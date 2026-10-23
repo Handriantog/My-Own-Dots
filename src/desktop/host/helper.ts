@@ -28,6 +28,7 @@ type Factory = (executable: string, args: string[]) => HelperProcess;
 export class HelperSupervisor implements ActivityPointerTransport {
   private activityGeneration: number | null = null;
   private requestId = 0;
+  private retirement?: { generation: number; promise: Promise<void> };
   private pending: {
     id: number;
     generation: number;
@@ -68,24 +69,46 @@ export class HelperSupervisor implements ActivityPointerTransport {
     });
     return value.ok === true;
   }
-  end(generation: number): void {
+  end(generation: number): Promise<void> {
+    if (this.retirement && generation <= this.retirement.generation)
+      return this.retirement.promise;
     if (this.activityGeneration === generation) this.activityGeneration = null;
     if (this.pending?.generation === generation)
       this.rejectPending('Activity stopped.');
-    const session = this.current(performance.now())?.helperSession;
-    if (session && this.child?.stdin.writable)
-      this.child.stdin.write(
-        JSON.stringify({
-          kind: 'activity',
-          op: 'end',
-          generation,
-          requestId: ++this.requestId,
-          helperSession: session,
-        }) + '\n',
-      );
+    // Stop is complete only after the native retirement ack, or confirmed process exit.
+    const child = this.child,
+      exited = this.exited;
+    const waitForExit = () =>
+      new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () =>
+            reject(Error('Native pointer retirement could not be confirmed.')),
+          1000,
+        );
+        void exited.then(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    const retirement = !child
+      ? waitForExit()
+      : this.requestActivity('end', generation)
+          .then((reply) => {
+            if (reply.ok !== true)
+              throw Error('Native pointer retirement failed.');
+          })
+          .catch(async () => {
+            child.kill('SIGKILL');
+            this.failed(child);
+            await waitForExit();
+          });
+    // Lifecycle notifications intentionally do not await; callers still receive rejection.
+    void retirement.catch(() => {});
+    this.retirement = { generation, promise: retirement };
+    return retirement;
   }
   private requestActivity(
-    op: 'begin' | 'move',
+    op: 'begin' | 'move' | 'end',
     generation: number,
     fields: Record<string, number> = {},
   ): Promise<Record<string, unknown>> {
@@ -99,7 +122,7 @@ export class HelperSupervisor implements ActivityPointerTransport {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.rejectPending('Native pointer timeout.');
-        child.kill();
+        child.kill('SIGKILL');
         this.failed(child);
       }, 250);
       this.pending = { id, generation, session, resolve, reject, timer };
@@ -158,6 +181,7 @@ export class HelperSupervisor implements ActivityPointerTransport {
   }
 
   private child: HelperProcess | null = null;
+  private exited: Promise<void> = Promise.resolve();
   private observations = new ObservationStream();
   private retry: ReturnType<typeof setTimeout> | null = null;
   private attempts = 0;
@@ -197,7 +221,7 @@ export class HelperSupervisor implements ActivityPointerTransport {
     const child = this.child;
     this.child = null;
     this.observations.resetSession();
-    child?.kill();
+    child?.kill('SIGKILL');
   }
   private launch(): void {
     if (this.stopped) return;
@@ -213,6 +237,12 @@ export class HelperSupervisor implements ActivityPointerTransport {
       return;
     }
     this.child = child;
+    this.exited = new Promise<void>((resolve) => {
+      child.once('exit', () => resolve());
+      child.once('error', () => {
+        if (!child.pid) resolve();
+      });
+    });
     let buffer = '';
     this.command(this.mode);
     child.stdin.on('error', () => {});
@@ -221,7 +251,7 @@ export class HelperSupervisor implements ActivityPointerTransport {
       if (this.child !== child || this.stopped) return;
       buffer += chunk.toString('utf8');
       if (buffer.length > 1_048_576) {
-        child.kill();
+        child.kill('SIGKILL');
         this.failed(child);
         return;
       }

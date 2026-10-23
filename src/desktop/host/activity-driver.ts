@@ -26,7 +26,7 @@ export interface ActivityPointerTransport {
     point: Point,
     sample: PhysicalPointer,
   ): Promise<boolean>;
-  end(generation: number): void;
+  end(generation: number): void | Promise<void>;
 }
 export interface ActivityEnvironment {
   now(): number;
@@ -56,12 +56,14 @@ interface Session {
   from: SimulationFrame;
   last?: SimulationFrame;
   ready: boolean;
+  pointerStarted: boolean;
   phase: number;
 }
 
 /** A single selected desktop Dot can own one activity. Native generations outlive async starts. */
 export class DesktopActivityDriver implements ActivityDriver {
   private generation = 0;
+  private retirement: Promise<void> = Promise.resolve();
   private session?: Session;
   private painted = new WeakMap<
     SimulationFrame,
@@ -95,7 +97,7 @@ export class DesktopActivityDriver implements ActivityDriver {
       throw Error('The selected desktop Dot is unavailable.');
     if (definition.pointer && !this.env.accessibility())
       throw Error('Accessibility setup needed to control the pointer.');
-    this.stop();
+    const retirement = this.stop();
     const from = this.env.frame();
     const session: Session = {
       generation: ++this.generation,
@@ -106,10 +108,14 @@ export class DesktopActivityDriver implements ActivityDriver {
       startedAt: this.env.now(),
       from,
       ready: false,
+      pointerStarted: false,
       phase: 0,
     };
     this.session = session;
     try {
+      await retirement;
+      if (this.session !== session)
+        throw Error('Activity stopped during start.');
       if (definition.keepAwake)
         session.assertion = this.env.sleep.start(
           definition.keepAwake === 'display'
@@ -117,9 +123,10 @@ export class DesktopActivityDriver implements ActivityDriver {
             : 'prevent-app-suspension',
         );
       if (definition.pointer) {
+        session.pointerStarted = true;
         let physical = await this.env.pointer.begin(session.generation);
         if (this.session !== session) {
-          this.env.pointer.end(session.generation);
+          await this.env.pointer.end(session.generation);
           throw Error('Activity stopped during start.');
         }
         if (
@@ -142,17 +149,23 @@ export class DesktopActivityDriver implements ActivityDriver {
       throw error;
     }
   }
-  stop(bindingId?: string): void {
+  stop(bindingId?: string): Promise<void> {
     const s = this.session;
-    if (!s || (bindingId && bindingId !== s.owner.bindingId)) return;
+    if (!s || (bindingId && bindingId !== s.owner.bindingId))
+      return this.retirement;
     this.session = undefined;
     try {
-      if (s.definition.pointer) this.env.pointer.end(s.generation);
+      if (s.pointerStarted) {
+        const native = this.env.pointer.end(s.generation);
+        this.retirement = Promise.all([this.retirement, native]).then(() => {});
+        void this.retirement.catch(() => {});
+      }
     } finally {
       if (s.assertion !== undefined) this.env.sleep.stop(s.assertion);
       if (s.last) this.env.handoff(s.last);
       this.env.changed();
     }
+    return this.retirement;
   }
   private authorized(s: Session): boolean {
     return (

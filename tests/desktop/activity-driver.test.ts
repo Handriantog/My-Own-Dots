@@ -85,6 +85,49 @@ function fixture() {
   };
 }
 describe('desktop activity driver', () => {
+  it('releases local effects immediately but awaits native retirement before stop resolves', async () => {
+    const f = fixture();
+    await f.driver.start({ bindingId: 'b', dotId: 'dot' }, definition);
+    let retire!: () => void;
+    f.env.pointer.end = () =>
+      new Promise<void>((resolve) => {
+        retire = resolve;
+      });
+    let stopped = false;
+    const stopping = Promise.resolve(f.driver.stop()).then(() => {
+      stopped = true;
+    });
+    await Promise.resolve();
+    expect(f.awake).toBe(0);
+    expect(f.driver.status('b')).toBe('inactive');
+    expect(stopped).toBe(false);
+    retire();
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+  it('cancels a replacement waiting for old retirement without starting or retiring a provisional native generation', async () => {
+    const f = fixture();
+    await f.driver.start({ bindingId: 'old', dotId: 'dot' }, definition);
+    let retire!: () => void;
+    const ended: number[] = [];
+    f.env.pointer.end = (generation) => {
+      ended.push(generation);
+      return new Promise<void>((r) => {
+        retire = r;
+      });
+    };
+    const replacement = f.driver.start(
+      { bindingId: 'new', dotId: 'dot' },
+      definition,
+    );
+    const rejected = expect(replacement).rejects.toThrow(/stopped/);
+    const stopping = f.driver.stop('new');
+    expect(f.awake).toBe(0);
+    expect(ended).toEqual([1]);
+    retire();
+    await rejected;
+    await stopping;
+  });
   it('keeps ordinary facial animation ticking without advancing activity-owned physics', () => {
     const f = fixture();
     f.sim.setOptions({ paused: false, reducedMotion: false, activity: true });
@@ -134,6 +177,7 @@ describe('desktop activity driver', () => {
       { bindingId: 'b', dotId: 'dot' },
       definition,
     );
+    await Promise.resolve();
     f.input({ revision: 2, down: false, idleMs: 0, sampledAtMs: 2000 });
     resolve({
       point: { x: 500, y: 400 },
@@ -216,6 +260,7 @@ describe('desktop activity driver', () => {
       { bindingId: 'b', dotId: 'dot' },
       definition,
     );
+    await Promise.resolve();
     f.driver.stop();
     expect(f.awake).toBe(0);
     resolve({
