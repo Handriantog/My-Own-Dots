@@ -35,6 +35,18 @@ function frame(sequence: number): PresentationFrame {
   };
 }
 describe('presentation sequencing', () => {
+  it('returns the exact painted frame before advancing a queued presentation', () => {
+    const box = new PresentationMailbox(),
+      painted = frame(1),
+      future = frame(2);
+    box.offer(painted);
+    box.offer(future);
+    expect(box.beginAck(1)).toBe(painted);
+    expect(box.beginAck(1)).toBeNull();
+    expect(box.beginAck(2)).toBeNull();
+    expect(box.ack(1)).toEqual(future);
+    expect(box.beginAck(1)).toBeNull();
+  });
   it('never passes negative zero to the native integer position API', () => {
     const negativeOriginDisplay = {
       ...display,
