@@ -79,3 +79,24 @@ it('exposes Abilities only to a trusted bundled frame and requires a gesture for
   await import('../../src/desktop/workspace-preload.js');
   expect(host.exposed.has('dotAbilities')).toBe(false);
 });
+it('refreshes the Ability catalog without activation while installation and assignment require a gesture', async () => {
+  await import('../../src/desktop/workspace-preload.js');
+  const bridge = host.exposed.get('dotAbilities') as DesktopAbilities;
+  vi.stubGlobal('navigator', { userActivation: { isActive: false } });
+  await bridge.catalog({});
+  expect(host.invoke).toHaveBeenCalledExactlyOnceWith(
+    'dot:abilities:catalog',
+    {},
+  );
+  host.invoke.mockClear();
+  const denied = { ok: false, code: 'permission_denied' };
+  expect(await bridge.install({ reviewId: 'fixture' })).toEqual(denied);
+  expect(await bridge.master({ digest: 'fixture', enabled: true })).toEqual(
+    denied,
+  );
+  expect(await bridge.applyAll({ digest: 'fixture' })).toEqual(denied);
+  expect(
+    await bridge.assign({ dotId: 'dot', digest: 'fixture', enabled: true }),
+  ).toEqual(denied);
+  expect(host.invoke).not.toHaveBeenCalled();
+});

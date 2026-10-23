@@ -526,7 +526,7 @@ Chrome component checks covered 760px and 360px layouts and master/apply control
 
 Review regressions cover restored individual enablement, competing versions on
 one Dot, unbound legacy restore trust, and clearing transient reconnect messages.
-Final full suite: **2,093 passed, one existing signing-identity skip** against a
+Final full suite: **2,094 passed, one existing signing-identity skip** against a
 dedicated PostgreSQL test container. Lint, types, format, production build,
 31 speech-worker and 17 native-speech protocol checks pass. The relocated, signed
 app smoke verifies native/JavaScript/Python runtimes and the offline Spotify helper.
@@ -543,3 +543,15 @@ current commit independently of this local record; see host PR #12 and collectio
 PR #2 for the push and pull-request runs. The final packaged app also verified the
 central page, per-Dot empty state, and manual Reconnect recovery. Spotify account
 actions were not repeated during this management-only verification.
+
+The final packaged-app check exposed a separate catalog preload bug: background
+refreshes were incorrectly gesture-gated, producing a false disconnected or load
+error once user activation expired. A failing preload regression reproduced it;
+classifying the read-only catalog alongside existing reads fixes it. The same
+regression verifies that install, master, apply-all and per-Dot assignment still
+require a user gesture. The full dedicated-database suite then passed again.
+
+The rebuilt package’s first offline Spotify-helper validation hit its five-second
+process deadline. The unchanged smoke command passed on rerun; no timeout or
+assertion was relaxed. Final UI reattachment through computer use is tracked
+separately from this automated result.
