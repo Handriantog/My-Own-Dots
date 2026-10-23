@@ -43,6 +43,11 @@ static int duckRun(void) {
     if(!original || original.intValue==0)return 0;
     NSNumber *lowered=@(original.intValue/4);
     BOOL applied=duckSend(duckEvent(pid,lowered))!=nil;
+    // Spotify can round a set by one percentage point. Capture its actual
+    // level once; later changes must match exactly to retain lease ownership.
+    NSNumber *confirmed=duckVolume(pid);
+    if(!confirmed)confirmed=duckVolume(pid);
+    if(!confirmed || abs(confirmed.intValue-lowered.intValue)>1 || confirmed.intValue>=original.intValue)return 0;
     emit(@{@"ducking":@(applied)});
     if(applied) {
         while(duckHeartbeat(parent)) {
@@ -50,11 +55,19 @@ static int duckRun(void) {
             NSNumber *current=duckVolume(pid);
             // A manual adjustment relinquishes this lease for the utterance.
             if(!current)break;
-            if(![current isEqual:lowered])return 0;
+            if(![current isEqual:confirmed])return 0;
         }
     }
     // Even a timed-out set may have applied. Never overwrite a manual change.
-    if(!apps[0].terminated && [duckVolume(pid) isEqual:lowered])
+    if(!apps[0].terminated && [duckVolume(pid) isEqual:confirmed]) {
         duckSend(duckEvent(pid,original));
+        // Correct once only when both writes show the same normalization.
+        // Without that evidence a one-point difference can be a manual edit.
+        NSNumber *restored=duckVolume(pid);
+        int correction=original.intValue-restored.intValue;
+        int adjusted=original.intValue+correction;
+        if(restored && abs(correction)==1 && correction==lowered.intValue-confirmed.intValue && adjusted>=0 && adjusted<=100 && !apps[0].terminated)
+            duckSend(duckEvent(pid,@(adjusted)));
+    }
     return 0;
 }

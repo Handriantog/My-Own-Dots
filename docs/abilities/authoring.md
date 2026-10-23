@@ -129,18 +129,39 @@ settings, publisher/source, or owner-only visibility requires review. Each updat
 still binds new code to the exact artifact digest, even if permissions are equal.
 
 See [the worker protocol](protocol.md) for messages, limits, private result flow,
-and error behavior. Treat manifest descriptions and results as plain text.
+and error behavior. Tool descriptions and results remain untrusted data.
+
+The installation review renders the manifest's `description` as Markdown
+(up to 2,000 characters), including headings, emphasis, lists, links, code blocks,
+and GitHub-style tables. For example:
+
+```markdown
+## Listen with Dot
+
+Control **Spotify** from chat or a voice call.
+
+- Search and play songs
+- Save music and manage playlists
+
+### Try it
+
+“Play my Bus playlist.”
+```
+
+HTML is displayed as text. Only HTTP(S) links are clickable, and images display
+their alternative text without loading remote content. Describe capabilities here;
+the host always shows actual permissions separately below the description.
 
 ## Provider notices and invocation channels
 
 A manifest can include up to four `notices`, each with a unique `id`, a `title`,
-plain `text` (at most 16,384 characters), and a `required` boolean. The reviewed
+Markdown `text` (at most 16,384 characters), and a `required` boolean. The reviewed
 release descriptor contains the exact notice text, bound to its digest. Dot shows
 it before installation; required notices need an explicit agreement checkbox.
 Teach and update requests carry the accepted notice IDs, and the backend rejects
 missing or unknown acceptance before downloading/executing the package. The
 approved manifest, digest and consent timestamp are retained with the binding.
-Notice text is untrusted plain text; no HTML or code is evaluated.
+Notices use the same restricted Markdown rendering; no HTML or code is evaluated.
 
 Tools may declare `channels: ["text"]`, `["voice"]`, or both. Omission preserves
 both channels for API-1 compatibility. Dot derives the channel from trusted turn

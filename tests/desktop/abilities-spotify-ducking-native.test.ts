@@ -18,7 +18,7 @@ describe.skipIf(process.platform !== 'darwin')(
         `#import <AppKit/AppKit.h>
 #import <Carbon/Carbon.h>
 #import <objc/runtime.h>
-static int volume=80, readCount=0, manual=-1, permissionStatus=0; static BOOL wrongTarget=NO, setError=NO; static int readError=0; static NSMutableArray *sets;
+static int volume=80, readCount=0, manual=-1, manualAt=2, rounding=0, roundRestore=0, permissionStatus=0; static BOOL wrongTarget=NO, setError=NO; static int readError=0; static NSMutableArray *sets;
 static OSStatus fixturePermission(const AEAddressDesc *target, AEEventClass cls, AEEventID event, Boolean ask) {
  pid_t pid=0; AEGetDescData(target,&pid,sizeof(pid));
  if(target->descriptorType!=typeKernelProcessID || pid!=1234 || cls!=kAECoreSuite || (event!=kAEGetData && event!=kAESetData) || ask) wrongTarget=YES;
@@ -40,11 +40,11 @@ static NSAppleEventDescriptor *sendFixture(NSAppleEventDescriptor *request, SEL 
  if([[property descriptorForKeyword:keyAEKeyData] typeCodeValue]!='pVol') wrongTarget=YES;
  NSAppleEventDescriptor *reply=[NSAppleEventDescriptor recordDescriptor];
  if(request.eventID==kAEGetData) {
-   readCount++; if(readCount>1 && manual>=0) volume=manual;
-   if(readError==1 || (readError==2 && readCount==2)) [reply setParamDescriptor:[NSAppleEventDescriptor descriptorWithInt32:-1743] forKeyword:keyErrorNumber];
+   readCount++; if(readCount>=manualAt && manual>=0) volume=manual;
+   if(readError==1 || (readError>1 && readCount==readError)) [reply setParamDescriptor:[NSAppleEventDescriptor descriptorWithInt32:-1743] forKeyword:keyErrorNumber];
    else [reply setParamDescriptor:[NSAppleEventDescriptor descriptorWithInt32:volume] forKeyword:keyDirectObject];
  } else if(request.eventID==kAESetData) {
-   volume=[[request paramDescriptorForKeyword:keyAEData] int32Value]; [sets addObject:@(volume)];
+   volume=[[request paramDescriptorForKeyword:keyAEData] int32Value]; [sets addObject:@(volume)]; if(sets.count==1 || roundRestore)volume+=rounding;
    if(setError) [reply setParamDescriptor:[NSAppleEventDescriptor descriptorWithInt32:-1712] forKeyword:keyErrorNumber];
  } else wrongTarget=YES;
  return reply;
@@ -55,7 +55,7 @@ static NSAppleEventDescriptor *sendFixture(NSAppleEventDescriptor *request, SEL 
 #include ${JSON.stringify(resolve('native/spotify-control/main.m'))}
 #undef main
 int main(int argc,const char *argv[]) { @autoreleasepool {
- sets=[NSMutableArray new]; if(argc>1) volume=atoi(argv[1]); if(argc>2) manual=atoi(argv[2]); if(argc>3) permissionStatus=atoi(argv[3]); if(argc>4) readError=atoi(argv[4]); if(argc>5) setError=atoi(argv[5]);
+ sets=[NSMutableArray new]; if(argc>1) volume=atoi(argv[1]); if(argc>2) manual=atoi(argv[2]); if(argc>3) permissionStatus=atoi(argv[3]); if(argc>4) readError=atoi(argv[4]); if(argc>5) setError=atoi(argv[5]); if(argc>6)rounding=atoi(argv[6]); if(argc>7)manualAt=atoi(argv[7]); if(argc>8)roundRestore=atoi(argv[8]);
  method_setImplementation(class_getInstanceMethod(NSAppleEventDescriptor.class,@selector(sendEventWithOptions:timeout:error:)),(IMP)sendFixture);
  const char *args[]={"fixture","--duck"}; int result=nativeMain(2,args);
  NSData *output=[NSJSONSerialization dataWithJSONObject:@{@"volume":@(volume),@"sets":sets,@"wrongTarget":@(wrongTarget)} options:0 error:NULL]; fwrite(output.bytes,1,output.length,stderr);
@@ -90,7 +90,7 @@ int main(int argc,const char *argv[]) { @autoreleasepool {
           (error, _out, stderr) =>
             error ? reject(error) : resolve(JSON.parse(stderr)),
         );
-        if (args[3] === 2) {
+        if ((args[3] ?? 0) > 1) {
           child.stdin!.write('1\n');
           child.stdout!.once('data', () => child.stdin!.end('1\n'));
         } else if (heartbeatLost) child.stdin!.write('1\n');
@@ -121,13 +121,16 @@ int main(int argc,const char *argv[]) { @autoreleasepool {
         wrongTarget: false,
       });
     });
-    it('restores after a transient volume-read error during speech', async () => {
-      expect(await run([80, -1, 0, 2])).toEqual({
-        volume: 80,
-        sets: [20, 80],
-        wrongTarget: false,
-      });
-    });
+    it.each([2, 3])(
+      'restores after a transient volume-read error at read %s',
+      async (readError) => {
+        expect(await run([80, -1, 0, readError])).toEqual({
+          volume: 80,
+          sets: [20, 80],
+          wrongTarget: false,
+        });
+      },
+    );
     it('preserves a manual volume change', async () => {
       expect(await run([80, 33])).toEqual({
         volume: 33,
@@ -135,6 +138,43 @@ int main(int argc,const char *argv[]) { @autoreleasepool {
         wrongTarget: false,
       });
     });
+    it.each([-1, 1])(
+      'restores when Spotify rounds the applied volume by %s point',
+      async (rounding) => {
+        expect(await run([80, -1, 0, 0, 0, rounding])).toEqual({
+          volume: 80,
+          sets: [20, 80],
+          wrongTarget: false,
+        });
+      },
+    );
+    it('preserves a later one-point manual change after confirming a rounded volume', async () => {
+      expect(await run([80, 20, 0, 0, 0, -1, 3])).toEqual({
+        volume: 20,
+        sets: [20],
+        wrongTarget: false,
+      });
+    });
+    it.each([-1, 1])(
+      'corrects a one-point restore rounding of %s without volume drift',
+      async (rounding) => {
+        expect(await run([80, -1, 0, 0, 0, rounding, 2, 1])).toEqual({
+          volume: 80,
+          sets: [20, 80, 80 - rounding],
+          wrongTarget: false,
+        });
+      },
+    );
+    it.each([79, 81])(
+      'preserves a manual change to %s after restoring an unrounded level',
+      async (manual) => {
+        expect(await run([80, manual, 0, 0, 0, 0, 4])).toEqual({
+          volume: manual,
+          sets: [20, 80],
+          wrongTarget: false,
+        });
+      },
+    );
     it('never raises a previously silent app', async () => {
       expect(await run([0])).toEqual({
         volume: 0,

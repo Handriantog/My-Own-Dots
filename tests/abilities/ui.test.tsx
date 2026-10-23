@@ -545,3 +545,71 @@ it('clears a transient catalog error after the host recovers', async () => {
     vi.useRealTimers();
   }
 });
+
+it('renders Ability installation descriptions and notices as Markdown', () => {
+  const rich = {
+    ...manifest,
+    description:
+      '## Listen with Dot\n\nPlay **music** together.\n\n- Search songs\n- Manage playlists\n\n```text\nPlay my Bus playlist\n```\n\n[Setup guide](https://example.com/setup)',
+    notices: [
+      {
+        id: 'setup',
+        title: 'Setup',
+        text: '### Before you start\n\n1. Open Spotify\n2. Enable **Automation**\n\n| Feature | Ready |\n| --- | --- |\n| Playback | Yes |',
+        required: false,
+      },
+    ],
+  };
+  const html = renderToStaticMarkup(
+    <PermissionReview
+      mode="install"
+      dotName=""
+      review={{
+        ...review,
+        descriptor: { ...review.descriptor, manifest: rich },
+      }}
+      onTeach={async () => {}}
+      onCancel={() => {}}
+    />,
+  );
+  expect(html).toContain('<h2>Listen with Dot</h2>');
+  expect(html).toContain('<strong>music</strong>');
+  expect(html).toContain('<li>Search songs</li>');
+  expect(html).toContain(
+    '<pre><code class="language-text">Play my Bus playlist',
+  );
+  expect(html).toContain(
+    'href="https://example.com/setup" target="_blank" rel="noreferrer"',
+  );
+  expect(html).toContain('<h3>Before you start</h3>');
+  expect(html).toContain('<table>');
+  expect(html).toContain('Review Ability permissions');
+  expect(html).toContain('Install</button>');
+});
+
+it('keeps publisher Markdown inert and avoids remote image requests', () => {
+  const description =
+    '<script>alert(1)</script>\n\n<img src="https://example.com/track.png" onerror="alert(1)">\n\n![Preview](https://example.com/preview.png)\n\n[Bad](javascript:alert%281%29) [Local](file:///tmp/example) [Relative](/api/test) [Data](data:text/html,test)';
+  const html = renderToStaticMarkup(
+    <PermissionReview
+      dotName="Jane"
+      review={{
+        ...review,
+        descriptor: {
+          ...review.descriptor,
+          manifest: { ...manifest, description },
+        },
+      }}
+      onTeach={async () => {}}
+      onCancel={() => {}}
+    />,
+  );
+  expect(html).not.toContain('<script');
+  expect(html).not.toContain('<img');
+  expect(html).not.toContain('href="javascript:');
+  expect(html).not.toContain('href="file:');
+  expect(html).not.toContain('href="/api/');
+  expect(html).not.toContain('href="data:');
+  expect(html).not.toContain('<link rel="preload"');
+  expect(html).toContain('Preview');
+});

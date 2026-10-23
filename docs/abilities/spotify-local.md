@@ -59,8 +59,13 @@ While a Dot with approved Spotify volume control speaks in a local voice call,
 Spotify temporarily drops to 25% of its current app volume. The original level
 returns after speech, interruption, speaker mute, call end or Dot quitting. A
 short pause between audio frames does not repeatedly lower it. Manual Spotify
-volume changes take precedence. System volume stays unchanged. This requires
+volume changes detected while lowered take precedence. System volume stays unchanged. This requires
 existing Automation access; automatic ducking never asks for new OS permission.
+The lease tracks Spotify's confirmed lowered level and corrects a one-point
+restore difference only when it matches the rounding observed while lowering.
+Spotify volume reads and writes are separate operations; a simultaneous manual
+adjustment during that brief readback window cannot always be distinguished from
+rounding.
 If Spotify stops responding or access is revoked, restoration is best effort.
 
 All Dots share the currently signed-in Spotify account and player. Disable and

@@ -5,6 +5,7 @@ import type {
   JsonValue,
 } from '../../shared/abilities/types';
 import { validateValue } from '../../shared/abilities/manifest';
+import { AbilityMarkdown } from './AbilityMarkdown';
 import './abilities.css';
 import {
   appActionLabels,
@@ -112,7 +113,7 @@ export function PermissionReview({
           </span>
         </div>
       </div>
-      <p>{manifest.description}</p>
+      <AbilityMarkdown>{manifest.description}</AbilityMarkdown>
       {review.localSource && (
         <p>
           Local package: <code>{review.localSource}</code>
@@ -204,7 +205,9 @@ export function PermissionReview({
         <div key={notice.id} className="ability-notice">
           <details>
             <summary>{notice.title}</summary>
-            <div className="ability-notice-text">{notice.text}</div>
+            <div className="ability-notice-text">
+              <AbilityMarkdown>{notice.text}</AbilityMarkdown>
+            </div>
           </details>
           {notice.required && (
             <label>

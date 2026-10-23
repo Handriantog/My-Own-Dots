@@ -715,3 +715,49 @@ across 244 files. Formatting, lint, TypeScript, both speech protocol suites
 use the Ability acceptance filename prefix so the macOS CI job executes them.
 Local macOS acceptance passes all 374 integration tests and both 14-probe native
 profiles. Packaged live acceptance and final remote status are recorded in PR #12.
+
+## Voice tools, volume restoration and Markdown (October 24, 2026)
+
+Owner feedback exposed two gaps in the initial voice-volume build. The High
+voice dispatcher created its task agent without the Ability service, so an
+approved Spotify request completed with an inability message and no host
+invocation. It now uses the same service as ordinary chat. A failing-then-passing
+integration test runs the real dispatcher, task agent, SQLite repositories and
+Ability service, substituting only inference and the final host transport. It
+checks the voice channel, active Dot, parent conversation and enabled/revoked
+permissions, including the workspace master switch.
+
+A temporary owned diagnostic app reproduced the volume failure with the real
+paused Spotify player: requested 12, observed 11, followed by an early manual-edit
+exit and no restoration. The native lease now confirms the applied level once
+(within one point of the request) and compares subsequent observations exactly
+against that value. The same experiment also showed one-point rounding on restore.
+A bounded corrective write requires the same normalization on both writes. Native
+fixtures cover both rounding directions, initial-only rounding, later one-point
+manual changes, transient reads and uncertain writes. Review caught an overly
+broad correction; new regressions preserve manual 79/81 after restoring an
+unrounded 80. Simultaneous edits matching normalization during the brief non-atomic
+readback window remain indistinguishable and are documented.
+
+The live diagnostic then reported original 48, confirmed lower 11 and restored
+48 on two successive runs. Spotify remained paused, its observed 50% baseline was
+restored after testing, and the temporary app was closed. This proves native
+restoration against this Spotify version; microphone-to-playback acceptance of
+the rebuilt app remains separate.
+
+Installation descriptions and notices use the existing Markdown renderer with
+headings, emphasis, lists, code, tables and HTTP(S) links. Raw HTML stays inert,
+images display alternative text without remote requests, and actual permissions
+and consent controls remain host-owned. Existing consent regressions and new
+rendering/security cases pass. Chrome native inspection verified actual components
+with a synthetic Spotify Markdown description at 760px/360px, including dark mode,
+expanded notices, tables and Install/Cancel controls. Existing sealed packages
+retain their exact publisher text; authors can format future descriptions as
+Markdown without changing the protocol or permissions.
+
+Independent review found no remaining blocking code findings after the correction.
+The final local suite passes **2,162 tests with one existing signing-identity skip**
+across 245 files. Format, lint, TypeScript, production build and both speech
+protocol suites (31 + 17) pass. macOS Ability acceptance passes 403 integration
+tests and both 14-probe native profiles. Packaged and current-commit remote
+results are recorded in PR #12.
