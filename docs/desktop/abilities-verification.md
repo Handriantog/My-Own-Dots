@@ -761,3 +761,43 @@ across 245 files. Format, lint, TypeScript, production build and both speech
 protocol suites (31 + 17) pass. macOS Ability acceptance passes 403 integration
 tests and both 14-probe native profiles. Packaged and current-commit remote
 results are recorded in PR #12.
+
+## Ability browser (October 24, 2026)
+
+Abilities now uses a searchable installed/GitHub list and selected detail view,
+following the VS Code Extensions hierarchy. The detail header contains version,
+publisher and lifecycle controls, with full README and Permissions views below.
+New installs stay disabled; the existing permission review remains the consent
+boundary. Uninstall confirms removal of the selected version from every Dot,
+stops and disconnects matching bindings, removes the package and retains private
+files. Separately approved other versions remain installed.
+
+Discovery reads the fixed public collection through compact Git ref metadata and
+pins catalog/README reads to that commit. A live read returned main revision
+`2b3193ce33f7acd2c954a656ad47165e0a53d7e1`, its planned Spotify entry and 2,637-byte
+README. The collection has no released Ability yet. Installed management remains
+independent of GitHub availability. Local README reads accept only known installed
+digests and a fixed filename, reject links/nonregular files, and cap reads at
+64 KiB. Publisher Markdown remains inert with no remote images.
+
+Regressions cover list/search/Back, full Markdown, offline fallback, stale reads,
+install consent and double submission, master/apply-all, confirmed removal,
+read-only IPC, trusted-frame/digest routing, bounded/pinned public reads, local
+file confinement, active revocation, retry and assignment/update races. Independent
+review found stale prior consent when importing another package; GitHub and local
+regressions failed before the fix and pass afterward. Compact ref lookup also has
+a failing-then-passing large-commit regression. A separately approved update can
+win the identity lock and remain usable after the old version is removed; the
+confirmation and concurrency test make that version scope explicit.
+
+Chrome native inspection checked real components with a synthetic bridge at
+1,120px and 360px in light/dark themes: list/detail navigation, lifecycle controls,
+permissions, install review/footer, long folder paths and a 100-character publisher.
+No account or owner installation was changed by those UI fixtures.
+
+Final local validation passes **2,191 tests with one existing signing-identity
+skip** across 247 files, using dedicated test PostgreSQL. Format, lint, TypeScript,
+production/desktop builds and speech protocol checks (31 + 17 tests) pass. macOS
+Ability acceptance passes 431 integration tests plus both 14-probe sandbox profiles.
+Packaged smoke, installed-app inspection and current-commit remote results are
+recorded in PR #12. The prior real microphone-call acceptance remains separate.

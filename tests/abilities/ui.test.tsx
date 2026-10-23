@@ -13,6 +13,7 @@ import {
   OwnerResultView,
 } from '../../src/client/abilities/AbilityResultCard.tsx';
 import { parseManifest } from '../../src/shared/abilities/manifest.ts';
+import type { AbilityLibrary } from '../../src/shared/abilities/library.ts';
 import type { DesktopAbilities } from '../../src/shared/abilities/desktop.ts';
 import manifestFixture from '../fixtures/abilities/manifest.json';
 let root: ReactTestRenderer;
@@ -77,6 +78,17 @@ function bridge() {
         }[],
       },
     })),
+    browse: vi.fn(async () => ({
+      ok: true,
+      value: { sourceCommit: 'b'.repeat(40), entries: [] } as AbilityLibrary,
+    })),
+    documentation: vi.fn(async () => ({
+      ok: true,
+      value: {
+        markdown: '# Full guide\n\nRead **everything** here.' as string | null,
+      },
+    })),
+    uninstall: vi.fn(async () => ({ ok: true, value: {} })),
     master: vi.fn(async () => ({ ok: true, value: {} })),
     applyAll: vi.fn(async () => ({ ok: true, value: {} })),
     assign: vi.fn(async () => ({ ok: true, value: binding })),
@@ -131,7 +143,12 @@ async function mount() {
 const button = (label: string) =>
   root.root
     .findAllByType('button')
-    .find((item) => item.children.join('') === label)!;
+    .find(
+      (item) =>
+        item.props['aria-label'] === label ||
+        item.children.filter((child) => typeof child === 'string').join('') ===
+          label,
+    )!;
 describe('teach and manage Abilities', () => {
   it('shows source, selected Dot, pinned version, runtime and actual access before Teach', async () => {
     bridge();
@@ -167,6 +184,7 @@ describe('teach and manage Abilities', () => {
     await act(async () => {
       root = create(<AbilityManager />);
     });
+    await act(async () => button('Add Ability').props.onClick());
     const input = root.root.findByProps({
       'aria-label': 'GitHub release descriptor',
     });
@@ -189,6 +207,8 @@ describe('teach and manage Abilities', () => {
     await act(async () => {
       release();
     });
+    expect(text()).not.toContain('Install in workspace');
+    await act(async () => button('Install').props.onClick());
     expect(text()).toContain('Install in workspace');
     api.install.mockResolvedValueOnce({
       ok: false,
@@ -255,6 +275,11 @@ describe('teach and manage Abilities', () => {
     await act(async () => {
       root = create(<AbilityManager />);
     });
+    await act(async () =>
+      root.root
+        .findByProps({ 'aria-label': `Open ${manifest.name}` })
+        .props.onClick(),
+    );
     expect(button('Apply to all Dot').props.disabled).toBe(true);
     await act(async () => {
       await button('Enable').props.onClick();
@@ -613,3 +638,214 @@ it('keeps publisher Markdown inert and avoids remote image requests', () => {
   expect(html).not.toContain('<link rel="preload"');
   expect(html).toContain('Preview');
 });
+
+const installed = {
+  digest: binding.digest,
+  manifest,
+  enabled: true,
+  restored: false,
+  settings: {},
+  enabledDots: 2,
+};
+const availableEntry = {
+  id: 'drawing',
+  name: 'Drawing',
+  publisher: 'Handriantog',
+  license: 'MIT',
+  version: null,
+  status: 'planned' as const,
+  sourceUrl: 'https://github.com/Handriantog/My-Own-Dot-Abilities',
+};
+async function openAbility(name: string) {
+  await act(async () =>
+    root.root.findByProps({ 'aria-label': `Open ${name}` }).props.onClick(),
+  );
+}
+async function manager() {
+  await act(async () => {
+    root = create(<AbilityManager />);
+  });
+}
+it('starts with installed and GitHub lists, searches, and opens full Markdown on selection', async () => {
+  const api = bridge();
+  api.catalog.mockResolvedValue({
+    ok: true,
+    value: { available: true, installations: [installed] },
+  });
+  api.browse.mockResolvedValue({
+    ok: true,
+    value: { sourceCommit: 'b'.repeat(40), entries: [availableEntry] },
+  });
+  await manager();
+  expect(text()).toContain('Drawing');
+  expect(button('Disable')).toBeUndefined();
+  expect(api.documentation).not.toHaveBeenCalled();
+  await openAbility(manifest.name);
+  expect(api.documentation).toHaveBeenCalledWith({
+    source: 'installed',
+    digest: binding.digest,
+  });
+  expect(
+    root.root
+      .findAllByType('h1')
+      .some((x) => x.children.join('') === manifest.name),
+  ).toBe(true);
+  expect(text()).toContain('Full guide');
+  expect(
+    root.root
+      .findAllByType('strong')
+      .some((x) => x.children.join('') === 'everything'),
+  ).toBe(true);
+  await act(async () => button('Back to Abilities').props.onClick());
+  expect(button('Disable')).toBeUndefined();
+  await act(async () =>
+    root.root
+      .findByProps({ 'aria-label': 'Search Abilities' })
+      .props.onChange({ target: { value: 'draw' } }),
+  );
+  expect(
+    root.root.findAllByProps({ 'aria-label': `Open ${manifest.name}` }),
+  ).toHaveLength(0);
+  await openAbility('Drawing');
+  expect(api.documentation).toHaveBeenLastCalledWith({
+    source: 'library',
+    id: 'drawing',
+    sourceCommit: 'b'.repeat(40),
+  });
+  expect(button('Install')).toBeUndefined();
+  expect(text()).toContain('Not yet released');
+});
+it('keeps installed controls usable when GitHub is offline and falls back to the description', async () => {
+  const api = bridge();
+  api.catalog.mockResolvedValue({
+    ok: true,
+    value: { available: true, installations: [installed] },
+  });
+  api.browse.mockRejectedValue(new Error('offline'));
+  api.documentation.mockRejectedValue(new Error('missing'));
+  await manager();
+  await openAbility(manifest.name);
+  expect(text()).toContain('Could not load the GitHub collection');
+  expect(text()).toContain(manifest.description);
+  expect(button('Disable').props.disabled).toBe(false);
+});
+it('reviews a released GitHub entry before installation and sends nothing on cancellation', async () => {
+  const api = bridge();
+  api.browse.mockResolvedValue({
+    ok: true,
+    value: {
+      sourceCommit: 'b'.repeat(40),
+      entries: [
+        {
+          ...availableEntry,
+          status: 'released',
+          version: '0.1.0',
+          descriptorUrl: review.descriptorUrl,
+        },
+      ],
+    },
+  });
+  await manager();
+  await openAbility('Drawing');
+  await act(async () => button('Install').props.onClick());
+  expect(api.reviewInstall).toHaveBeenCalledWith({ url: review.descriptorUrl });
+  expect(text()).toContain('Review Ability permissions');
+  expect(api.install).not.toHaveBeenCalled();
+  await act(async () => button('Cancel').props.onClick());
+  expect(api.install).not.toHaveBeenCalled();
+});
+it('requires confirmation before uninstalling from every Dot', async () => {
+  const api = bridge();
+  api.catalog.mockResolvedValue({
+    ok: true,
+    value: { available: true, installations: [installed] },
+  });
+  await manager();
+  await openAbility(manifest.name);
+  await act(async () => button('Uninstall').props.onClick());
+  expect(api.uninstall).not.toHaveBeenCalled();
+  expect(text()).toContain('all Dots');
+  await act(async () => button('Cancel').props.onClick());
+  expect(api.uninstall).not.toHaveBeenCalled();
+  await act(async () => button('Uninstall').props.onClick());
+  await act(async () => button('Uninstall from all Dots').props.onClick());
+  expect(api.uninstall).toHaveBeenCalledWith({
+    digest: binding.digest,
+    removeFromDots: true,
+  });
+  expect(button('Disable')).toBeUndefined();
+});
+it('ignores documentation returned after selecting a different Ability', async () => {
+  const api = bridge();
+  api.catalog.mockResolvedValue({
+    ok: true,
+    value: { available: true, installations: [installed] },
+  });
+  api.browse.mockResolvedValue({
+    ok: true,
+    value: { sourceCommit: 'b'.repeat(40), entries: [availableEntry] },
+  });
+  let resolve!: (value: { ok: boolean; value: { markdown: string } }) => void;
+  api.documentation.mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  await manager();
+  await openAbility(manifest.name);
+  await openAbility('Drawing');
+  await act(async () =>
+    resolve({ ok: true, value: { markdown: '# Wrong previous guide' } }),
+  );
+  expect(text()).not.toContain('Wrong previous guide');
+  expect(text()).toContain('Full guide');
+});
+
+it.each(['GitHub', 'local'])(
+  'clears the previous consent when importing another %s Ability',
+  async (source) => {
+    const api = bridge();
+    const nextReview = {
+      ...review,
+      id: randomUUID(),
+      descriptor: {
+        ...review.descriptor,
+        manifest: { ...manifest, id: 'second', name: 'Second Ability' },
+      },
+    };
+    const local = vi.fn(async () => ({ ok: true, value: nextReview }));
+    window.dotAbilities!.reviewInstallLocal = local as never;
+    await manager();
+    await act(async () => button('Add Ability').props.onClick());
+    await act(async () =>
+      root.root
+        .findByProps({ 'aria-label': 'GitHub release descriptor' })
+        .props.onChange({ target: { value: review.descriptorUrl } }),
+    );
+    await act(async () => button('Review').props.onClick());
+    await act(async () => button('Install').props.onClick());
+    expect(root.root.findByType(PermissionReview).props.review.id).toBe(
+      review.id,
+    );
+    await act(async () => button('Add Ability').props.onClick());
+    api.reviewInstall.mockResolvedValueOnce({ ok: true, value: nextReview });
+    await act(async () =>
+      button(
+        source === 'GitHub' ? 'Review' : 'Choose local Ability…',
+      ).props.onClick(),
+    );
+    expect(root.root.findAllByType(PermissionReview)).toHaveLength(0);
+    expect(text()).toContain('Second Ability');
+    expect(api.install).not.toHaveBeenCalled();
+    await act(async () => button('Install').props.onClick());
+    expect(root.root.findByType(PermissionReview).props.review.id).toBe(
+      nextReview.id,
+    );
+    await act(async () => button('Install').props.onClick());
+    expect(api.install).toHaveBeenCalledWith({
+      reviewId: nextReview.id,
+      settings: {},
+    });
+  },
+);

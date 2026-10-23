@@ -100,3 +100,21 @@ it('refreshes the Ability catalog without activation while installation and assi
   ).toEqual(denied);
   expect(host.invoke).not.toHaveBeenCalled();
 });
+
+it('allows public discovery and fixed documentation reads without granting install or removal activation', async () => {
+  await import('../../src/desktop/workspace-preload.js');
+  const bridge = host.exposed.get('dotAbilities') as DesktopAbilities;
+  vi.stubGlobal('navigator', { userActivation: { isActive: false } });
+  await bridge.browse({});
+  expect(host.invoke).toHaveBeenCalledWith('dot:abilities:browse', {});
+  await bridge.documentation({ source: 'installed', digest: 'a'.repeat(64) });
+  expect(host.invoke).toHaveBeenCalledWith('dot:abilities:documentation', {
+    source: 'installed',
+    digest: 'a'.repeat(64),
+  });
+  host.invoke.mockClear();
+  expect(
+    await bridge.uninstall({ digest: 'a'.repeat(64), removeFromDots: true }),
+  ).toEqual({ ok: false, code: 'permission_denied' });
+  expect(host.invoke).not.toHaveBeenCalled();
+});

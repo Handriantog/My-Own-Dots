@@ -77,9 +77,29 @@ reviewed descriptor. Moving a tag or replacing an asset invalidates that review.
 Private repositories are outside this first installer. Limits are 256 KiB for
 the descriptor, 256 MiB compressed, 1 GiB extracted, and 20,000 archive entries.
 
-Local testing can use **Choose local Ability…** with a descriptor and adjacent
+Local testing can use **Abilities → + (Add Ability) → Choose local Ability…** with a descriptor and adjacent
 archive, through the same sealed installer and consent flow. See
-[local setup and limits](spotify-local.md#teach-a-local-package).
+[local setup and limits](spotify-local.md#install-a-local-package).
+
+## Listing and documentation
+
+The Abilities browser lists installed packages and the public
+`Handriantog/My-Own-Dot-Abilities` collection. Collection metadata comes from
+`catalog.json` on `main`; README reads use that same resolved commit. The index
+is cached for five minutes and refreshable. Each entry has `id`, `name`,
+`path: "abilities/<id>"`, `license`, `status` (`planned`, `development`, `released`)
+and a stable `version` (`null` while planned). A released entry proposes the
+`<id>/v<version>` tag and `<id>-<version>.json` descriptor asset. It still passes
+through the existing release validation and explicit permission review.
+Unpublished entries cannot be installed from the collection. Other public
+repositories remain installable through a release descriptor URL.
+
+Include a UTF-8 `README.md` at the archive root (up to 64 KiB) for full installed
+details. The browser falls back to `manifest.description` when it is absent.
+Documentation supports headings, lists, tables, code and HTTP(S) links. HTML is
+inert; images display alternative text without loading remote resources. Use
+absolute links for external documentation. Metadata and README content never
+approve permissions or execute an Ability.
 
 ## Permissions
 

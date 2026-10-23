@@ -32,6 +32,20 @@ app.post('/api/abilities/cleanup', async (c) => {
   }
   return c.json({ ok: true });
 });
+app.get('/api/abilities/catalog', (c) =>
+  c.json({
+    installations: [
+      {
+        digest: config.binding.digest,
+        manifest: config.binding.manifest,
+        enabled: true,
+        restored: false,
+        settings: {},
+        enabledDots: 1,
+      },
+    ],
+  }),
+);
 app.get('/api/abilities/:id', (c) => c.json(config.binding));
 app.get('/api/dots/:id/abilities', (c) =>
   c.json({ bindings: [config.binding] }),

@@ -7,8 +7,9 @@ Apple Silicon with Spotify in English. There is no published release yet.
 
 ## Install a local package
 
-In **Abilities** in the sidebar below Memory, choose **Choose local Ability…** and select the
-JSON descriptor beside its matching archive. Review the publisher, permissions
+In **Abilities** in the sidebar below Memory, open **+ (Add Ability) → Choose local Ability…** and select the
+JSON descriptor beside its matching archive. Select **Install** in its detail
+header, then review the publisher, permissions
 and actual package/private-state folders, then choose **Install**. Choosing a file
 reads and hashes a bounded snapshot; it does not extract or execute the archive.
 Install uses those reviewed bytes even if the original files later change. The

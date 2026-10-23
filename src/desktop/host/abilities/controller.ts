@@ -27,6 +27,8 @@ import type { WorkspaceBackendConnection } from '../workspace-backend.js';
 import { DesktopAbilityBridge } from './bridge.js';
 import { createSpotifyTransport } from './spotify.js';
 import { LocalAbilityPackages } from './local.js';
+import { GitHubAbilityLibrary } from './library.js';
+import { readAbilityDocumentation } from './documentation.js';
 import { AbilityInstaller } from './installer.js';
 import { AbilityHost } from './host.js';
 import { DirectoryAnchor } from './package.js';
@@ -68,6 +70,7 @@ type Options = {
 };
 /** Desktop-main only. No renderer-provided URL, path, token or authority is accepted. */
 export class AbilityController {
+  private readonly library = new GitHubAbilityLibrary();
   private current?: Current;
   private choosingPython = false;
   private choosingAbility = false;
@@ -445,12 +448,11 @@ export class AbilityController {
         } as DesktopAbilityReply<M>;
       }
       const current = this.current;
-      if (this.maintenance && !['list', 'catalog'].includes(method))
-        throw new AbilityFailure('busy');
-      if (
-        !['list', 'catalog'].includes(method) &&
-        (!current || !this.available)
-      )
+      const readOnly = ['list', 'catalog', 'browse', 'documentation'].includes(
+        method,
+      );
+      if (this.maintenance && !readOnly) throw new AbilityFailure('busy');
+      if (!readOnly && (!current || !this.available))
         throw new AbilityFailure(this.unavailable);
       const signal =
         this.available && current
@@ -513,6 +515,41 @@ export class AbilityController {
       }
       let value: unknown;
       switch (method) {
+        case 'browse': {
+          const args = desktopAbilityMethods.browse.input.parse(input);
+          value = await this.library.browse(args.refresh ?? false, signal);
+          break;
+        }
+        case 'documentation': {
+          const args = desktopAbilityMethods.documentation.input.parse(input);
+          if (args.source === 'library') {
+            value = {
+              markdown: await this.library.documentation(
+                args.id,
+                args.sourceCommit,
+                signal,
+              ),
+            };
+          } else {
+            const installed = z
+              .strictObject({ installations: z.array(installedAbilitySchema) })
+              .parse(await api('/abilities/catalog'));
+            if (
+              !connection.abilityRoot ||
+              !installed.installations.some(
+                (item) => item.digest === args.digest,
+              )
+            )
+              throw new AbilityFailure('permission_denied');
+            value = {
+              markdown: await readAbilityDocumentation(
+                join(connection.abilityRoot, 'installation', 'packages'),
+                args.digest,
+              ),
+            };
+          }
+          break;
+        }
         case 'catalog': {
           const response = z
             .strictObject({ installations: z.array(installedAbilitySchema) })
@@ -740,7 +777,11 @@ export class AbilityController {
         }
         case 'uninstall': {
           const args = desktopAbilityMethods.uninstall.input.parse(input);
-          await api(`/abilities/packages/${args.digest}/uninstall`, {});
+          await api(`/abilities/packages/${args.digest}/uninstall`, {
+            ...(args.removeFromDots !== undefined
+              ? { removeFromDots: args.removeFromDots }
+              : {}),
+          });
           value = { ok: true };
           break;
         }

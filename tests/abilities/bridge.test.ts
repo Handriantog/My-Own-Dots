@@ -274,49 +274,54 @@ describe('authenticated desktop Ability session', () => {
   });
 });
 describe('serialized admission and revocation', () => {
-  it('can reject a concurrent authority check while disable is waiting for the desktop stop', async () => {
-    const f = await fixture();
-    let context: InvocationContext | undefined;
-    f.handlers.invoke = async (value, signal) => {
-      context = value.request.context;
-      await new Promise<void>((resolve) =>
-        signal.addEventListener('abort', () => resolve(), { once: true }),
+  it.each(['disable', 'uninstall'] as const)(
+    'rejects a concurrent authority check while %s waits for the desktop stop',
+    async (action) => {
+      const f = await fixture();
+      let context: InvocationContext | undefined;
+      f.handlers.invoke = async (value, signal) => {
+        context = value.request.context;
+        await new Promise<void>((resolve) =>
+          signal.addEventListener('abort', () => resolve(), { once: true }),
+        );
+        return { status: 'uncertain' };
+      };
+      f.handlers.revoke = async () => {
+        await expect(f.client.authorize(context!)).rejects.toThrow();
+      };
+      await f.client.start();
+      const binding = await f.teach();
+      const active = f.service.invoke(
+        {
+          dotId: f.dot.id,
+          bindingId: binding.id,
+          threadId: 'thread',
+          tool: 'search',
+          invocationId: randomUUID(),
+          arguments: { query: 'fixture' },
+        },
+        new AbortController().signal,
       );
-      return { status: 'uncertain' };
-    };
-    f.handlers.revoke = async () => {
-      await expect(f.client.authorize(context!)).rejects.toThrow();
-    };
-    await f.client.start();
-    const binding = await f.teach();
-    const active = f.service.invoke(
-      {
-        dotId: f.dot.id,
-        bindingId: binding.id,
-        threadId: 'thread',
-        tool: 'search',
-        invocationId: randomUUID(),
-        arguments: { query: 'fixture' },
-      },
-      new AbortController().signal,
-    );
-    await expect.poll(() => context).toBeDefined();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      await Promise.race([
-        f.service.disable(binding.id),
-        new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(
-            () => reject(new Error('Disable blocked an authority check')),
-            500,
-          );
-        }),
-      ]);
-      expect(await active).toEqual({ status: 'uncertain' });
-    } finally {
-      clearTimeout(timer);
-    }
-  });
+      await expect.poll(() => context).toBeDefined();
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          action === 'disable'
+            ? f.service.disable(binding.id)
+            : f.service.uninstall(binding.digest, true),
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('Disable blocked an authority check')),
+              500,
+            );
+          }),
+        ]);
+        expect(await active).toEqual({ status: 'uncertain' });
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  );
   it('stops an actual disposable worker before disable resolves and refuses later stale calls', async () => {
     const f = await fixture();
     const workers = new Map<ChildProcess, Promise<unknown>>(),
@@ -639,4 +644,149 @@ it('keeps deleted-Dot cleanup pending until the desktop confirms credential/stat
   await f.service.cleanup();
   expect(erased).toBe(binding.id);
   expect(f.workspace.abilities.pendingCleanup()).toEqual([]);
+});
+
+it('explicitly uninstalls from every Dot, disconnecting bindings while retaining private state', async () => {
+  const f = await fixture();
+  await f.client.start();
+  const first = await f.teach();
+  const other = f.workspace.createDot(f.dot.spaceId, 'Other', '', true, true);
+  const second = await f.service.assign(other.id, first.digest, true);
+  const effects: string[] = [];
+  f.handlers.revoke = async (id) => {
+    effects.push(`stop:${id}`);
+  };
+  f.handlers.disconnect = async (id) => {
+    effects.push(`disconnect:${id}`);
+  };
+  f.handlers.eraseState = async () => {
+    effects.push('erase');
+  };
+  f.handlers.uninstall = async () => {
+    effects.push('uninstall');
+  };
+  await f.service.uninstall(first.digest, true);
+  expect(await f.service.list(f.dot.id)).toEqual([]);
+  expect(await f.service.list(other.id)).toEqual([]);
+  expect(await f.service.installed()).toEqual([]);
+  expect(effects).toContain(`stop:${first.id}`);
+  expect(effects).toContain(`disconnect:${second!.id}`);
+  expect(effects.at(-1)).toBe('uninstall');
+  expect(effects).not.toContain('erase');
+});
+it('keeps a failed explicit uninstall disabled and allows a safe retry', async () => {
+  const f = await fixture();
+  await f.client.start();
+  const binding = await f.teach();
+  let removed = false;
+  f.handlers.disconnect = async () => {
+    throw Error('unavailable');
+  };
+  f.handlers.uninstall = async () => {
+    removed = true;
+  };
+  await expect(f.service.uninstall(binding.digest, true)).rejects.toThrow();
+  expect(removed).toBe(false);
+  expect((await f.service.installed())[0].enabled).toBe(false);
+  expect(await f.service.tools(f.dot.id)).toEqual([]);
+  f.handlers.disconnect = async () => {};
+  await f.service.uninstall(binding.digest, true);
+  expect(removed).toBe(true);
+});
+it('serializes explicit uninstall before a concurrent new Dot assignment', async () => {
+  const f = await fixture();
+  await f.client.start();
+  const binding = await f.teach();
+  const other = f.workspace.createDot(f.dot.spaceId, 'Other', '', true, true);
+  let entered = false,
+    release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f.handlers.disconnect = async () => {
+    entered = true;
+    await gate;
+  };
+  const removing = f.service.uninstall(binding.digest, true);
+  try {
+    await expect.poll(() => entered).toBe(true);
+    const assigning = f.service.assign(other.id, binding.digest, true).then(
+      () => 'assigned',
+      () => 'refused',
+    );
+    release();
+    await removing;
+    expect(await assigning).toBe('refused');
+    expect(await f.service.installed()).toEqual([]);
+    expect(await f.service.list(other.id)).toEqual([]);
+  } finally {
+    release();
+    await removing.catch(() => {});
+  }
+});
+
+it('requires the explicit removal flag through the authenticated uninstall route', async () => {
+  const f = await fixture();
+  await f.client.start();
+  const binding = await f.teach();
+  const send = (body: unknown) =>
+    post(`${f.url}/api/abilities/packages/${binding.digest}/uninstall`, {
+      headers: {
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    });
+  expect((await send({})).status).toBeGreaterThanOrEqual(400);
+  expect(
+    (await send({ removeFromDots: 'true' })).status,
+  ).toBeGreaterThanOrEqual(400);
+  expect(await f.service.list(f.dot.id)).toHaveLength(1);
+  expect((await send({ removeFromDots: true })).status).toBe(200);
+  expect(await f.service.list(f.dot.id)).toEqual([]);
+});
+
+it('removes only the selected version when a separately approved update wins the identity lock', async () => {
+  const f = await fixture();
+  await f.client.start();
+  const binding = await f.teach();
+  const next = structuredClone(f.pkg);
+  next.digest = 'd'.repeat(64);
+  next.manifest.version = '0.2.0';
+  next.descriptor.manifest.version = '0.2.0';
+  next.descriptor.asset.sha256 = next.digest;
+  next.descriptor.releaseTag = 'fixture/v0.2.0';
+  f.archive.review.descriptor = next.descriptor;
+  f.handlers.install = async () => next;
+  const review = await f.service.review(
+    f.dot.id,
+    f.archive.review.descriptorUrl,
+  );
+  let entered = false;
+  let release!: () => void;
+  const gate = new Promise<void>((done) => {
+    release = done;
+  });
+  f.handlers.revoke = async () => {
+    entered = true;
+    await gate;
+  };
+  const updating = f.service.update(binding.id, review.id);
+  await expect.poll(() => entered).toBe(true);
+  const removing = f.service.uninstall(binding.digest, true);
+  await expect
+    .poll(() => f.workspace.abilities.installation(binding.digest)?.enabled)
+    .toBe(false);
+  release();
+  const updated = await updating;
+  await removing;
+  expect(updated.digest).toBe(next.digest);
+  expect(updated.enabled).toBe(true);
+  expect(await f.service.list(f.dot.id)).toMatchObject([
+    { digest: next.digest, enabled: true },
+  ]);
+  expect(await f.service.installed()).toMatchObject([
+    { digest: next.digest, enabled: true },
+  ]);
+  expect(f.workspace.abilities.package(binding.digest)).toBeUndefined();
 });

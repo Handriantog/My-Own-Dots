@@ -432,12 +432,32 @@ export class AbilityService {
       await this.workspace.abilities.forget(id);
     });
   }
-  async uninstall(digest: string): Promise<void> {
+  async uninstall(digest: string, removeFromDots = false): Promise<void> {
     await this.serial(`package:${digest}`, async () => {
-      if (
-        (await this.workspace.abilities.bindingsForDigest(digest)).length ||
-        !(await this.workspace.abilities.package(digest))
-      )
+      const pkg = await this.workspace.abilities.package(digest);
+      if (!pkg) throw new AbilityFailure('permission_denied');
+      if (removeFromDots) {
+        this.session();
+        // Persist the master block before stopping or forgetting any bindings.
+        // A failed host cleanup leaves a disabled installation that can be retried.
+        await this.workspace.abilities.setMaster(digest, false);
+        for (const entry of this.active.values())
+          if (entry.context.digest === digest) entry.controller.abort();
+        const bindings =
+          await this.workspace.abilities.bindingsForDigest(digest);
+        for (const binding of bindings) {
+          await this.serialAbility(
+            binding.dotId,
+            binding.manifest,
+            async () => {
+              const current = await this.workspace.abilities.get(binding.id);
+              if (current?.digest === digest)
+                await this.forget(current.id, false);
+            },
+          );
+        }
+      }
+      if ((await this.workspace.abilities.bindingsForDigest(digest)).length)
         throw new AbilityFailure('permission_denied');
       await this.host.uninstall(digest);
       await this.workspace.abilities.removePackage(digest);

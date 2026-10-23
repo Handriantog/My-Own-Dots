@@ -60,14 +60,19 @@ Ask a Dot to show a draft before saving it. A CopilotKit human-in-the-loop card 
 
 ### Abilities
 
-Install an Ability from **Abilities** in the sidebar, below Memory, using its
-public GitHub release descriptor or **Choose local Ability…**. Review the
-publisher, sealed package and permissions, then choose **Install**. New installs
+Open **Abilities** in the sidebar, below Memory, to search installed Abilities and
+the public GitHub collection. Select a row to read its full README and manage it.
+Released entries offer **Install**; planned and development entries show their
+status. Use **+ → Add Ability** for a GitHub release descriptor or
+**Choose local Ability…**. Review the publisher, sealed package and permissions
+before installing. New installs
 start disabled. **Enable/Disable** controls the workspace master switch and keeps
 each Dot’s selection. **Apply to all Dot** enables it for all existing Dots;
 new Dots stay off. Choose individual Abilities in **Dot settings → Abilities**.
 Approved actions run without repeated prompts, with separate per-Dot settings and
 private state. Disable stops owned work; quitting the desktop stops all workers.
+**Uninstall** asks before removing an Ability from all Dots and keeps its private
+files.
 
 The first host supports confined JavaScript, optional local Python and native
 arm64 executables, with scoped HTTPS, browser OAuth, declared helpers, and

@@ -389,6 +389,44 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       );
       expect(listed).toMatchObject({ ok: true, value: { available: true } });
     });
+    it('reads documentation only for a known installed digest and a trusted workspace frame', async () => {
+      const f = await fixture();
+      await f.controller.attach(f.connection);
+      const args = { source: 'installed', digest: f.binding.digest };
+      const file = join(
+        f.home,
+        'abilities',
+        'installation',
+        'packages',
+        f.binding.digest,
+        'README.md',
+      );
+      await writeFile(file, '# Installed guide');
+      expect(
+        await f.controller.invoke('documentation', args, {
+          trusted: () => true,
+        }),
+      ).toEqual({ ok: true, value: { markdown: '# Installed guide' } });
+      expect(
+        await f.controller.invoke('documentation', args, {
+          trusted: () => false,
+        }),
+      ).toEqual({ ok: false, code: 'permission_denied' });
+      expect(
+        await f.controller.invoke(
+          'documentation',
+          { ...args, digest: 'b'.repeat(64) },
+          { trusted: () => true },
+        ),
+      ).toEqual({ ok: false, code: 'permission_denied' });
+      expect(
+        await f.controller.invoke(
+          'documentation',
+          { ...args, path: '/etc/passwd' },
+          { trusted: () => true },
+        ),
+      ).toMatchObject({ ok: false });
+    });
     it('saves the personal client ID in the same trusted Connect action before OAuth begins', async () => {
       const f = await fixture();
       await f.controller.attach(f.connection);

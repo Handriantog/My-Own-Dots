@@ -176,12 +176,15 @@ export function abilityRoutes(
     return c.json({ ok: true });
   });
   guarded.post('/abilities/packages/:digest/uninstall', async (c) => {
-    z.strictObject({}).parse(await c.req.json());
+    const body = z
+      .strictObject({ removeFromDots: z.boolean().optional() })
+      .parse(await c.req.json());
     await service.uninstall(
       z
         .string()
         .regex(/^[a-f0-9]{64}$/)
         .parse(c.req.param('digest')),
+      body.removeFromDots,
     );
     return c.json({ ok: true });
   });

@@ -1,0 +1,521 @@
+.ability-browser {
+  --text: var(--ws-text, #222225);
+  --text-secondary: var(--ws-muted, #6c6c73);
+  --border: var(--ws-border, #e5e5e7);
+  --surface: var(--ws-sidebar, #f7f7f8);
+  --surface-alt: var(--ws-soft, #fafafa);
+  --hover: var(--ws-hover, #f0f0f2);
+  --selected: var(--ws-selected, #ededf0);
+  --accent: var(--ws-accent, #252528);
+  --danger: #d15b55;
+  background: var(--ws-canvas, #fff);
+}
+:root .desktop-workspace.app:has(.abilities-workspace) {
+  grid-template-columns: 72px 0 minmax(0, 1fr);
+}
+:root .desktop-workspace.app:has(.abilities-workspace) .workspace-sidebar,
+:root .desktop-workspace:has(.abilities-workspace) .titlebar-leading > button {
+  display: none;
+}
+.ability-browser:has(.ability-browser-notices) {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.ability-browser-notices {
+  grid-column: 1 / -1;
+}
+.ability-browser-notices .ability-host-status {
+  margin: 12px 16px;
+}
+.ability-browser .ability-actions button:not(.primary),
+.ability-browser .ability-import button,
+.ability-browser .ability-library-error button {
+  background: var(--surface-alt);
+  color: var(--text);
+  border-color: var(--border);
+}
+.abilities-workspace {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+}
+.ability-browser {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  color: var(--text);
+}
+.ability-list-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+.ability-list-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 22px 18px 14px;
+}
+.ability-list-heading h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+}
+.ability-list-heading > div {
+  display: flex;
+  gap: 4px;
+}
+.ability-list-heading button,
+.ability-browser-error button {
+  display: grid;
+  place-items: center;
+  background: transparent;
+  border: 0;
+  padding: 6px;
+  color: var(--text-secondary);
+  border-radius: 5px;
+}
+.ability-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 16px 16px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-secondary);
+}
+.ability-search input {
+  width: 100%;
+  min-width: 0;
+  background: transparent;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  outline: none;
+  font-size: 13px;
+}
+.ability-search:focus-within {
+  border-color: var(--accent, #6c978b);
+}
+.ability-list-scroll {
+  overflow-y: auto;
+  min-height: 0;
+  padding-bottom: 24px;
+}
+.ability-list-group h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 18px 8px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+.ability-list-group h2 > span {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+.ability-browser button.ability-list-row {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 13px 17px;
+  display: flex;
+  gap: 12px;
+  text-align: left;
+  color: var(--text);
+}
+.ability-browser button.ability-list-row:hover {
+  background: var(--hover, rgba(128, 128, 128, 0.08));
+}
+.ability-browser button.ability-list-row[aria-current='true'] {
+  background: var(--selected, rgba(128, 128, 128, 0.14));
+  box-shadow: inset 2px 0 var(--accent, #6c978b);
+}
+.ability-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--surface-alt, rgba(128, 128, 128, 0.09));
+  color: var(--text-secondary);
+}
+.ability-icon-large {
+  width: 94px;
+  height: 94px;
+  border-radius: 17px;
+}
+.ability-row-copy {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 5px;
+  font-size: 12px;
+}
+.ability-row-copy strong {
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.ability-row-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+.ability-row-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.ability-row-meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ability-list-empty,
+.ability-library-error {
+  margin: 0;
+  padding: 10px 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.ability-library-error p {
+  margin: 0 0 8px;
+}
+.ability-import {
+  display: grid;
+  gap: 9px;
+  padding: 0 16px 16px;
+  font-size: 12px;
+}
+.ability-import label {
+  display: grid;
+  gap: 6px;
+}
+.ability-import input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  font-size: 12px;
+}
+.ability-import button {
+  font-size: 12px;
+}
+.ability-detail-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.ability-detail {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px 36px 60px;
+}
+.ability-back {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: transparent;
+  border: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 0;
+  margin-bottom: 24px;
+}
+.ability-detail-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  padding: 0 0 24px;
+}
+.ability-detail-title {
+  min-width: 0;
+  flex: 1;
+}
+.ability-detail-title h1 {
+  margin: 0 0 10px;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+.ability-publisher {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.ability-summary {
+  font-size: 13px;
+  line-height: 1.6;
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+.ability-detail .ability-actions {
+  margin-top: 16px;
+}
+.ability-detail .ability-actions button {
+  font-size: 12px;
+  padding: 7px 12px;
+  border-radius: 5px;
+}
+.ability-detail-status {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 13px 0 0;
+  line-height: 1.5;
+}
+.ability-detail-tabs {
+  display: flex;
+  gap: 26px;
+  border-bottom: 1px solid var(--border);
+}
+.ability-detail-tabs button {
+  padding: 13px 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: transparent;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.ability-detail-tabs button[aria-pressed='true'] {
+  border-bottom-color: var(--text);
+  color: var(--text);
+}
+.ability-detail-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 150px;
+  gap: 36px;
+  padding-top: 28px;
+}
+.ability-document {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.ability-document .ability-markdown {
+  font-size: 14px;
+  line-height: 1.75;
+}
+.ability-document .ability-markdown h1 {
+  font-size: 25px;
+}
+.ability-document .ability-markdown h2 {
+  font-size: 20px;
+  margin-top: 1.5em;
+}
+.ability-document .ability-markdown h3 {
+  font-size: 16px;
+}
+.ability-document .ability-markdown > :first-child {
+  margin-top: 0;
+}
+.ability-document .ability-permissions {
+  font-size: 13px;
+  line-height: 1.6;
+}
+.ability-document code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ability-metadata {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.ability-metadata h2 {
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+.ability-metadata h2:not(:first-child) {
+  margin-top: 28px;
+}
+.ability-metadata dl {
+  margin: 0;
+}
+.ability-metadata dt {
+  font-size: 11px;
+  margin: 16px 0 4px;
+}
+.ability-metadata dd {
+  margin: 0;
+  color: var(--text);
+}
+.ability-detail-empty {
+  min-height: 360px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 36px;
+  text-align: center;
+  color: var(--text-secondary);
+  box-sizing: border-box;
+}
+.ability-detail-empty h2 {
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 500;
+  margin: 20px 0 10px;
+}
+.ability-detail-empty p {
+  font-size: 13px;
+  margin: 0;
+}
+.ability-browser-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  color: var(--danger);
+  font-size: 13px;
+}
+.ability-browser-error span {
+  flex: 1;
+}
+.ability-detail-panel > .ability-host-status {
+  margin: 16px;
+}
+.ability-detail > .ability-review,
+.ability-uninstall-confirm {
+  margin-bottom: 24px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.ability-uninstall-confirm {
+  font-size: 13px;
+}
+.ability-uninstall-confirm p {
+  line-height: 1.6;
+}
+@media (max-width: 1100px) {
+  .ability-browser {
+    grid-template-columns: 270px minmax(0, 1fr);
+  }
+  .ability-detail {
+    padding: 24px;
+  }
+  .ability-detail-content {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ability-metadata {
+    border-top: 1px solid var(--border);
+    padding-top: 20px;
+  }
+  .ability-metadata dl {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    align-items: baseline;
+  }
+  .ability-metadata dt {
+    margin: 0;
+  }
+}
+@media (max-width: 700px) {
+  .ability-browser {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .ability-list-panel {
+    border-right: 0;
+  }
+  .ability-browser:not(.has-selection) .ability-detail-panel {
+    display: none;
+  }
+  .ability-browser.has-selection .ability-list-panel {
+    display: none;
+  }
+  .ability-detail {
+    padding: 20px 18px 40px;
+  }
+  .ability-detail-header {
+    gap: 14px;
+  }
+  .ability-icon-large {
+    width: 54px;
+    height: 54px;
+    border-radius: 10px;
+  }
+  .ability-icon-large svg {
+    width: 30px;
+    height: 30px;
+  }
+  .ability-detail-title h1 {
+    font-size: 24px;
+  }
+  .ability-detail .ability-actions {
+    margin-left: -68px;
+    margin-top: 20px;
+  }
+  .ability-detail .ability-review .ability-actions,
+  .ability-uninstall-confirm .ability-actions {
+    margin-left: 0;
+  }
+}
+
+:root .desktop-workspace .ability-search input {
+  background: transparent;
+}
+@media (max-width: 760px) {
+  :root .desktop-workspace.app:has(.abilities-workspace) {
+    grid-template-columns: 60px 0 minmax(0, 1fr);
+  }
+}
+
+:root .desktop-workspace .ability-browser .ability-back,
+:root .desktop-workspace .ability-browser .ability-list-heading button {
+  border: 0;
+  background: transparent;
+}
+:root .desktop-workspace .ability-browser .ability-search input {
+  border: 0;
+  background: transparent;
+}
+:root .desktop-workspace .ability-browser .ability-detail-tabs button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+}
+:root
+  .desktop-workspace
+  .ability-browser
+  .ability-detail-tabs
+  button[aria-pressed='true'] {
+  border-bottom-color: var(--text);
+}
+
+.ability-publisher > span {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}

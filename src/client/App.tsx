@@ -1064,13 +1064,7 @@ export function App({
             mutate={mutate}
           />
         ) : view === 'abilities' ? (
-          <main className="main-content">
-            <div className="page-heading">
-              <div>
-                <h1>Abilities</h1>
-                <p>Install once. Choose which Dots can use them.</p>
-              </div>
-            </div>
+          <main className="abilities-workspace">
             <AbilityManager />
           </main>
         ) : view === 'space' && !workspace.spaces.length ? (

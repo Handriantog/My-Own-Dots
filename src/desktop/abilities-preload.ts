@@ -5,6 +5,8 @@ import {
   type DesktopAbilityMethod,
 } from '../shared/abilities/desktop.js';
 const reads = new Set<DesktopAbilityMethod>([
+  'browse',
+  'documentation',
   'catalog',
   'list',
   'account',

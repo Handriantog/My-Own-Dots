@@ -3,6 +3,11 @@ import { bindingSchema, reviewSchema } from './bridge.js';
 import { assertBoundedJson, abilityLimits } from './limits.js';
 import { isHttpsUrl, manifestSchema, type JsonValue } from './manifest.js';
 import { errorCodeSchema } from './protocol.js';
+import {
+  abilityLibrarySchema,
+  libraryIdSchema,
+  sourceCommitSchema,
+} from './library.js';
 const id = z.string().min(1).max(256),
   uuid = z.uuid();
 const values = z.record(
@@ -75,6 +80,21 @@ const installInput = z.strictObject({
   settings: values.optional(),
 });
 export const desktopAbilityMethods = {
+  browse: {
+    input: z.strictObject({ refresh: z.boolean().optional() }),
+    output: abilityLibrarySchema,
+  },
+  documentation: {
+    input: z.discriminatedUnion('source', [
+      z.strictObject({ source: z.literal('installed'), ...digest }),
+      z.strictObject({
+        source: z.literal('library'),
+        id: libraryIdSchema,
+        sourceCommit: sourceCommitSchema,
+      }),
+    ]),
+    output: z.strictObject({ markdown: z.string().max(65536).nullable() }),
+  },
   catalog: {
     input: z.strictObject({}),
     output: z.strictObject({
@@ -173,7 +193,10 @@ export const desktopAbilityMethods = {
     output: ok,
   },
   uninstall: {
-    input: z.strictObject({ digest: z.string().regex(/^[a-f0-9]{64}$/) }),
+    input: z.strictObject({
+      ...digest,
+      removeFromDots: z.boolean().optional(),
+    }),
     output: ok,
   },
   recent: {
