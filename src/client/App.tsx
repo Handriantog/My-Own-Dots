@@ -1,3 +1,4 @@
+import { AbilityManager } from './abilities/AbilityManager';
 import { MemoryPanel } from './MemoryPanel';
 import { MemoryActivity } from './MemoryActivity';
 import {
@@ -977,9 +978,11 @@ export function App({
                   ? 'Activity'
                   : view === 'space'
                     ? 'Pages'
-                    : view === 'settings'
-                      ? 'Settings'
-                      : 'Memory'}
+                    : view === 'abilities'
+                      ? 'Abilities'
+                      : view === 'settings'
+                        ? 'Settings'
+                        : 'Memory'}
             </strong>
           </div>
           <div className="top-actions">
@@ -1060,6 +1063,16 @@ export function App({
             onClose={() => setView('chat')}
             mutate={mutate}
           />
+        ) : view === 'abilities' ? (
+          <main className="main-content">
+            <div className="page-heading">
+              <div>
+                <h1>Abilities</h1>
+                <p>Install once. Choose which Dots can use them.</p>
+              </div>
+            </div>
+            <AbilityManager />
+          </main>
         ) : view === 'space' && !workspace.spaces.length ? (
           <main className="large-empty">
             <BookOpen size={36} />

@@ -44,7 +44,7 @@ it('mounts Ability owner routes behind authentication and pairs only with a sock
     headers: { authorization: `Bearer ${token}` },
   });
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ bindings: [] });
+  expect(await response.json()).toEqual({ bindings: [], installed: [] });
   expect(
     (
       await app.request('/ability-host/v1/pair', {

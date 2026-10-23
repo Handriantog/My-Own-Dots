@@ -1,4 +1,5 @@
 import process from 'node:process';
+import { setTimeout } from 'node:timers';
 import { readFile } from 'node:fs/promises';
 import { once } from 'node:events';
 import { Hono } from 'hono';
@@ -12,20 +13,41 @@ bridge.setAuthority(async () => ({
   package: config.package,
 }));
 const app = new Hono();
+let pairs = 0;
+app.use('/ability-host/v1/pair', async (_c, next) => {
+  pairs++;
+  await next();
+});
 app.route('/ability-host/v1', bridge.routes(config.ownerToken));
 app.post('/api/abilities/:id/configure', async (c) => {
   config.binding.settings = (await c.req.json()).settings;
   config.binding.revision++;
   return c.json(config.binding);
 });
-app.post('/api/abilities/cleanup', (c) => c.json({ ok: true }));
+app.post('/api/abilities/cleanup', async (c) => {
+  if (config.interruptCleanup) {
+    config.interruptCleanup = false;
+    await bridge.stop();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return c.json({ ok: true });
+});
 app.get('/api/abilities/:id', (c) => c.json(config.binding));
 app.get('/api/dots/:id/abilities', (c) =>
   c.json({ bindings: [config.binding] }),
 );
 app.get('/alive', (c) =>
-  c.json({ alive: true, attached: Boolean(bridge.session()) }),
+  c.json({
+    alive: true,
+    attached: Boolean(bridge.session()),
+    sessionId: bridge.session()?.id,
+    pairs,
+  }),
 );
+app.post('/disconnect', async (c) => {
+  await bridge.stop();
+  return c.json({ ok: true });
+});
 app.post('/invoke', async (c) => {
   const { op } = await c.req.json();
   try {

@@ -2,7 +2,7 @@ import type { WorkspaceState } from '../shared/types';
 import type { WorkspaceDestination } from '../desktop/shared/workspace-contract';
 export type Surface = 'workspace' | 'companion';
 export type WorkspaceView =
-  'chat' | 'space' | 'tasks' | 'memories' | 'settings';
+  'chat' | 'space' | 'tasks' | 'memories' | 'abilities' | 'settings';
 export function surfaceFromSearch(search: string): Surface {
   const params = new URLSearchParams(search);
   return params.get('surface') === 'companion' ||
@@ -71,11 +71,20 @@ export function navigationItems(
 ): NavigationItem[] {
   const items: NavigationItem[] = [
     ...(
-      ['chat', 'space', 'tasks', 'memories', 'settings'] as WorkspaceView[]
+      [
+        'chat',
+        'space',
+        'tasks',
+        'memories',
+        'abilities',
+        'settings',
+      ] as WorkspaceView[]
     ).map((view, i) => ({
       id: view,
       view,
-      label: ['Chats', 'Spaces', 'Activity', 'Memory', 'Settings'][i],
+      label: ['Chats', 'Spaces', 'Activity', 'Memory', 'Abilities', 'Settings'][
+        i
+      ],
       detail: 'Workspace',
     })),
     ...workspace.dots.map((dot) => ({
@@ -116,9 +125,14 @@ export function savedNavigation(surface: Surface) {
       localStorage.getItem(`${surface}-navigation`) || '{}',
     );
     return {
-      view: (['chat', 'space', 'tasks', 'memories', 'settings'].includes(
-        value.view,
-      )
+      view: ([
+        'chat',
+        'space',
+        'tasks',
+        'memories',
+        'abilities',
+        'settings',
+      ].includes(value.view)
         ? value.view
         : 'chat') as WorkspaceView,
       spaceId: typeof value.spaceId === 'string' ? value.spaceId : '',

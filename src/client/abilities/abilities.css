@@ -210,3 +210,21 @@
   width: auto;
   flex: 0 0 auto;
 }
+
+.ability-manager {
+  max-width: 900px;
+}
+.ability-count {
+  align-self: center;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.ability-host-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ability-host-status p {
+  margin: 0;
+  font-size: 13px;
+}

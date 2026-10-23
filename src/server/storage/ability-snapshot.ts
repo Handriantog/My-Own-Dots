@@ -16,6 +16,7 @@ import {
   type ArchiveEntry,
 } from '../../shared/storage-archive.js';
 import { validateArchivePaths } from './archive-paths.js';
+import { initializeAbilityManagementSchema } from '../abilities/store.js';
 import { DirectoryAnchor } from '../../shared/abilities/directory.js';
 
 /** directory and remap are host-only staging context, never archive-authored paths. */
@@ -243,6 +244,24 @@ export async function restoreAbilityState(
 }
 /** Called within the existing restore/host-change transaction; metadata grants are inert. */
 export function invalidateAbilityTrust(db: DatabaseSync): void {
+  // Historical legacy backups can contain unbound packages without management rows.
+  // Backfill before clearing trust so a later reopen cannot treat them as approved.
+  if (
+    db
+      .prepare(
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='ability_packages'",
+      )
+      .get()
+  )
+    initializeAbilityManagementSchema(db);
+  if (
+    db
+      .prepare(
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='ability_installations'",
+      )
+      .get()
+  )
+    db.exec('UPDATE ability_installations SET enabled=0,restored=1');
   if (
     !db
       .prepare(

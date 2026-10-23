@@ -92,6 +92,7 @@ async function fixture(ownerToken: string | null = token) {
     extra: Record<string, string> = {},
     workspaceId = 'workspace',
     auth: string | null = token,
+    previousSessionId?: string,
   ) =>
     post(`${url}/ability-host/v1/pair`, {
       headers: {
@@ -99,7 +100,11 @@ async function fixture(ownerToken: string | null = token) {
         ...(auth ? { authorization: `Bearer ${auth}` } : {}),
         ...extra,
       },
-      body: JSON.stringify({ workspaceId, nonce: 'a'.repeat(64) }),
+      body: JSON.stringify({
+        workspaceId,
+        nonce: 'a'.repeat(64),
+        ...(previousSessionId ? { previousSessionId } : {}),
+      }),
     });
   const handlers: DesktopAbilityHandlers = {
     install: async () => pkg,
@@ -196,6 +201,41 @@ describe('authenticated desktop Ability session', () => {
     expect(next.sessionId).not.toBe(before);
     await expect.poll(() => f.client.connected).toBe(false);
     expect(f.bridge.session()).toBeUndefined(); // replacement has not attached its stream
+  });
+  it('refuses automatic recovery when another authenticated desktop owns the session', async () => {
+    const f = await fixture();
+    await f.client.start();
+    const oldSession = f.bridge.session()!.id;
+    const replacement = new DesktopAbilityBridge(
+      { url: f.url, workspaceId: 'workspace', ownerToken: token },
+      f.handlers,
+    );
+    cleanup.push(() => replacement.stop());
+    await replacement.start();
+    const replacementSession = f.bridge.session()!.id;
+    const recovery = new DesktopAbilityBridge(
+      {
+        url: f.url,
+        workspaceId: 'workspace',
+        ownerToken: token,
+        previousSessionId: oldSession,
+      },
+      f.handlers,
+    );
+    cleanup.push(() => recovery.stop());
+    await expect(recovery.start()).rejects.toThrow();
+    expect(f.bridge.session()?.id).toBe(replacementSession);
+    expect(replacement.connected).toBe(true);
+  });
+  it('accepts guarded recovery after the previous desktop session has ended', async () => {
+    const f = await fixture();
+    await f.client.start();
+    const previousSession = f.bridge.session()!.id;
+    await f.client.stop();
+    await expect.poll(() => f.bridge.session()).toBeUndefined();
+    const response = await f.pair({}, 'workspace', token, previousSession);
+    expect(response.status).toBe(200);
+    expect((await response.json()).sessionId).not.toBe(previousSession);
   });
   it('pairs again after disconnect without replaying old invocations', async () => {
     const f = await fixture();

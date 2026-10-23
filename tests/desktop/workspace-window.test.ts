@@ -4,11 +4,12 @@ import {
   DEFAULT_ACCESSORIES,
   type Accessories,
 } from '../../src/desktop/shared/accessories.js';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { AbilityController } from '../../src/desktop/host/abilities/controller.js';
+import { DesktopDiagnostics } from '../../src/desktop/host/diagnostics.js';
 import {
   BrowserWindow,
   dialog,
@@ -209,6 +210,48 @@ afterEach(async () => {
   host.ipc?.removeAllListeners();
   await rm(data, { recursive: true, force: true });
 });
+it.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
+  'records the safe Ability attachment failure without workspace credentials',
+  async () => {
+    await workspace.destroy();
+    const diagnostics = new DesktopDiagnostics(path.join(data, 'diagnostics'));
+    backend.start.mockResolvedValue({
+      url: 'http://127.0.0.1:5999',
+      owned: true,
+      ownerToken: 'PRIVATE_OWNER_TOKEN_MUST_NOT_ENTER_DIAGNOSTICS',
+      workspaceId: 'fixture-workspace',
+      abilityRoot: path.join(data, 'abilities'),
+    });
+    workspace = new WorkspaceWindow(
+      '/missing-private-bundle',
+      data,
+      backend as unknown as WorkspaceBackend,
+      () => {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      diagnostics,
+    );
+    await workspace.ready();
+    await diagnostics.record('verification', {});
+    const saved = await readFile(
+      path.join(data, 'diagnostics/desktop.log'),
+      'utf8',
+    );
+    const entries = saved
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(
+      entries.find((entry) => entry.event === 'ability-host-unavailable'),
+    ).toMatchObject({
+      details: { stage: 'launcher', code: 'host_unavailable' },
+    });
+    expect(saved).not.toContain('PRIVATE_OWNER_TOKEN');
+    expect(saved).not.toContain('/missing-private-bundle');
+  },
+);
 it('opens a bundled isolated main window and reuses it for dirty-page-safe handoff', async () => {
   await workspace.open();
   const window = host.windows[0];

@@ -10,6 +10,7 @@ import { parseOutcome } from '../../shared/abilities/protocol.js';
 import { canonicalJson } from '../../shared/abilities/permissions.js';
 import type {
   Binding,
+  InstalledAbility,
   InvocationContext,
   InvocationOutcome,
   JsonValue,
@@ -40,6 +41,17 @@ export function initializeAbilitySchema(db: DatabaseSync): void {
       DELETE FROM ability_bindings WHERE dotId=OLD.id;
     END;`);
 }
+export function initializeAbilityManagementSchema(db: DatabaseSync): void {
+  db.exec(`CREATE TABLE IF NOT EXISTS ability_installations(
+    digest TEXT PRIMARY KEY REFERENCES ability_packages(digest),
+    enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+    restored INTEGER NOT NULL CHECK(restored IN (0,1)),
+    settings TEXT NOT NULL CHECK(json_valid(settings))) STRICT;
+    INSERT OR IGNORE INTO ability_installations
+      SELECT digest,1,coalesce((SELECT max(restored) FROM ability_bindings b WHERE b.digest=p.digest),0),
+      coalesce((SELECT settings FROM ability_bindings b WHERE b.digest=p.digest ORDER BY approvedAt DESC LIMIT 1),'{}')
+      FROM ability_packages p;`);
+}
 const boundedId = z.string().min(1).max(256);
 const contextSchema = z.strictObject({
   workspaceId: boundedId,
@@ -66,6 +78,7 @@ export class AbilityStore {
     private readonly ownerId: string,
   ) {
     initializeAbilitySchema(db);
+    initializeAbilityManagementSchema(db);
     // A new storage owner never resumes a call whose effect is unknown.
     db.prepare(
       "UPDATE ability_receipts SET state='settled',outcome=?,settledAt=? WHERE state='running'",
@@ -82,7 +95,11 @@ export class AbilityStore {
       throw error;
     }
   }
-  recordPackage(pkg: VerifiedPackage): void {
+  recordPackage(
+    pkg: VerifiedPackage,
+    settings?: Record<string, JsonValue>,
+    initiallyEnabled = true,
+  ): void {
     const descriptor = parseReleaseDescriptor(pkg.descriptor);
     if (
       pkg.digest !== descriptor.asset.sha256 ||
@@ -121,6 +138,17 @@ export class AbilityStore {
       this.db
         .prepare('INSERT OR IGNORE INTO ability_packages VALUES(?,?,?,?)')
         .run(pkg.digest, encoded, inventory, Date.now());
+      this.db
+        .prepare('INSERT OR IGNORE INTO ability_installations VALUES(?,?,0,?)')
+        .run(
+          pkg.digest,
+          Number(initiallyEnabled),
+          JSON.stringify(
+            settings === undefined
+              ? {}
+              : validateValue(pkg.manifest.settings, settings),
+          ),
+        );
     });
   }
   package(digest: string): PackageRecord | undefined {
@@ -147,7 +175,72 @@ export class AbilityStore {
   removePackage(digest: string): void {
     if (this.bindingsForDigest(digest).length)
       throw new Error('Ability is still bound to a Dot');
-    this.db.prepare('DELETE FROM ability_packages WHERE digest=?').run(digest);
+    this.transaction(() => {
+      this.db
+        .prepare('DELETE FROM ability_installations WHERE digest=?')
+        .run(digest);
+      this.db
+        .prepare('DELETE FROM ability_packages WHERE digest=?')
+        .run(digest);
+    });
+  }
+  installation(digest: string): InstalledAbility | undefined {
+    const pkg = this.package(digest);
+    const row = this.db
+      .prepare('SELECT * FROM ability_installations WHERE digest=?')
+      .get(digest);
+    if (!pkg || !row) return;
+    return {
+      digest,
+      manifest: pkg.manifest,
+      enabled: Boolean(row.enabled),
+      restored: Boolean(row.restored),
+      settings: JSON.parse(String(row.settings)),
+      enabledDots: Number(
+        this.db
+          .prepare(
+            'SELECT count(*) AS n FROM ability_bindings WHERE digest=? AND enabled=1 AND restored=0',
+          )
+          .get(digest)!.n,
+      ),
+    };
+  }
+  installations(): InstalledAbility[] {
+    return this.packages().map((pkg) => this.installation(pkg.digest)!);
+  }
+  approveInstallation(
+    digest: string,
+    settings: Record<string, JsonValue>,
+  ): InstalledAbility {
+    const pkg = this.package(digest);
+    if (!pkg) throw new Error('Ability package is not installed');
+    const value = validateValue(pkg.manifest.settings, settings);
+    this.db
+      .prepare(
+        'UPDATE ability_installations SET settings=?,restored=0,enabled=0 WHERE digest=?',
+      )
+      .run(JSON.stringify(value), digest);
+    return this.installation(digest)!;
+  }
+  setMaster(digest: string, enabled: boolean): InstalledAbility {
+    return this.transaction(() => {
+      const installed = this.installation(digest);
+      if (!installed || (enabled && installed.restored))
+        throw new Error('Ability needs review');
+      if (installed.enabled !== enabled) {
+        this.db
+          .prepare('UPDATE ability_installations SET enabled=? WHERE digest=?')
+          .run(Number(enabled), digest);
+        for (const binding of this.bindingsForDigest(digest))
+          this.interrupt(binding.id);
+        this.db
+          .prepare(
+            'UPDATE ability_bindings SET revision=revision+1 WHERE digest=?',
+          )
+          .run(digest);
+      }
+      return this.installation(digest)!;
+    });
   }
   private requireDot(dotId: string): void {
     if (!this.db.prepare('SELECT id FROM dots WHERE id=?').get(dotId))
@@ -319,8 +412,11 @@ export class AbilityStore {
     const context = parsed.data;
     return this.transaction(() => {
       const binding = this.get(context.bindingId);
+      const installed = binding && this.installation(binding.digest);
       if (
         !binding ||
+        !installed?.enabled ||
+        installed.restored ||
         !binding.enabled ||
         binding.restored ||
         binding.dotId !== context.dotId ||

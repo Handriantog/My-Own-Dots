@@ -33,6 +33,7 @@ import { destination, destinationFromUrl } from './workspace-navigation.js';
 import { CompanionVoiceSession } from './voice-session.js';
 import { CompanionFolderPicker } from './folder-picker.js';
 import { StorageController } from './storage-controller.js';
+import type { DesktopDiagnostics } from './diagnostics.js';
 import { ArchiveWorkerClient } from './archive-worker-client.js';
 import { BackupKeys } from './backup-keys.js';
 import { storageMethods } from '../shared/storage-contract.js';
@@ -86,6 +87,7 @@ export class WorkspaceWindow {
     private readonly getAccessories: () => Accessories = () =>
       DEFAULT_ACCESSORIES,
     private readonly selectDesktopDot?: (dotId: string) => Promise<void>,
+    diagnostics?: Pick<DesktopDiagnostics, 'record'>,
   ) {
     this.voice = new CompanionVoiceSession(
       () => this.window,
@@ -102,6 +104,9 @@ export class WorkspaceWindow {
       profile: data,
       bundle,
       storage: safeStorage,
+      onUnavailable: (stage, code) => {
+        void diagnostics?.record('ability-host-unavailable', { stage, code });
+      },
       open: (url) => shell.openExternal(url),
       chooseAbility: async () => {
         const window = this.window;

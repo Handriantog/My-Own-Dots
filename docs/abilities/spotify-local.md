@@ -5,15 +5,20 @@ Spotify desktop app signed in on this Mac. No developer app, client ID, OAuth
 connection or Web API request is needed. The first supported target is macOS 26
 Apple Silicon with Spotify in English. There is no published release yet.
 
-## Teach a local package
+## Install a local package
 
-In **Dot settings → Abilities**, choose **Choose local Ability…** and select the
+In **Abilities** in the sidebar below Memory, choose **Choose local Ability…** and select the
 JSON descriptor beside its matching archive. Review the publisher, permissions
-and actual package/private-state folders, then choose **Teach**. Choosing a file
+and actual package/private-state folders, then choose **Install**. Choosing a file
 reads and hashes a bounded snapshot; it does not extract or execute the archive.
-Teach uses those reviewed bytes even if the original files later change. The
+Install uses those reviewed bytes even if the original files later change. The
 local limit is 16 MiB compressed; reviews expire after ten minutes. The host keeps
 at most four local snapshots and clears them when its session ends.
+
+After installation, choose **Enable**, then **Apply to all Dot** or enable it for
+one Dot in that Dot’s settings. The master switch preserves individual selections;
+“Apply to all Dot” affects existing Dots only. If the host disconnects, use
+**Reconnect**. Recovery never retries an interrupted Spotify action.
 
 For GitHub distribution, publish the same descriptor and archive as release
 assets and use the release link. A development descriptor is for local testing;

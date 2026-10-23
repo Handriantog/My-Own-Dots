@@ -12,6 +12,7 @@ import {
 } from '../../../shared/abilities/bridge.js';
 import {
   desktopAbilityMethods,
+  installedAbilitySchema,
   type DesktopAbilityMethod,
   type DesktopAbilityReply,
 } from '../../../shared/abilities/desktop.js';
@@ -36,6 +37,16 @@ type Current = {
   bridge: DesktopAbilityBridge;
   python?: AbilityRuntime;
 };
+type AttachmentStage =
+  | 'platform'
+  | 'configuration'
+  | 'launcher'
+  | 'runtime'
+  | 'directories'
+  | 'host'
+  | 'pairing'
+  | 'cleanup'
+  | 'connection';
 type Options = {
   profile: string;
   bundle: string;
@@ -45,6 +56,10 @@ type Options = {
   choosePython?(): Promise<string | undefined>;
   approvePython?(runtime: AbilityRuntime): Promise<boolean>;
   runtimes?: AbilitySupervisorOptions['runtimes'];
+  onUnavailable?(
+    stage: AttachmentStage,
+    code: ReturnType<typeof failureCode>,
+  ): void;
 };
 /** Desktop-main only. No renderer-provided URL, path, token or authority is accepted. */
 export class AbilityController {
@@ -56,6 +71,9 @@ export class AbilityController {
   private operations: Promise<unknown> = Promise.resolve();
   private generation = 0;
   private stopped = false;
+  private recovery?: ReturnType<typeof setTimeout>;
+  // Automatic attachment never resets this; another failure needs an owner action.
+  private autoRecoveryUsed = false;
   private unavailable:
     'unsupported_platform' | 'host_unavailable' | 'setup_needed' =
     'host_unavailable';
@@ -68,7 +86,33 @@ export class AbilityController {
     this.operations = next;
     return next;
   }
+  private reportUnavailable(
+    stage: AttachmentStage,
+    code: ReturnType<typeof failureCode>,
+  ): void {
+    try {
+      this.options.onUnavailable?.(stage, code);
+    } catch {
+      // Diagnostics must not interrupt revocation or attachment cleanup.
+    }
+  }
+  async reconnect(): Promise<void> {
+    if (this.stopped || !this.connection)
+      throw new AbilityFailure('host_unavailable');
+    if (this.maintenance) throw new AbilityFailure('busy');
+    await this.attach(this.connection);
+    if (!this.available) throw new AbilityFailure(this.unavailable);
+  }
   async attach(connection: WorkspaceBackendConnection): Promise<void> {
+    this.autoRecoveryUsed = false;
+    return this.attachConnection(connection);
+  }
+  private async attachConnection(
+    connection: WorkspaceBackendConnection,
+    previousSessionId?: string,
+  ): Promise<void> {
+    clearTimeout(this.recovery);
+    this.recovery = undefined;
     if (this.stopped) return;
     if (
       this.available &&
@@ -88,6 +132,7 @@ export class AbilityController {
       if (this.stopped || generation !== this.generation) return;
       if (process.platform !== 'darwin' || process.arch !== 'arm64') {
         this.unavailable = 'unsupported_platform';
+        this.reportUnavailable('platform', this.unavailable);
         return;
       }
       if (
@@ -98,13 +143,17 @@ export class AbilityController {
         connection.ownerToken.length < 24
       ) {
         this.unavailable = 'setup_needed';
+        this.reportUnavailable('configuration', this.unavailable);
         return;
       }
       let current: Current | undefined;
+      let stage: AttachmentStage = 'configuration';
       try {
         loopbackBackend(connection.url);
+        stage = 'launcher';
         const launcher = join(this.options.bundle, 'native/ability-launcher');
         await validateExecutable(launcher);
+        stage = 'runtime';
         const runtime: AbilitySupervisorOptions['runtimes'] = {
           ...(this.options.runtimes ?? {
             javascript: {
@@ -115,6 +164,7 @@ export class AbilityController {
         };
         await validateRuntime(runtime.javascript);
         if (runtime.python) await validateRuntime(runtime.python);
+        stage = 'directories';
         const profile = await realpath(this.options.profile),
           privateRoot = join(profile, 'abilities'),
           root = connection.abilityRoot;
@@ -133,6 +183,7 @@ export class AbilityController {
           runtime.python = await loadPython(privateRoot).catch(() => undefined);
         }
         if (this.stopped || generation !== this.generation) return;
+        stage = 'host';
         const controller = new AbortController();
         const local = new LocalAbilityPackages(() => bridge?.session);
         const host: AbilityHost = new AbilityHost({
@@ -169,8 +220,37 @@ export class AbilityController {
             url: connection.url,
             workspaceId: connection.workspaceId,
             ownerToken: connection.ownerToken,
+            previousSessionId,
           },
           host,
+          (lostSessionId) => {
+            if (
+              this.current !== current ||
+              this.stopped ||
+              generation !== this.generation
+            )
+              return;
+            this.unavailable = 'host_unavailable';
+            current?.controller.abort();
+            current?.local.clear();
+            this.reportUnavailable('connection', this.unavailable);
+            if (this.autoRecoveryUsed || this.maintenance) return;
+            this.autoRecoveryUsed = true;
+            this.recovery = setTimeout(() => {
+              this.recovery = undefined;
+              if (
+                this.stopped ||
+                this.maintenance ||
+                generation !== this.generation ||
+                (this.current && this.current !== current)
+              )
+                return;
+              void this.attachConnection(connection, lostSessionId).catch(
+                () => {},
+              );
+            }, 1000);
+            this.recovery.unref?.();
+          },
         );
         current = {
           connection: { ...connection },
@@ -181,19 +261,26 @@ export class AbilityController {
           python: runtime.python,
         };
         this.current = current;
+        stage = 'pairing';
         await bridge.start();
+        stage = 'cleanup';
         await this.api(connection, '/abilities/cleanup', {}, controller.signal);
         if (this.stopped || generation !== this.generation) {
           controller.abort();
           await bridge.stop();
           if (this.current === current) this.current = undefined;
         }
-      } catch {
+      } catch (error) {
         this.unavailable = 'host_unavailable';
+        if (!this.stopped && generation === this.generation)
+          this.reportUnavailable(
+            stage,
+            error instanceof AbilityFailure ? error.code : 'host_unavailable',
+          );
         current?.controller.abort();
         current?.local.clear();
-        await current?.bridge.stop();
         if (this.current === current) this.current = undefined;
+        await current?.bridge.stop();
       }
     });
   }
@@ -208,6 +295,8 @@ export class AbilityController {
     this.maintenance = false;
   }
   suspend(): Promise<void> {
+    clearTimeout(this.recovery);
+    this.recovery = undefined;
     ++this.generation;
     const current = this.current;
     this.current = undefined;
@@ -303,12 +392,27 @@ export class AbilityController {
       const connection = this.connection;
       if (!connection || this.stopped)
         throw new AbilityFailure('host_unavailable');
+      if (method === 'reconnect') {
+        if (this.maintenance) throw new AbilityFailure('busy');
+        await this.reconnect();
+        if (!authority.trusted()) throw new AbilityFailure('permission_denied');
+        return {
+          ok: true,
+          value: { available: this.available },
+        } as DesktopAbilityReply<M>;
+      }
       const current = this.current;
-      if (this.maintenance && method !== 'list')
+      if (this.maintenance && !['list', 'catalog'].includes(method))
         throw new AbilityFailure('busy');
-      if (method !== 'list' && (!current || !this.available))
+      if (
+        !['list', 'catalog'].includes(method) &&
+        (!current || !this.available)
+      )
         throw new AbilityFailure(this.unavailable);
-      const signal = current?.controller.signal ?? AbortSignal.timeout(3000);
+      const signal =
+        this.available && current
+          ? current.controller.signal
+          : AbortSignal.timeout(3000);
       const api = (path: string, body?: unknown) =>
         this.api(connection, path, body, signal);
       let boundBinding: z.infer<typeof bindingSchema> | undefined;
@@ -366,10 +470,51 @@ export class AbilityController {
       }
       let value: unknown;
       switch (method) {
+        case 'catalog': {
+          const response = z
+            .strictObject({ installations: z.array(installedAbilitySchema) })
+            .parse(await api('/abilities/catalog'));
+          value = {
+            ...response,
+            available: this.available,
+            ...(!this.available ? { reason: this.unavailable } : {}),
+          };
+          break;
+        }
+        case 'install': {
+          value = await api(
+            '/abilities/install',
+            desktopAbilityMethods.install.input.parse(input),
+          );
+          break;
+        }
+        case 'master': {
+          const args = desktopAbilityMethods.master.input.parse(input);
+          value = await api(`/abilities/packages/${args.digest}/master`, {
+            enabled: args.enabled,
+          });
+          break;
+        }
+        case 'applyAll': {
+          const args = desktopAbilityMethods.applyAll.input.parse(input);
+          value = await api(`/abilities/packages/${args.digest}/apply-all`, {});
+          break;
+        }
+        case 'assign': {
+          const args = desktopAbilityMethods.assign.input.parse(input);
+          value = await api(
+            `/dots/${encodeURIComponent(args.dotId)}/abilities/assign`,
+            { digest: args.digest, enabled: args.enabled },
+          );
+          break;
+        }
         case 'list': {
           const args = desktopAbilityMethods.list.input.parse(input);
           const response = z
-            .strictObject({ bindings: z.array(bindingSchema) })
+            .strictObject({
+              bindings: z.array(bindingSchema),
+              installed: z.array(installedAbilitySchema).optional(),
+            })
             .parse(
               await api(`/dots/${encodeURIComponent(args.dotId)}/abilities`),
             );
@@ -387,12 +532,16 @@ export class AbilityController {
           };
           break;
         }
-        case 'reviewLocal': {
+        case 'reviewLocal':
+        case 'reviewInstallLocal': {
           if (this.choosingAbility || !this.options.chooseAbility)
             throw new AbilityFailure('busy');
           this.choosingAbility = true;
           try {
-            const args = desktopAbilityMethods.reviewLocal.input.parse(input);
+            const args =
+              method === 'reviewLocal'
+                ? desktopAbilityMethods.reviewLocal.input.parse(input)
+                : undefined;
             const path = await this.options.chooseAbility();
             if (!path) {
               value = null;
@@ -405,7 +554,9 @@ export class AbilityController {
               throw new AbilityFailure('permission_denied');
             const prepared = desktopAbilityMethods.review.output.parse(
               await api(
-                `/dots/${encodeURIComponent(args.dotId)}/abilities/review-local`,
+                args
+                  ? `/dots/${encodeURIComponent(args.dotId)}/abilities/review-local`
+                  : '/abilities/review-local',
                 { review, sessionId: current!.bridge.session },
               ),
             );
@@ -426,11 +577,17 @@ export class AbilityController {
           }
           break;
         }
-        case 'review': {
-          const args = desktopAbilityMethods.review.input.parse(input);
+        case 'review':
+        case 'reviewInstall': {
+          const args =
+            method === 'review'
+              ? desktopAbilityMethods.review.input.parse(input)
+              : desktopAbilityMethods.reviewInstall.input.parse(input);
           const review = desktopAbilityMethods.review.output.parse(
             await api(
-              `/dots/${encodeURIComponent(args.dotId)}/abilities/review`,
+              'dotId' in args && typeof args.dotId === 'string'
+                ? `/dots/${encodeURIComponent(args.dotId)}/abilities/review`
+                : '/abilities/review',
               { url: args.url },
             ),
           );

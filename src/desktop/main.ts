@@ -188,6 +188,7 @@ async function start(): Promise<void> {
         switchingDesktop = false;
       }
     },
+    diagnostics,
   );
   protocol.handle(
     'dots',

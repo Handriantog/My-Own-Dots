@@ -242,6 +242,10 @@ export const repositoryMethods = {
   ],
   computers: ['permissions', 'patch', 'begin', 'finish', 'audit'],
   abilities: [
+    'installation',
+    'installations',
+    'approveInstallation',
+    'setMaster',
     'recordPackage',
     'package',
     'packages',

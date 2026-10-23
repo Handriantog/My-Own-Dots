@@ -21,7 +21,7 @@ const categories = [
     id: 'abilities',
     label: 'Abilities',
     icon: Sparkles,
-    description: 'Teach this Dot a new capability.',
+    description: 'Choose from installed Abilities.',
   },
   {
     id: 'general',
@@ -630,7 +630,7 @@ export function DotConfiguration({
                   )
                 ) : (
                   <p className="dot-config-empty">
-                    Create this Dot to teach an Ability.
+                    Create this Dot to enable installed Abilities.
                   </p>
                 ),
               )}

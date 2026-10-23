@@ -86,6 +86,7 @@ export function WorkspaceSidebar({
                 space: 'Spaces',
                 tasks: 'Activity',
                 memories: 'Memory',
+                abilities: 'Abilities',
                 settings: 'Settings',
               }[view]
             }

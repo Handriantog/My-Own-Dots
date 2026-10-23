@@ -3,11 +3,13 @@ import { open, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { z } from 'zod';
-export const sqliteStorageSchema = 4;
+export const sqliteStorageSchema = 5;
 export function supportedSQLiteStorageSchema(
   value: number,
-): value is 2 | 3 | 4 {
-  return value === 2 || value === 3 || value === sqliteStorageSchema;
+): value is 2 | 3 | 4 | 5 {
+  return (
+    value === 2 || value === 3 || value === 4 || value === sqliteStorageSchema
+  );
 }
 
 export const workspaceManifestSchema = z

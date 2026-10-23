@@ -33,7 +33,7 @@ export class AbilityService {
   private maintenance = false;
   private readonly reviews = new Map<
     string,
-    { dotId: string; review: InstallReview }
+    { dotId: string | undefined; review: InstallReview }
   >();
   private readonly locks = new Map<string, Promise<unknown>>();
   private readonly active = new Map<
@@ -72,7 +72,7 @@ export class AbilityService {
   }
   async review(dotId: string, url: string) {
     this.session();
-    if (!(await this.workspace.dot(dotId)))
+    if (dotId !== undefined && !(await this.workspace.dot(dotId)))
       throw new AbilityFailure('permission_denied');
     for (const [id, entry] of this.reviews)
       if (entry.review.expiresAt <= Date.now()) this.reviews.delete(id);
@@ -83,10 +83,14 @@ export class AbilityService {
     );
     return this.rememberReview(dotId, review);
   }
-  async reviewLocal(dotId: string, input: unknown, sessionId: string) {
+  async reviewLocal(
+    dotId: string | undefined,
+    input: unknown,
+    sessionId: string,
+  ) {
     if (this.session().id !== sessionId)
       throw new AbilityFailure('permission_denied');
-    if (!(await this.workspace.dot(dotId)))
+    if (dotId !== undefined && !(await this.workspace.dot(dotId)))
       throw new AbilityFailure('permission_denied');
     const review = reviewSchema.parse(input);
     if (
@@ -99,12 +103,19 @@ export class AbilityService {
       throw new AbilityFailure('permission_denied');
     return this.rememberReview(dotId, review);
   }
-  private async rememberReview(dotId: string, review: InstallReview) {
+  private async rememberReview(
+    dotId: string | undefined,
+    review: InstallReview,
+  ) {
     this.session();
     for (const [id, entry] of this.reviews)
       if (entry.review.expiresAt <= Date.now()) this.reviews.delete(id);
     if (this.reviews.size >= 128) throw new AbilityFailure('busy');
-    const previous = (await this.workspace.abilities.list(dotId)).find(
+    const previous = (
+      dotId === undefined
+        ? await this.workspace.abilities.packages()
+        : await this.workspace.abilities.list(dotId)
+    ).find(
       (binding) =>
         binding.manifest.id === review.descriptor.manifest.id &&
         canonicalJson(binding.manifest.source) ===
@@ -118,7 +129,10 @@ export class AbilityService {
         : [],
     };
   }
-  private takeReview(dotId: string, reviewId: string): InstallReview {
+  private takeReview(
+    dotId: string | undefined,
+    reviewId: string,
+  ): InstallReview {
     const entry = this.reviews.get(reviewId);
     if (!entry || entry.dotId !== dotId || entry.review.expiresAt <= Date.now())
       throw new AbilityFailure('permission_denied');
@@ -134,6 +148,142 @@ export class AbilityService {
     )
       throw new AbilityFailure('permission_denied');
   }
+  async reviewInstall(url: string) {
+    this.session();
+    const review = await (this.options.resolve ?? resolveGitHubRelease)(
+      url,
+      AbortSignal.timeout(30_000),
+    );
+    return this.rememberReview(undefined, review);
+  }
+  async installed() {
+    return this.workspace.abilities.installations();
+  }
+  async install(
+    reviewId: string,
+    settings: Record<string, JsonValue> = {},
+    acceptedNotices: string[] = [],
+  ) {
+    this.session();
+    const review = this.takeReview(undefined, reviewId);
+    this.requireNotices(review, acceptedNotices);
+    validateValue(review.descriptor.manifest.settings, settings);
+    return this.serial(
+      `package:${review.descriptor.asset.sha256}`,
+      async () => {
+        const pkg = await this.host.install(
+          review,
+          AbortSignal.timeout(300_000),
+        );
+        if (canonicalJson(pkg.descriptor) !== canonicalJson(review.descriptor))
+          throw new AbilityFailure('invalid_response');
+        const previous = await this.workspace.abilities.installation(
+          pkg.digest,
+        );
+        await this.workspace.abilities.recordPackage(pkg, settings, false);
+        if (previous && !previous.restored) return previous;
+        return this.workspace.abilities.approveInstallation(
+          pkg.digest,
+          settings,
+        );
+      },
+    );
+  }
+  private async requireInstalled(digest: string) {
+    const installed = await this.workspace.abilities.installation(digest);
+    if (!installed || !installed.enabled || installed.restored)
+      throw new AbilityFailure('permission_denied');
+    return installed;
+  }
+  async setMaster(digest: string, enabled: boolean) {
+    return this.serial(`package:${digest}`, async () => {
+      if (enabled) this.session();
+      const bindings = await this.workspace.abilities.bindingsForDigest(digest);
+      const installed = await this.workspace.abilities.setMaster(
+        digest,
+        enabled,
+      );
+      if (!enabled) {
+        for (const entry of this.active.values())
+          if (entry.context.digest === digest) entry.controller.abort();
+        const stopped = await Promise.allSettled(
+          bindings.map((binding) =>
+            this.host.revoke(binding.id, binding.revision),
+          ),
+        );
+        const failure = stopped.find((result) => result.status === 'rejected');
+        if (failure?.status === 'rejected') throw failure.reason;
+      }
+      return installed;
+    });
+  }
+  async assign(dotId: string, digest: string, enabled: boolean) {
+    return this.serial(`package:${digest}`, () =>
+      this.assignInstalled(dotId, digest, enabled),
+    );
+  }
+  private serialAbility<T>(
+    dotId: string,
+    manifest: Binding['manifest'],
+    action: () => Promise<T>,
+  ) {
+    // Package locks precede this identity lock; mutation/admission locks follow it.
+    return this.serial(
+      `ability:${canonicalJson([dotId, manifest.source, manifest.id])}`,
+      action,
+    );
+  }
+  private async assignInstalled(
+    dotId: string,
+    digest: string,
+    enabled: boolean,
+  ) {
+    this.session();
+    const installed = await this.workspace.abilities.installation(digest);
+    if (!installed || !(await this.workspace.dot(dotId)))
+      throw new AbilityFailure('permission_denied');
+    return this.serialAbility(dotId, installed.manifest, async () => {
+      const existing = (await this.workspace.abilities.list(dotId)).find(
+        (b) =>
+          b.manifest.id === installed.manifest.id &&
+          canonicalJson(b.manifest.source) ===
+            canonicalJson(installed.manifest.source),
+      );
+      if (!enabled) {
+        if (!existing || existing.digest !== digest) return null;
+        return this.disable(existing.id);
+      }
+      await this.requireInstalled(digest);
+      if (existing?.digest === digest && !existing.restored)
+        return this.enable(existing.id);
+      const bind = (settings: Record<string, JsonValue>) =>
+        this.workspace.abilities.bind(
+          dotId,
+          digest,
+          installed.manifest.permissions.map((p) => p.id),
+          settings,
+        );
+      if (!existing) return bind(installed.settings);
+      return this.serial(`mutation:${existing.id}`, async () => {
+        const current = await this.binding(existing.id);
+        await this.revoke(current);
+        return this.serial(existing.id, async () =>
+          bind(
+            current.digest === digest ? current.settings : installed.settings,
+          ),
+        );
+      });
+    });
+  }
+  async applyAll(digest: string) {
+    return this.serial(`package:${digest}`, async () => {
+      this.session();
+      await this.requireInstalled(digest);
+      const dots = await this.workspace.dots();
+      for (const dot of dots) await this.assignInstalled(dot.id, digest, true);
+      return this.workspace.abilities.installation(digest);
+    });
+  }
   async teach(
     dotId: string,
     reviewId: string,
@@ -144,35 +294,39 @@ export class AbilityService {
     const review = this.takeReview(dotId, reviewId);
     this.requireNotices(review, acceptedNotices);
     validateValue(review.descriptor.manifest.settings, settings);
-    return this.serial(`teach:${dotId}`, async () => {
-      const previous = (await this.workspace.abilities.list(dotId)).find(
-        (binding) =>
-          binding.manifest.id === review.descriptor.manifest.id &&
-          canonicalJson(binding.manifest.source) ===
-            canonicalJson(review.descriptor.manifest.source),
-      );
-      if (previous) throw new AbilityFailure('permission_denied'); // updates use their explicit review path
-      return this.serial(
-        `package:${review.descriptor.asset.sha256}`,
-        async () => {
-          const pkg = await this.host.install(
-            review,
-            AbortSignal.timeout(300_000),
-          );
-          if (
-            canonicalJson(pkg.descriptor) !== canonicalJson(review.descriptor)
-          )
-            throw new AbilityFailure('invalid_response');
-          await this.workspace.abilities.recordPackage(pkg);
-          return this.workspace.abilities.bind(
-            dotId,
+    return this.serial(`package:${review.descriptor.asset.sha256}`, () =>
+      this.serialAbility(dotId, review.descriptor.manifest, async () => {
+        const previous = (await this.workspace.abilities.list(dotId)).find(
+          (binding) =>
+            binding.manifest.id === review.descriptor.manifest.id &&
+            canonicalJson(binding.manifest.source) ===
+              canonicalJson(review.descriptor.manifest.source),
+        );
+        if (previous) throw new AbilityFailure('permission_denied');
+        const pkg = await this.host.install(
+          review,
+          AbortSignal.timeout(300_000),
+        );
+        if (canonicalJson(pkg.descriptor) !== canonicalJson(review.descriptor))
+          throw new AbilityFailure('invalid_response');
+        await this.workspace.abilities.recordPackage(pkg, settings);
+        if (
+          (await this.workspace.abilities.installation(pkg.digest))?.restored
+        ) {
+          await this.workspace.abilities.approveInstallation(
             pkg.digest,
-            pkg.manifest.permissions.map((p) => p.id),
             settings,
           );
-        },
-      );
-    });
+          await this.workspace.abilities.setMaster(pkg.digest, true);
+        }
+        return this.workspace.abilities.bind(
+          dotId,
+          pkg.digest,
+          pkg.manifest.permissions.map((p) => p.id),
+          settings,
+        );
+      }),
+    );
   }
   async update(
     id: string,
@@ -202,20 +356,25 @@ export class AbilityService {
         );
         if (canonicalJson(pkg.descriptor) !== canonicalJson(review.descriptor))
           throw new AbilityFailure('invalid_response');
-        return this.serial(`mutation:${id}`, async () => {
-          const current = await this.binding(id);
-          validateValue(pkg.manifest.settings, settings ?? current.settings);
-          await this.revoke(current);
-          return this.serial(id, async () => {
-            await this.workspace.abilities.recordPackage(pkg);
-            return this.workspace.abilities.bind(
-              current.dotId,
-              pkg.digest,
-              pkg.manifest.permissions.map((p) => p.id),
-              settings ?? current.settings,
-            );
-          });
-        });
+        return this.serialAbility(original.dotId, original.manifest, () =>
+          this.serial(`mutation:${id}`, async () => {
+            const current = await this.binding(id);
+            validateValue(pkg.manifest.settings, settings ?? current.settings);
+            await this.revoke(current);
+            return this.serial(id, async () => {
+              await this.workspace.abilities.recordPackage(
+                pkg,
+                settings ?? current.settings,
+              );
+              return this.workspace.abilities.bind(
+                current.dotId,
+                pkg.digest,
+                pkg.manifest.permissions.map((p) => p.id),
+                settings ?? current.settings,
+              );
+            });
+          }),
+        );
       },
     );
   }
@@ -223,6 +382,7 @@ export class AbilityService {
     return this.serial(`mutation:${id}`, async () =>
       this.serial(id, async () => {
         this.session();
+        await this.requireInstalled((await this.binding(id)).digest);
         return this.workspace.abilities.enable(id);
       }),
     );
@@ -292,8 +452,16 @@ export class AbilityService {
   async tools(dotId: string, channel: 'text' | 'voice' = 'text') {
     if (!this.host.session()) return [];
     await this.cleanup();
+    const enabled = new Set(
+      (await this.installed())
+        .filter((item) => item.enabled && !item.restored)
+        .map((item) => item.digest),
+    );
     return (await this.workspace.abilities.list(dotId))
-      .filter((binding) => binding.enabled && !binding.restored)
+      .filter(
+        (binding) =>
+          binding.enabled && !binding.restored && enabled.has(binding.digest),
+      )
       .flatMap((binding) =>
         binding.manifest.tools
           .filter((tool) => !tool.channels || tool.channels.includes(channel))
@@ -317,6 +485,7 @@ export class AbilityService {
       )
         throw new AbilityFailure('permission_denied');
       const binding = await this.binding(context.bindingId);
+      await this.requireInstalled(binding.digest);
       const thread = await this.workspace.requireThread(context.threadId);
       if (
         !binding.enabled ||
@@ -349,6 +518,7 @@ export class AbilityService {
         signal.throwIfAborted();
         const session = this.session(),
           binding = await this.binding(input.bindingId);
+        await this.requireInstalled(binding.digest);
         if (
           !binding.enabled ||
           binding.restored ||

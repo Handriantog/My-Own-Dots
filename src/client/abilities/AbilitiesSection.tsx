@@ -1,15 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Binding, JsonValue } from '../../shared/abilities/types';
+import type { Binding } from '../../shared/abilities/types';
 import type { DesktopAbilityOutput } from '../../shared/abilities/desktop';
-import { PermissionReview, type AbilityReview } from './PermissionReview';
+import { AbilityHostStatus, unwrap } from './AbilityHostStatus';
 import './abilities.css';
-const unwrap = <T,>(
-  reply: { ok: true; value: T } | { ok: false; code: string } | undefined,
-): T => {
-  if (!reply?.ok)
-    throw new Error(reply && !reply.ok ? reply.code : 'host_unavailable');
-  return reply.value;
-};
 function AccountSetup({
   dotId,
   binding,
@@ -177,9 +170,7 @@ export function AbilitiesSection({
 }) {
   const [state, setState] = useState<DesktopAbilityOutput<'list'>>(),
     [accounts, setAccounts] = useState<Record<string, boolean>>({});
-  const [url, setUrl] = useState(''),
-    [review, setReview] = useState<AbilityReview>(),
-    [busy, setBusy] = useState(''),
+  const [busy, setBusy] = useState(''),
     [error, setError] = useState('');
   const [forgetting, setForgetting] = useState<string>(),
     [erase, setErase] = useState(false);
@@ -189,6 +180,11 @@ export function AbilitiesSection({
     const next = unwrap(await window.dotAbilities?.list({ dotId }));
     if (current.current !== dotId) return;
     setState(next);
+    setError((current) =>
+      current === 'Abilities are unavailable. Reconnect the desktop workspace.'
+        ? ''
+        : current,
+    );
     const pairs = await Promise.all(
       next.bindings.flatMap((binding) =>
         binding.manifest.permissions
@@ -210,8 +206,6 @@ export function AbilitiesSection({
   };
   useEffect(() => {
     current.current = dotId;
-    setReview(undefined);
-    setUrl('');
     setState(undefined);
     setAccounts({});
     setError('');
@@ -262,121 +256,77 @@ export function AbilitiesSection({
       }
     }
   };
-  const reviewRelease = async () => {
-    const value = await run('review', async () =>
-      unwrap(await window.dotAbilities?.review({ dotId, url: url.trim() })),
-    );
-    if (value) setReview(value);
-  };
-  const reviewLocal = async () => {
-    const value = await run('review-local', async () =>
-      unwrap(await window.dotAbilities?.reviewLocal({ dotId })),
-    );
-    if (value) setReview(value);
-  };
-  const teach = async (
-    settings: Record<string, JsonValue>,
-    acceptedNotices?: string[],
-  ) => {
-    if (!review) return;
-    const manifest = review.descriptor.manifest;
-    const previous = state?.bindings.find(
-      (binding) =>
-        binding.manifest.id === manifest.id &&
-        binding.manifest.source.owner === manifest.source.owner &&
-        binding.manifest.source.repository === manifest.source.repository,
-    );
-    const result = await run('teach', async () =>
-      unwrap(
-        previous
-          ? await window.dotAbilities?.update({
-              dotId,
-              bindingId: previous.id,
-              reviewId: review.id,
-              settings,
-              ...(acceptedNotices?.length ? { acceptedNotices } : {}),
-            })
-          : await window.dotAbilities?.teach({
-              dotId,
-              reviewId: review.id,
-              settings,
-              ...(acceptedNotices?.length ? { acceptedNotices } : {}),
-            }),
-      ),
-    );
-    if (result) {
-      setReview(undefined);
-      setUrl('');
-      await load();
-    }
-  };
   if (!window.dotAbilities)
     return (
       <p className="dot-config-empty">
-        Open the Dot desktop app to teach Abilities.
+        Open the Dot desktop app to enable Abilities.
       </p>
     );
   return (
     <section className="abilities-section" aria-label={`${dotName} Abilities`}>
-      <div className="ability-add">
-        <label>
-          GitHub release descriptor
-          <input
-            aria-label="GitHub release descriptor"
-            placeholder="https://github.com/…/ability.release.json"
-            value={url}
-            onChange={(event) => setUrl(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                void reviewRelease();
-              }
-            }}
-          />
-        </label>
-        <button
-          type="button"
-          disabled={!state?.available || !!busy || !url.trim()}
-          onClick={reviewRelease}
-        >
-          {busy === 'review' ? 'Reviewing…' : 'Review'}
-        </button>
-      </div>
-      <button
-        type="button"
-        disabled={!state?.available || !!busy}
-        onClick={reviewLocal}
-      >
-        Choose local Ability…
-      </button>
-      {review && (
-        <PermissionReview
-          key={review.id}
-          initialSettings={
-            state?.bindings.find(
-              (binding) =>
-                binding.manifest.id === review.descriptor.manifest.id &&
-                binding.manifest.source.owner ===
-                  review.descriptor.manifest.source.owner &&
-                binding.manifest.source.repository ===
-                  review.descriptor.manifest.source.repository,
-            )?.settings
-          }
-          review={review}
-          dotName={dotName}
-          onTeach={teach}
-          onCancel={() => setReview(undefined)}
-        />
-      )}
-      {state && !state.available && (
-        <p role="status">
-          Blocked ·{' '}
-          {state.reason === 'unsupported_platform'
-            ? 'Abilities require macOS on Apple Silicon.'
-            : 'The Ability host is unavailable. Reconnect the desktop workspace.'}
-        </p>
-      )}
-      {state?.bindings.map((binding) => {
+      <AbilityHostStatus
+        available={state?.available ?? false}
+        reason={state?.reason}
+        busy={!!busy}
+        onReconnect={() =>
+          run('reconnect', async () => {
+            unwrap(await window.dotAbilities?.reconnect({}));
+            await load();
+          })
+        }
+      />
+      {(
+        state?.installed ??
+        state?.bindings.map((binding) => ({
+          digest: binding.digest,
+          manifest: binding.manifest,
+          enabled: true,
+          restored: binding.restored,
+          settings: binding.settings,
+          enabledDots: 1,
+        })) ??
+        []
+      ).map((ability) => {
+        const binding = state?.bindings.find(
+          (item) => item.digest === ability.digest,
+        );
+        const blocked =
+          !!busy || !state?.available || ability.restored || !ability.enabled;
+        const assign = async () =>
+          run(ability.digest, async () => {
+            unwrap(
+              await window.dotAbilities?.assign({
+                dotId,
+                digest: ability.digest,
+                enabled: !binding?.enabled,
+              }),
+            );
+            await load();
+          });
+        if (!binding)
+          return (
+            <article className="ability-binding" key={ability.digest}>
+              <div className="ability-heading">
+                <div>
+                  <strong>{ability.manifest.name}</strong>
+                  <span>{ability.manifest.version}</span>
+                </div>
+                <span role="status">
+                  {ability.restored
+                    ? 'Review needed'
+                    : !ability.enabled
+                      ? 'Disabled in workspace'
+                      : 'Disabled'}
+                </span>
+              </div>
+              <div className="ability-actions">
+                <button type="button" disabled={blocked} onClick={assign}>
+                  Enable
+                </button>
+              </div>
+            </article>
+          );
+
         const requiredAccounts = binding.manifest.permissions.filter(
           (p): p is Extract<typeof p, { kind: 'oauth' }> => p.kind === 'oauth',
         );
@@ -387,18 +337,21 @@ export function AbilitiesSection({
           binding.manifest.entrypoint,
           ...binding.manifest.helpers.map((helper) => helper.entrypoint),
         ].some((entry) => entry.runtime === 'python');
-        const phase = binding.restored
-          ? 'Review needed'
-          : !binding.enabled
-            ? 'Disabled'
-            : !state.available
-              ? 'Blocked'
-              : state.activity?.[binding.id]
-                ? 'Running'
-                : connected && (!needsPython || !!state.python)
-                  ? 'Ready'
-                  : 'Setup needed';
-        const change = async (method: 'disable' | 'enable' | 'disconnect') => {
+        const phase =
+          ability.restored || binding.restored
+            ? 'Review needed'
+            : !ability.enabled
+              ? 'Disabled in workspace'
+              : !binding.enabled
+                ? 'Disabled'
+                : !state?.available
+                  ? 'Blocked'
+                  : state?.activity?.[binding.id]
+                    ? 'Running'
+                    : connected && (!needsPython || !!state?.python)
+                      ? 'Ready'
+                      : 'Setup needed';
+        const change = async (method: 'disconnect') => {
           await run(binding.id, async () => {
             unwrap<unknown>(
               await window.dotAbilities?.[method]({
@@ -423,9 +376,9 @@ export function AbilitiesSection({
                 {phase}
               </span>
             </div>
-            {binding.restored && (
+            {ability.restored && (
               <p>
-                Review the release URL above to teach this restored Ability.{' '}
+                Review this release in Abilities to restore access.{' '}
                 <a
                   href={`https://github.com/${binding.manifest.source.owner}/${binding.manifest.source.repository}/releases`}
                   target="_blank"
@@ -436,17 +389,13 @@ export function AbilitiesSection({
               </p>
             )}
             <div className="ability-actions">
-              <button
-                type="button"
-                disabled={!!busy || !state.available || binding.restored}
-                onClick={() => change(binding.enabled ? 'disable' : 'enable')}
-              >
+              <button type="button" disabled={blocked} onClick={assign}>
                 {binding.enabled ? 'Disable' : 'Enable'}
               </button>
               {requiredAccounts.length > 0 && connected && (
                 <button
                   type="button"
-                  disabled={!!busy || !state.available}
+                  disabled={!!busy || !state?.available}
                   onClick={() => change('disconnect')}
                 >
                   Disconnect
@@ -454,7 +403,7 @@ export function AbilitiesSection({
               )}
               <button
                 type="button"
-                disabled={!!busy || !state.available}
+                disabled={!!busy || !state?.available}
                 onClick={() => {
                   setForgetting(binding.id);
                   setErase(false);
@@ -465,12 +414,12 @@ export function AbilitiesSection({
             </div>
             {needsPython && (
               <div className="ability-python">
-                {state.python && (
-                  <small>Python: {state.python.executable}</small>
+                {state?.python && (
+                  <small>Python: {state?.python.executable}</small>
                 )}
                 <button
                   type="button"
-                  disabled={!!busy || !state.available}
+                  disabled={!!busy || !state?.available}
                   onClick={() =>
                     run('python', async () => {
                       unwrap(
@@ -480,7 +429,7 @@ export function AbilitiesSection({
                     })
                   }
                 >
-                  {state.python ? 'Change Python…' : 'Choose Python…'}
+                  {state?.python ? 'Change Python…' : 'Choose Python…'}
                 </button>
               </div>
             )}
@@ -488,7 +437,7 @@ export function AbilitiesSection({
               key={binding.id + ':' + binding.revision}
               dotId={dotId}
               binding={binding}
-              disabled={!!busy || !state.available}
+              disabled={!!busy || !state?.available}
               onChange={load}
             />
             {requiredAccounts.map((account) => (
@@ -497,7 +446,7 @@ export function AbilitiesSection({
                 dotId={dotId}
                 binding={binding}
                 account={account}
-                disabled={!binding.enabled || !state.available || !!busy}
+                disabled={blocked || !binding.enabled}
                 connected={!!accounts[binding.id + ':' + account.id]}
                 onChange={load}
               />
@@ -539,9 +488,9 @@ export function AbilitiesSection({
           </article>
         );
       })}
-      {state?.available && !state.bindings.length && !review && (
+      {state?.available && !(state.installed ?? state.bindings).length && (
         <p className="muted">
-          Teach {dotName} an Ability from a GitHub release.
+          Install Abilities from the sidebar, then enable them here.
         </p>
       )}
       {error && <p role="alert">{error}</p>}

@@ -40,7 +40,9 @@ export function PermissionReview({
   onTeach,
   onCancel,
   initialSettings = {},
+  mode = 'teach',
 }: {
+  mode?: 'teach' | 'install';
   initialSettings?: Record<string, JsonValue>;
   review: AbilityReview;
   dotName: string;
@@ -92,7 +94,7 @@ export function PermissionReview({
       else await onTeach(value);
     } catch {
       setError(
-        'Could not teach this Ability. Check the settings or review the release again.',
+        'Could not approve this Ability. Check the settings or review the release again.',
       );
     } finally {
       active.current = false;
@@ -105,7 +107,8 @@ export function PermissionReview({
         <div>
           <strong>{manifest.name}</strong>
           <span>
-            Teach {dotName} · v{manifest.version}
+            {mode === 'install' ? 'Install in workspace' : `Teach ${dotName}`} ·
+            v{manifest.version}
           </span>
         </div>
       </div>
@@ -231,7 +234,13 @@ export function PermissionReview({
           disabled={busy || missingConsent}
           onClick={submit}
         >
-          {busy ? 'Teaching…' : 'Teach'}
+          {mode === 'install'
+            ? busy
+              ? 'Installing…'
+              : 'Install'
+            : busy
+              ? 'Teaching…'
+              : 'Teach'}
         </button>
         <button type="button" disabled={busy} onClick={onCancel}>
           Cancel

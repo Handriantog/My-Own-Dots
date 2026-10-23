@@ -459,12 +459,12 @@ it('fails cleanly on the legacy backend without adding delegation schema', async
   db.close();
 });
 
-it('restores known schema-2 history into schema 4 without mutating the source', async () => {
+it('restores known schema-2 history into schema 5 without mutating the source', async () => {
   const f = await fixture();
   await f.storage.close();
   const old = new DatabaseSync(f.database);
   old.exec(
-    'DROP TABLE voice_delegations; DROP TRIGGER ability_deleted_dot; DROP TABLE ability_cleanup; DROP TABLE ability_receipts; DROP TABLE ability_bindings; DROP TABLE ability_packages; DELETE FROM workspace_storage_schema WHERE version>=3',
+    'DROP TABLE voice_delegations; DROP TRIGGER ability_deleted_dot; DROP TABLE ability_cleanup; DROP TABLE ability_receipts; DROP TABLE ability_bindings; DROP TABLE ability_installations; DROP TABLE ability_packages; DELETE FROM workspace_storage_schema WHERE version>=3',
   );
   old.close();
   const destination = join(f.root, 'restored');
@@ -485,7 +485,7 @@ it('restores known schema-2 history into schema 4 without mutating the source', 
     restored
       .prepare('SELECT max(version) AS version FROM workspace_storage_schema')
       .get()!.version,
-  ).toBe(4);
+  ).toBe(5);
   expect(
     restored.prepare('SELECT count(*) AS n FROM voice_delegations').get()!.n,
   ).toBe(0);
@@ -593,7 +593,7 @@ it('atomically updates a known workspace manifest after runtime schema upgrade',
   await updateWorkspaceManifestSchema(f.root, f.ownerId);
   expect(await readWorkspaceManifest(f.root)).toEqual({
     ...identity,
-    schema: 4,
+    schema: 5,
   });
   await updateWorkspaceManifestSchema(f.root, f.ownerId);
   await expect(

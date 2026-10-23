@@ -37,7 +37,8 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       bundle,
       data: profile,
       sourceRoot: workspace,
-      environment: { DO_NOT_TRACK: '1' },
+      // Preserve the runner's home lookup; the database and workspace remain isolated below.
+      environment: { DO_NOT_TRACK: '1', HOME: process.env.HOME },
       startupTimeoutMs: 15000,
     });
     let controller: StorageController | undefined;

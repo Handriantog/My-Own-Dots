@@ -30,6 +30,11 @@ describe('desktop navigation', () => {
       spaceId: 's',
     });
     expect(navigationItems(workspace, 'memory')[0].view).toBe('memories');
+    expect(navigationItems(workspace, 'abilities')[0].view).toBe('abilities');
+    const views = navigationItems(workspace)
+      .filter((item) => item.detail === 'Workspace')
+      .map((item) => item.view);
+    expect(views.indexOf('abilities')).toBe(views.indexOf('memories') + 1);
   });
   it('keeps workspace and companion selections separate', () => {
     const get = (key: string) =>

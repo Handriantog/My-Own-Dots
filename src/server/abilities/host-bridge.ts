@@ -272,10 +272,20 @@ export class AbilityHostBridge implements AbilityHostPort {
         .strictObject({
           workspaceId: z.string().min(1).max(256),
           nonce: z.string().regex(/^[a-f0-9]{64}$/),
+          previousSessionId: z.uuid().optional(),
         })
         .parse(await c.req.json());
       if (body.workspaceId !== this.workspaceId)
         return c.json({ error: 'permission_denied' }, 409);
+      const current = this.live();
+      // A background recovery may replace only its own session. Keep this
+      // check and replacement synchronous so a newer desktop cannot be evicted.
+      if (
+        body.previousSessionId &&
+        current &&
+        current.id !== body.previousSessionId
+      )
+        return c.json({ error: 'host_unavailable' }, 409);
       if (this.current) this.end(this.current);
       const session: Session = {
         id: randomUUID(),

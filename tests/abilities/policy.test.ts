@@ -10,13 +10,26 @@ const cleanups: (() => void)[] = [];
 afterEach(() => {
   for (const fn of cleanups.splice(0)) fn();
 });
-function fixture() {
+function fixture(requiredSettings = false) {
   const workspace = new WorkspaceStore(':memory:', 'owner');
   cleanups.push(() => workspace.close());
   const dot = workspace.dots()[0];
   workspace.bindThread('thread', dot.id, 'Fixture');
   const manifest = parseManifest({
     ...fixtureManifest,
+    ...(requiredSettings
+      ? {
+          settings: {
+            type: 'object',
+            properties: {
+              ...fixtureManifest.settings.properties,
+              region: { type: 'string', maxLength: 20 },
+            },
+            required: ['region'],
+            additionalProperties: false,
+          },
+        }
+      : {}),
     notices: [
       {
         id: 'terms',
@@ -225,4 +238,154 @@ it('local packages require the active desktop session and normal Teach consent',
   await f.service.reviewLocal(f.dot.id, review, 'session');
   const binding = await f.service.teach(f.dot.id, review.id, {}, ['terms']);
   expect(binding.dotId).toBe(f.dot.id);
+});
+
+it('installs centrally without enabling or assigning a Dot before explicit actions', async () => {
+  const f = fixture();
+  const review = await f.service.reviewInstall(
+    'https://github.com/example/abilities/releases/download/fixture/fixture.json',
+  );
+  const installed = await f.service.install(review.id, {}, ['terms']);
+  expect(installed.enabled).toBe(false);
+  expect(await f.service.list(f.dot.id)).toEqual([]);
+  await expect(
+    f.service.assign(f.dot.id, installed.digest, true),
+  ).rejects.toThrow();
+  await f.service.setMaster(installed.digest, true);
+  const binding = await f.service.assign(f.dot.id, installed.digest, true);
+  expect(binding?.enabled).toBe(true);
+  expect(await f.service.tools(f.dot.id)).toHaveLength(1);
+});
+
+it('master disable stops execution and preserves individual selections across re-enable', async () => {
+  const f = fixture(),
+    review = await f.review();
+  const binding = await f.service.teach(f.dot.id, review.id, {}, ['terms']);
+  const other = f.workspace.createDot(f.dot.spaceId, 'Other', '', true, true);
+  await f.service.assign(other.id, binding.digest, true);
+  await f.service.assign(other.id, binding.digest, false);
+  await f.service.setMaster(binding.digest, false);
+  expect((await f.service.list(f.dot.id))[0].enabled).toBe(true);
+  expect((await f.service.list(other.id))[0].enabled).toBe(false);
+  expect(await f.service.tools(f.dot.id)).toEqual([]);
+  expect(
+    await f.service.invoke(
+      {
+        dotId: f.dot.id,
+        bindingId: binding.id,
+        threadId: 'thread',
+        tool: 'search',
+        invocationId: randomUUID(),
+        arguments: { query: 'test' },
+      },
+      new AbortController().signal,
+    ),
+  ).toMatchObject({ status: 'error' });
+  expect(f.invoke).not.toHaveBeenCalled();
+  await f.service.setMaster(binding.digest, true);
+  expect(await f.service.tools(f.dot.id)).toHaveLength(1);
+  expect(await f.service.tools(other.id)).toEqual([]);
+});
+
+it('applies to all existing Dots idempotently without opting in future Dots', async () => {
+  const f = fixture(),
+    review = await f.review();
+  const binding = await f.service.teach(f.dot.id, review.id, {}, ['terms']);
+  const other = f.workspace.createDot(f.dot.spaceId, 'Other', '', true, true);
+  await f.service.applyAll(binding.digest);
+  const first = (await f.service.list(other.id))[0];
+  await f.service.applyAll(binding.digest);
+  expect((await f.service.list(other.id))[0].id).toBe(first.id);
+  const later = f.workspace.createDot(f.dot.spaceId, 'Later', '', true, true);
+  expect(await f.service.tools(later.id)).toEqual([]);
+});
+
+it('retains reviewed required settings when applying a previously taught Ability to another Dot', async () => {
+  const f = fixture(true);
+  const reviewed = await f.review();
+  const binding = await f.service.teach(
+    f.dot.id,
+    reviewed.id,
+    { region: 'SG' },
+    ['terms'],
+  );
+  const other = f.workspace.createDot(f.dot.spaceId, 'Other', '', true, true);
+  await f.service.assign(other.id, binding.digest, true);
+  expect(f.workspace.abilities.list(other.id)[0].settings).toEqual({
+    region: 'SG',
+  });
+});
+it('does not exchange central installation consent with a Dot-scoped review', async () => {
+  const f = fixture();
+  const dotReview = await f.review();
+  await expect(
+    f.service.install(dotReview.id, {}, ['terms']),
+  ).rejects.toMatchObject({ code: 'permission_denied' });
+  const central = await f.service.reviewInstall('fixture');
+  await expect(
+    f.service.teach(f.dot.id, central.id, {}, ['terms']),
+  ).rejects.toMatchObject({ code: 'permission_denied' });
+  expect(f.install).not.toHaveBeenCalled();
+});
+
+it('keeps a partially recorded central install disabled if final approval storage fails', async () => {
+  const f = fixture();
+  const reviewed = await f.service.reviewInstall('fixture');
+  vi.spyOn(f.workspace.abilities, 'approveInstallation').mockImplementation(
+    () => {
+      throw new Error('storage failure');
+    },
+  );
+  await expect(f.service.install(reviewed.id, {}, ['terms'])).rejects.toThrow(
+    'storage failure',
+  );
+  expect(f.workspace.abilities.installations()[0].enabled).toBe(false);
+  expect(await f.service.tools(f.dot.id)).toEqual([]);
+});
+
+it('serializes assignments of different versions of the same Ability to one Dot', async () => {
+  const f = fixture();
+  const reviewed = await f.service.reviewInstall('fixture');
+  const installed = await f.service.install(reviewed.id, {}, ['terms']);
+  await f.service.setMaster(installed.digest, true);
+  const pkg = f.workspace.abilities.package(installed.digest)!;
+  const nextManifest = { ...pkg.manifest, version: '0.1.1' };
+  const next = {
+    ...pkg,
+    root: '/unused',
+    digest: 'e'.repeat(64),
+    manifest: nextManifest,
+    descriptor: {
+      ...pkg.descriptor,
+      manifest: nextManifest,
+      asset: { ...pkg.descriptor.asset, sha256: 'e'.repeat(64) },
+    },
+  };
+  f.workspace.abilities.recordPackage(next);
+  const bind = f.workspace.abilities.bind.bind(f.workspace.abilities);
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const spy = vi
+    .spyOn(f.workspace.abilities, 'bind')
+    .mockImplementationOnce((async (...args: Parameters<typeof bind>) => {
+      await gate;
+      return bind(...args);
+    }) as unknown as typeof bind);
+  const first = f.service.assign(f.dot.id, installed.digest, true);
+  await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+  let secondFinished = false;
+  const second = f.service.assign(f.dot.id, next.digest, true).then((value) => {
+    secondFinished = true;
+    return value;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  try {
+    expect(secondFinished).toBe(false);
+  } finally {
+    release();
+    await Promise.all([first, second]);
+  }
+  expect(f.workspace.abilities.list(f.dot.id)[0].digest).toBe(next.digest);
 });

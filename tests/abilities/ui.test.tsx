@@ -2,6 +2,7 @@ import { act, create, type ReactTestRenderer } from 'react-test-renderer';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AbilityManager } from '../../src/client/abilities/AbilityManager.tsx';
 import { AbilitiesSection } from '../../src/client/abilities/AbilitiesSection.tsx';
 import {
   PermissionReview,
@@ -60,6 +61,36 @@ function bridge() {
         available: true,
         bindings: [] as (typeof binding)[],
         activity: {},
+      },
+    })),
+    catalog: vi.fn(async () => ({
+      ok: true,
+      value: {
+        available: true,
+        installations: [] as {
+          digest: string;
+          manifest: typeof manifest;
+          enabled: boolean;
+          restored: boolean;
+          settings: Record<string, never>;
+          enabledDots: number;
+        }[],
+      },
+    })),
+    master: vi.fn(async () => ({ ok: true, value: {} })),
+    applyAll: vi.fn(async () => ({ ok: true, value: {} })),
+    assign: vi.fn(async () => ({ ok: true, value: binding })),
+    reconnect: vi.fn(async () => ({ ok: true, value: { available: true } })),
+    reviewInstall: vi.fn(async () => ({ ok: true, value: review })),
+    install: vi.fn(async () => ({
+      ok: true,
+      value: {
+        digest: binding.digest,
+        manifest,
+        enabled: false,
+        restored: false,
+        settings: {},
+        enabledDots: 0,
       },
     })),
     review: vi.fn(async () => ({ ok: true, value: review })),
@@ -133,7 +164,9 @@ describe('teach and manage Abilities', () => {
   });
   it('does not install before consent; prevents double submits and preserves the URL after failure', async () => {
     const api = bridge();
-    await mount();
+    await act(async () => {
+      root = create(<AbilityManager />);
+    });
     const input = root.root.findByProps({
       'aria-label': 'GitHub release descriptor',
     });
@@ -141,7 +174,7 @@ describe('teach and manage Abilities', () => {
       input.props.onChange({ target: { value: review.descriptorUrl } });
     });
     let release = () => {};
-    api.review.mockImplementationOnce(
+    api.reviewInstall.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
           release = () => resolve({ ok: true, value: review });
@@ -151,26 +184,101 @@ describe('teach and manage Abilities', () => {
       void button('Review').props.onClick();
       void button('Review').props.onClick();
     });
-    expect(api.review).toHaveBeenCalledTimes(1);
-    expect(api.teach).not.toHaveBeenCalled();
+    expect(api.reviewInstall).toHaveBeenCalledTimes(1);
+    expect(api.install).not.toHaveBeenCalled();
     await act(async () => {
       release();
     });
-    expect(text()).toContain('Mochi');
-    api.teach.mockResolvedValueOnce({
+    expect(text()).toContain('Install in workspace');
+    api.install.mockResolvedValueOnce({
       ok: false,
       code: 'invalid_response',
     } as never);
     await act(async () => {
-      await button('Teach').props.onClick();
+      await button('Install').props.onClick();
     });
-    expect(api.teach).toHaveBeenCalledWith({
-      dotId: 'dot-a',
+    expect(api.install).toHaveBeenCalledWith({
       reviewId: review.id,
       settings: {},
     });
     expect(text()).toContain(review.descriptorUrl);
     expect(root.root.findAllByProps({ role: 'alert' })).toHaveLength(1);
+  });
+  it('keeps installation in the central manager and enables an installed Ability for this Dot', async () => {
+    const api = bridge();
+    api.list.mockResolvedValue({
+      ok: true,
+      value: {
+        available: true,
+        bindings: [],
+        installed: [
+          {
+            digest: binding.digest,
+            manifest,
+            enabled: true,
+            restored: false,
+            settings: {},
+            enabledDots: 0,
+          },
+        ],
+        activity: {},
+      },
+    } as never);
+    await mount();
+    expect(
+      root.root.findAllByProps({ 'aria-label': 'GitHub release descriptor' }),
+    ).toHaveLength(0);
+    await act(async () => {
+      await button('Enable').props.onClick();
+    });
+    expect(api.assign).toHaveBeenCalledWith({
+      dotId: 'dot-a',
+      digest: binding.digest,
+      enabled: true,
+    });
+    expect(api.install).not.toHaveBeenCalled();
+  });
+  it('separates the master switch from applying to all existing Dots', async () => {
+    const api = bridge();
+    const installation = {
+      digest: binding.digest,
+      manifest,
+      enabled: false,
+      restored: false,
+      settings: {},
+      enabledDots: 0,
+    };
+    api.catalog.mockResolvedValue({
+      ok: true,
+      value: { available: true, installations: [installation] },
+    });
+    await act(async () => {
+      root = create(<AbilityManager />);
+    });
+    expect(button('Apply to all Dot').props.disabled).toBe(true);
+    await act(async () => {
+      await button('Enable').props.onClick();
+    });
+    expect(api.master).toHaveBeenCalledWith({
+      digest: binding.digest,
+      enabled: true,
+    });
+    expect(api.applyAll).not.toHaveBeenCalled();
+    api.catalog.mockResolvedValue({
+      ok: true,
+      value: {
+        available: true,
+        installations: [{ ...installation, enabled: true }],
+      },
+    });
+    await act(async () => {
+      await button('Enable').props.onClick();
+    });
+    expect(button('Disable')).toBeDefined();
+    await act(async () => {
+      await button('Apply to all Dot').props.onClick();
+    });
+    expect(api.applyAll).toHaveBeenCalledWith({ digest: binding.digest });
   });
   it('shows account setup and saves the client ID before browser connection', async () => {
     const api = bridge();
@@ -214,7 +322,7 @@ describe('teach and manage Abilities', () => {
       expect(text()).toContain(state);
     },
   );
-  it('requires a fresh per-Dot review and shows changed access on update', async () => {
+  it('reloads the selected Dot and shows changed access in permission review', async () => {
     const api = bridge();
     await mount();
     await act(async () => {
@@ -383,4 +491,57 @@ it('names both macOS permissions when one rule mixes playback and UI actions', (
       actions: ['pause', 'search'],
     }),
   ).toContain('Automation and Accessibility');
+});
+
+it('allows a restored Dot selection after the central package has been reviewed and enabled', async () => {
+  const api = bridge();
+  api.list.mockResolvedValue({
+    ok: true,
+    value: {
+      available: true,
+      bindings: [{ ...binding, enabled: false, restored: true }],
+      installed: [
+        {
+          digest: binding.digest,
+          manifest,
+          enabled: true,
+          restored: false,
+          settings: {},
+          enabledDots: 0,
+        },
+      ],
+      activity: {},
+    },
+  } as never);
+  await mount();
+  expect(button('Enable').props.disabled).toBe(false);
+  await act(async () => {
+    await button('Enable').props.onClick();
+  });
+  expect(api.assign).toHaveBeenCalledWith({
+    dotId: 'dot-a',
+    digest: binding.digest,
+    enabled: true,
+  });
+});
+
+it('clears a transient catalog error after the host recovers', async () => {
+  vi.useFakeTimers();
+  try {
+    const api = bridge();
+    api.catalog.mockResolvedValueOnce({
+      ok: false,
+      code: 'host_unavailable',
+    } as never);
+    await act(async () => {
+      root = create(<AbilityManager />);
+    });
+    expect(text()).toContain('Could not load Abilities');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3000);
+    });
+    expect(text()).not.toContain('Could not load Abilities');
+  } finally {
+    vi.useRealTimers();
+  }
 });

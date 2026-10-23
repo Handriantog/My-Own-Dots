@@ -63,7 +63,10 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
     afterAll(async () => {
       if (root) await rm(root, { recursive: true, force: true });
     });
-    async function fixture() {
+    async function fixture(
+      onUnavailable?: (stage: string, code: string) => void,
+      interruptCleanup = false,
+    ) {
       const home = await mkdtemp(join(root, 'fixture-')),
         profile = join(home, 'profile');
       await mkdir(profile, { mode: 0o700 });
@@ -142,6 +145,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         ownerToken: 'fixture-owner-token-at-least-thirty-two-bytes',
         binding,
         package: pkg,
+        interruptCleanup,
       };
       const configFile = join(home, 'backend.json');
       await writeFile(configFile, JSON.stringify(config));
@@ -166,6 +170,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       };
       const controller = new AbilityController({
         ...options,
+        onUnavailable,
         storage: {
           isEncryptionAvailable: () => false,
           encryptString: () => {
@@ -231,6 +236,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         worker,
         binding,
         options,
+        statePath,
       };
     }
     it('keeps an attached backend alive while quit reaps its real Ability worker', async () => {
@@ -259,6 +265,100 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       await f.controller.attach(f.connection);
       expect(f.controller.available).toBe(true);
       expect(alive(f.backend.pid!)).toBe(true);
+    });
+    it.each(['stream disconnect', 'desktop stall'] as const)(
+      'recovers once from a %s without replaying the interrupted worker',
+      async (failure) => {
+        const failures: { stage: string; code: string }[] = [];
+        const f = await fixture((stage, code) =>
+          failures.push({ stage, code }),
+        );
+        await f.controller.attach(f.connection);
+        const before = await (await fetch(`${f.connection.url}/alive`)).json();
+        const worker = await f.worker();
+        if (failure === 'stream disconnect')
+          await fetch(`${f.connection.url}/disconnect`, { method: 'POST' });
+        else {
+          // The backend is a separate process: a blocked desktop must lose its
+          // short-lived authority even while the workspace keeps running.
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 4000);
+        }
+        await expect.poll(() => f.controller.available).toBe(false);
+        await expect.poll(() => alive(worker.pid)).toBe(false);
+        await worker.response;
+        expect(failures).toEqual([
+          { stage: 'connection', code: 'host_unavailable' },
+        ]);
+        await expect
+          .poll(() => f.controller.available, { timeout: 4000 })
+          .toBe(true);
+        const after = await (await fetch(`${f.connection.url}/alive`)).json();
+        expect(after.sessionId).not.toBe(before.sessionId);
+        expect(after.pairs).toBe(2);
+        expect(
+          (await readFile(join(f.statePath, 'started'), 'utf8')).trim(),
+        ).toBe(String(worker.pid));
+        await fetch(`${f.connection.url}/disconnect`, { method: 'POST' });
+        await expect.poll(() => f.controller.available).toBe(false);
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const failedAgain = await (
+          await fetch(`${f.connection.url}/alive`)
+        ).json();
+        expect(failedAgain.pairs).toBe(2);
+        expect(f.controller.available).toBe(false);
+        await f.controller.reconnect();
+        expect(f.controller.available).toBe(true);
+        await f.controller.stop();
+        await expect(f.controller.reconnect()).rejects.toThrow();
+        expect(f.controller.available).toBe(false);
+      },
+      15000,
+    );
+    it('reports only the failed attachment stage and safe error code', async () => {
+      const f = await fixture();
+      const failures: { stage: string; code: string }[] = [];
+      const controller = new AbilityController({
+        ...f.options,
+        bundle: join(root, 'missing-private-location'),
+        storage: {
+          isEncryptionAvailable: () => false,
+          encryptString: () => {
+            throw new Error();
+          },
+          decryptString: () => {
+            throw new Error();
+          },
+        },
+        open: async () => {},
+        onUnavailable: (stage, code) => failures.push({ stage, code }),
+      });
+      cleanups.push(() => controller.stop());
+      await controller.attach(f.connection);
+      expect(controller.available).toBe(false);
+      expect(failures).toEqual([
+        { stage: 'launcher', code: 'host_unavailable' },
+      ]);
+    });
+    it('recovers once when the first connection drops before attachment cleanup completes', async () => {
+      const f = await fixture(undefined, true);
+      await f.controller.attach(f.connection);
+      expect(f.controller.available).toBe(false);
+      await expect
+        .poll(() => f.controller.available, { timeout: 4000 })
+        .toBe(true);
+      const status = await (await fetch(`${f.connection.url}/alive`)).json();
+      expect(status.pairs).toBe(2);
+    });
+    it('cancels scheduled automatic recovery when the workspace suspends', async () => {
+      const f = await fixture();
+      await f.controller.attach(f.connection);
+      await fetch(`${f.connection.url}/disconnect`, { method: 'POST' });
+      await expect.poll(() => f.controller.available).toBe(false);
+      await f.controller.suspend();
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const status = await (await fetch(`${f.connection.url}/alive`)).json();
+      expect(status.pairs).toBe(1);
+      expect(f.controller.available).toBe(false);
     });
     it('rejects remote senders and cross-Dot owner result requests before reading private data', async () => {
       const f = await fixture();

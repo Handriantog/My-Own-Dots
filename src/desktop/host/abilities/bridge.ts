@@ -63,8 +63,10 @@ export class DesktopAbilityBridge {
       url: string;
       workspaceId: string;
       ownerToken?: string;
+      previousSessionId?: string;
     },
     private readonly handlers: DesktopAbilityHandlers,
+    private readonly onDisconnected?: (sessionId: string) => void,
   ) {
     this.url = loopbackBackend(configuration.url);
   }
@@ -184,6 +186,9 @@ export class DesktopAbilityBridge {
           await this.json('pair', this.configuration.ownerToken, {
             workspaceId: this.configuration.workspaceId,
             nonce,
+            ...(this.configuration.previousSessionId
+              ? { previousSessionId: this.configuration.previousSessionId }
+              : {}),
           }),
         );
       this.token = pair.token;
@@ -382,6 +387,8 @@ export class DesktopAbilityBridge {
   }
   async stop(): Promise<void> {
     if (this.stopping) return this.stopping;
+    const wasConnected = this.connected;
+    const sessionId = this.sessionId;
     this.attached = false;
     clearInterval(this.timer);
     this.controller.abort();
@@ -389,6 +396,7 @@ export class DesktopAbilityBridge {
     this.sessionId = undefined;
     for (const value of this.running.values()) value.controller.abort();
     this.stopping = this.handlers.stop();
+    if (wasConnected && sessionId) this.onDisconnected?.(sessionId);
     return this.stopping;
   }
 }

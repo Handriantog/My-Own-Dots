@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { bindingSchema, reviewSchema } from './bridge.js';
 import { assertBoundedJson, abilityLimits } from './limits.js';
-import { isHttpsUrl, type JsonValue } from './manifest.js';
+import { isHttpsUrl, manifestSchema, type JsonValue } from './manifest.js';
 import { errorCodeSchema } from './protocol.js';
 const id = z.string().min(1).max(256),
   uuid = z.uuid();
@@ -60,13 +60,59 @@ const reviewOutput = reviewSchema.extend({
     )
     .max(1000),
 });
+export const installedAbilitySchema = z.strictObject({
+  digest: z.string().regex(/^[a-f0-9]{64}$/),
+  manifest: manifestSchema,
+  enabled: z.boolean(),
+  restored: z.boolean(),
+  settings: values,
+  enabledDots: z.number().int().nonnegative(),
+});
+const digest = { digest: z.string().regex(/^[a-f0-9]{64}$/) };
+const installInput = z.strictObject({
+  reviewId: uuid,
+  acceptedNotices: z.array(id).max(4).optional(),
+  settings: values.optional(),
+});
 export const desktopAbilityMethods = {
+  catalog: {
+    input: z.strictObject({}),
+    output: z.strictObject({
+      available: z.boolean(),
+      reason: errorCodeSchema.optional(),
+      installations: z.array(installedAbilitySchema).max(1000),
+    }),
+  },
+  reconnect: {
+    input: z.strictObject({}),
+    output: z.strictObject({ available: z.boolean() }),
+  },
+  reviewInstall: {
+    input: z.strictObject({ url: z.string().min(1).max(2048) }),
+    output: reviewOutput,
+  },
+  reviewInstallLocal: {
+    input: z.strictObject({}),
+    output: reviewOutput.nullable(),
+  },
+  install: { input: installInput, output: installedAbilitySchema },
+  master: {
+    input: z.strictObject({ ...digest, enabled: z.boolean() }),
+    output: installedAbilitySchema,
+  },
+  applyAll: { input: z.strictObject(digest), output: installedAbilitySchema },
+  assign: {
+    input: z.strictObject({ ...dot, ...digest, enabled: z.boolean() }),
+    output: bindingSchema.nullable(),
+  },
+
   list: {
     input: z.strictObject(dot),
     output: z.strictObject({
       available: z.boolean(),
       reason: errorCodeSchema.optional(),
       bindings: z.array(bindingSchema).max(1000),
+      installed: z.array(installedAbilitySchema).max(1000).optional(),
       activity: z.record(uuid, z.boolean()).optional(),
       python: z
         .strictObject({

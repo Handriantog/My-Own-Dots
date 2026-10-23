@@ -46,6 +46,14 @@ export interface Binding {
   approvedAt: number;
   restored: boolean;
 }
+export interface InstalledAbility {
+  digest: string;
+  manifest: AbilityManifest;
+  enabled: boolean;
+  restored: boolean;
+  settings: Record<string, JsonValue>;
+  enabledDots: number;
+}
 /** Minted by the service/host. Never accept these fields from a worker or model. */
 export interface InvocationContext {
   workspaceId: string;

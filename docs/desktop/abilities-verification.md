@@ -505,3 +505,38 @@ One final acceptance run was interrupted by idle sleep: macOS power logs show
 timeouts. The unchanged suite passed in 11.88 seconds after its native probes
 when rerun under a process-bound idle-sleep assertion. No test/runtime deadlines
 or assertions were relaxed.
+
+## Central management feedback — October 23, 2026
+
+Abilities now lives below Memory in workspace navigation. Installation/review is
+central; new installs are disabled and unassigned. The workspace master switch
+preserves per-Dot selections, while Apply to all Dot targets the current Dot
+snapshot only. Dot settings list installed packages and retain per-Dot setup.
+Schema 5 persists master state and required defaults. Historical SQLite and
+legacy backups, including unbound packages, restore without trusted authority.
+
+A four-second desktop event-loop stall reproduced permanent host loss after the
+three-second lease expired. Recovery now makes one guarded attachment attempt
+with a fresh session, never replays an action, and cannot evict a different active
+desktop. A further loss offers Reconnect. Safe diagnostics record only stage/code.
+The prior owner startup log had a fourteen-second gap; attribution of that
+historical error remains an inference. The rebuilt app connected and loaded the
+real local Spotify permission review with the package and workspace storage paths.
+Chrome component checks covered 760px and 360px layouts and master/apply controls.
+
+Review regressions cover restored individual enablement, competing versions on
+one Dot, unbound legacy restore trust, and clearing transient reconnect messages.
+Final full suite: **2,093 passed, one existing signing-identity skip** against a
+dedicated PostgreSQL test container. Lint, types, format, production build,
+31 speech-worker and 17 native-speech protocol checks pass. The relocated, signed
+app smoke verifies native/JavaScript/Python runtimes and the offline Spotify helper.
+Collection: 126 tests.
+
+This session could not complete the native acceptance gate: both profile runs
+passed 13 of 14 probes; the OS-service probe failed its _unconfined baseline_
+because the required macOS service was unavailable. No confinement assertion was
+weakened or skipped. Standard packaging could not fetch GitHub checksums through
+the session resolver; local packaging used the cached pinned Electron 44.8.0 ZIP
+and verified it against that installed Electron package’s bundled checksums.
+Remote push/PR checks for this feedback slice remain pending until authenticated
+GitHub access is available; previous green PR runs do not cover these changes.

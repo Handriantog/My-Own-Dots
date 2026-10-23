@@ -25,7 +25,7 @@ export async function copyValidatedSQLite(
   ownerId: string,
   signal: AbortSignal,
   engine: 'legacy-postgres' | 'sqlite' = 'legacy-postgres',
-  expectedSchema?: 2 | 3 | 4,
+  expectedSchema?: 2 | 3 | 4 | 5,
 ) {
   const baselineDirectory = await mkdtemp(
     join(dirname(destination), '.schema-'),
@@ -44,6 +44,8 @@ export async function copyValidatedSQLite(
         supported.set(2, inventory(schema));
         initializeSQLiteSchema(schema, 3);
         supported.set(3, inventory(schema));
+        initializeSQLiteSchema(schema, 4);
+        supported.set(4, inventory(schema));
         initializeSQLiteSchema(schema);
         supported.set(sqliteStorageSchema, inventory(schema));
       } finally {
@@ -83,7 +85,18 @@ export async function copyValidatedSQLite(
     ]);
     // Ability metadata is absent in historical schema 2/3 and legacy backups.
     // Only exact known inventories are accepted; archived DDL is never executed.
-    const compatible = variants.flatMap(([version, schema]) =>
+    const managementVariants = variants.flatMap(([version, schema]) =>
+      version < 5
+        ? [
+            [version, schema] as const,
+            [
+              version,
+              schema.filter((row) => row.name !== 'ability_installations'),
+            ] as const,
+          ]
+        : [[version, schema] as const],
+    );
+    const compatible = managementVariants.flatMap(([version, schema]) =>
       version < 4
         ? [
             [version, schema] as const,
@@ -153,7 +166,7 @@ export async function restoreSQLite(
   ownerId: string,
   signal: AbortSignal,
   engine: 'legacy-postgres' | 'sqlite' = 'legacy-postgres',
-  expectedSchema?: 2 | 3 | 4,
+  expectedSchema?: 2 | 3 | 4 | 5,
 ) {
   await copyValidatedSQLite(
     source,

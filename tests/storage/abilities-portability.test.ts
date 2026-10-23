@@ -183,7 +183,7 @@ it('restores records with every binding disabled and requires fresh reviewed con
     destination = join(f.home, 'restored/data/workspace.sqlite');
   await mkdir(join(f.home, 'restored/data'), { recursive: true });
   await mkdir(join(f.home, 'restored/recovery'));
-  await restoreSQLite(f.source, destination, f.owner, signal(), 'sqlite', 4);
+  await restoreSQLite(f.source, destination, f.owner, signal(), 'sqlite', 5);
   const restored = new WorkspaceStore(destination, f.owner);
   cleanups.push(() => restored.close());
   const restoredBindings = restored.abilities.list(f.dot.id);
@@ -251,7 +251,7 @@ it('round-trips the decoded versioned archive while excluding credentials and ex
     version: 3,
     minimumReader: 3,
     abilities: { version: 1 },
-    storage: { engine: 'sqlite', schema: 4 },
+    storage: { engine: 'sqlite', schema: 5 },
   });
   const expectedNonsecretPaths = [
     `abilities/state/${key}/private.json`,
@@ -394,7 +394,7 @@ it('keeps interrupted invocation IDs consumed after restore and fresh consent', 
   const destination = join(f.home, 'restored/data/workspace.sqlite');
   await mkdir(join(f.home, 'restored/data'), { recursive: true });
   await mkdir(join(f.home, 'restored/recovery'));
-  await restoreSQLite(f.source, destination, f.owner, signal(), 'sqlite', 4);
+  await restoreSQLite(f.source, destination, f.owner, signal(), 'sqlite', 5);
   const restored = new WorkspaceStore(destination, f.owner);
   cleanups.push(() => restored.close());
   expect(restored.abilities.receipt(context.invocationId)).toMatchObject({
@@ -413,4 +413,74 @@ it('keeps interrupted invocation IDs consumed after restore and fresh consent', 
       grantRevision: reviewed.revision,
     }),
   ).toBe(false);
+});
+
+it('migrates an actual schema-4 backup and leaves its package and Dot authority inert', async () => {
+  const f = await database();
+  const old = new DatabaseSync(f.source);
+  old.exec(
+    'DROP TABLE ability_installations; DELETE FROM workspace_storage_schema WHERE version=5',
+  );
+  old.close();
+  const destination = join(f.home, 'historical/data/workspace.sqlite');
+  await mkdir(join(f.home, 'historical/data'), { recursive: true });
+  await mkdir(join(f.home, 'historical/recovery'));
+  await restoreSQLite(f.source, destination, f.owner, signal(), 'sqlite', 4);
+  const restored = new WorkspaceStore(destination, f.owner);
+  cleanups.push(() => restored.close());
+  expect(restored.abilities.installations()).toEqual([
+    expect.objectContaining({
+      digest: f.binding.digest,
+      enabled: false,
+      restored: true,
+    }),
+  ]);
+  expect(() => restored.abilities.setMaster(f.binding.digest, true)).toThrow();
+  expect(restored.abilities.list(f.dot.id)[0]).toMatchObject({
+    enabled: false,
+    restored: true,
+  });
+  const unchanged = new DatabaseSync(f.source, { readOnly: true });
+  expect(
+    unchanged
+      .prepare(
+        "SELECT name FROM sqlite_schema WHERE name='ability_installations'",
+      )
+      .get(),
+  ).toBeUndefined();
+  unchanged.close();
+});
+
+it('requires central review for an unassigned Ability from a historical legacy backup', async () => {
+  const f = await database();
+  const current = new WorkspaceStore(f.source, f.owner);
+  const pkg = current.abilities.package(f.binding.digest)!;
+  current.close();
+  const source = join(f.home, 'legacy.sqlite');
+  const base = new Store(source);
+  base.close();
+  const legacy = new WorkspaceStore(source, f.owner);
+  legacy.abilities.recordPackage({ ...pkg, root: '/unused' });
+  legacy.close();
+  const old = new DatabaseSync(source);
+  old.exec('DROP TABLE ability_installations');
+  old.close();
+  const destination = join(f.home, 'legacy-restored/data/workspace.sqlite');
+  await mkdir(join(f.home, 'legacy-restored/data'), { recursive: true });
+  await mkdir(join(f.home, 'legacy-restored/recovery'));
+  await restoreSQLite(
+    source,
+    destination,
+    f.owner,
+    signal(),
+    'legacy-postgres',
+  );
+  const restored = new WorkspaceStore(destination, f.owner);
+  cleanups.push(() => restored.close());
+  expect(restored.abilities.installations()[0]).toMatchObject({
+    enabled: false,
+    restored: true,
+    enabledDots: 0,
+  });
+  expect(() => restored.abilities.setMaster(pkg.digest, true)).toThrow();
 });

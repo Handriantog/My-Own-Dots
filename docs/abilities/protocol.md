@@ -165,6 +165,11 @@ they still work when the desktop event loop is frozen. Expiry starts the same
 two-second TERM/KILL cleanup. The native watchdog also caps execution at sixty
 seconds; helpers cannot extend their parent's deadline.
 
+After an unexpected connection loss, the desktop makes one delayed attempt to
+establish a fresh host session. Recovery identifies its previous session and
+cannot replace a different active desktop. Suspend or Quit cancels the attempt;
+further failures require explicit reconnection. No invocation is replayed.
+
 Do not automatically retry a mutation after a timeout/disconnect: it may have
 reached the provider. Return `uncertain` when the effect cannot be established.
 An external player such as Spotify is not an Ability-owned process; stopping the
