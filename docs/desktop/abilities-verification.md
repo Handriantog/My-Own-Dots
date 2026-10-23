@@ -538,5 +538,8 @@ because the required macOS service was unavailable. No confinement assertion was
 weakened or skipped. Standard packaging could not fetch GitHub checksums through
 the session resolver; local packaging used the cached pinned Electron 44.8.0 ZIP
 and verified it against that installed Electron package’s bundled checksums.
-Remote push/PR checks for this feedback slice remain pending until authenticated
-GitHub access is available; previous green PR runs do not cover these changes.
+Both feedback branches have been pushed. Remote checks must be assessed for the
+current commit independently of this local record; see host PR #12 and collection
+PR #2 for the push and pull-request runs. The final packaged app also verified the
+central page, per-Dot empty state, and manual Reconnect recovery. Spotify account
+actions were not repeated during this management-only verification.
