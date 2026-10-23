@@ -1,3 +1,8 @@
+import {
+  SpotifyDucking,
+  permitsSpotifyDucking,
+  openSpotifyVolumeLease,
+} from './spotify-ducking.js';
 import { mkdir, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
 import { request as httpRequest } from 'node:http';
@@ -77,7 +82,40 @@ export class AbilityController {
   private unavailable:
     'unsupported_platform' | 'host_unavailable' | 'setup_needed' =
     'host_unavailable';
-  constructor(private readonly options: Options) {}
+  private readonly ducking: SpotifyDucking;
+  constructor(private readonly options: Options) {
+    this.ducking = new SpotifyDucking(
+      async (dotId, signal) => {
+        const current = this.current;
+        if (!current || !this.available || this.maintenance) return false;
+        const data = z
+          .strictObject({
+            bindings: z.array(bindingSchema),
+            installed: z.array(installedAbilitySchema),
+          })
+          .parse(
+            await this.api(
+              current.connection,
+              `/dots/${encodeURIComponent(dotId)}/abilities`,
+              undefined,
+              AbortSignal.any([signal, current.controller.signal]),
+            ),
+          );
+        return (
+          this.current === current &&
+          this.available &&
+          !this.maintenance &&
+          permitsSpotifyDucking(data, dotId)
+        );
+      },
+      () =>
+        openSpotifyVolumeLease(join(options.bundle, 'native/spotify-control')),
+    );
+  }
+  voicePlayback(dotId: string, active: boolean): void {
+    if (active && (!this.available || this.maintenance)) return;
+    this.ducking.playback(dotId, active);
+  }
   get available(): boolean {
     return !this.stopped && !!this.current?.bridge.connected;
   }
@@ -124,6 +162,7 @@ export class AbilityController {
     const generation = ++this.generation;
     this.connection = { ...connection };
     return this.serial(async () => {
+      await this.ducking.stop();
       const old = this.current;
       this.current = undefined;
       old?.controller.abort();
@@ -231,6 +270,7 @@ export class AbilityController {
             )
               return;
             this.unavailable = 'host_unavailable';
+            void this.ducking.stop();
             current?.controller.abort();
             current?.local.clear();
             this.reportUnavailable('connection', this.unavailable);
@@ -287,6 +327,7 @@ export class AbilityController {
   async quiesce(): Promise<void> {
     if (this.maintenance) return;
     this.maintenance = true;
+    await this.ducking.stop();
     await this.current?.host.quiesce();
   }
   async resumeMaintenance(): Promise<void> {
@@ -302,8 +343,10 @@ export class AbilityController {
     this.current = undefined;
     current?.controller.abort();
     current?.local.clear();
+    const volumeRestored = this.ducking.stop();
     const stopping = current?.bridge.stop();
     return this.serial(async () => {
+      await volumeRestored;
       await stopping;
     });
   }

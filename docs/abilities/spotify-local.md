@@ -55,6 +55,14 @@ operation can leave that empty playlist behind. Check Spotify before retrying.
 The host does not automatically retry mutations. An uncertain outcome means the
 change may have happened without a confirmed receipt.
 
+While a Dot with approved Spotify volume control speaks in a local voice call,
+Spotify temporarily drops to 25% of its current app volume. The original level
+returns after speech, interruption, speaker mute, call end or Dot quitting. A
+short pause between audio frames does not repeatedly lower it. Manual Spotify
+volume changes take precedence. System volume stays unchanged. This requires
+existing Automation access; automatic ducking never asks for new OS permission.
+If Spotify stops responding or access is revoked, restoration is best effort.
+
 All Dots share the currently signed-in Spotify account and player. Disable and
 Quit stop owned work; they do not quit Spotify or undo completed changes. Avoid
 manually changing Spotify's view while a command is running. Unsupported locales

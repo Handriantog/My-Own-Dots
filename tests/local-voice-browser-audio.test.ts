@@ -123,6 +123,7 @@ const callbacks = () => ({
   onFrame: vi.fn(),
   onError: vi.fn(),
   onPlayed: vi.fn(),
+  onPlaybackActive: vi.fn(),
   onCaptureSettings: vi.fn(),
 });
 function deferred<T>() {
@@ -622,5 +623,47 @@ describe('capture worklet', () => {
     expect(worklet.process([[new Float32Array(512)]], [])).toBe(false);
     expect(worklet.port.messages).toHaveLength(1);
     expect(worklet.port.messages[0].type).toBe('error');
+  });
+});
+
+describe('audible playback activity for music ducking', () => {
+  it('stays active until the last queued frame finishes', async () => {
+    const events = callbacks();
+    const audio = new LocalVoiceAudio(events);
+    await audio.startPlayback();
+    audio.play({ generation: 0, sequence: 0, pcm: pcm() });
+    audio.play({ generation: 0, sequence: 1, pcm: pcm() });
+    expect(events.onPlaybackActive.mock.calls).toEqual([[true]]);
+    const context = FakeContext.instances[0];
+    context.sources[0].finish();
+    expect(events.onPlaybackActive.mock.calls).toEqual([[true]]);
+    context.sources[1].finish();
+    expect(events.onPlaybackActive.mock.calls).toEqual([[true], [false]]);
+    audio.stop();
+  });
+  it.each(['flush', 'mute', 'stop', 'error'])(
+    'releases audible activity on %s',
+    async (action) => {
+      const events = callbacks();
+      const audio = new LocalVoiceAudio(events);
+      await audio.startPlayback();
+      audio.play({ generation: 0, sequence: 0, pcm: pcm() });
+      if (action === 'flush') audio.flush(1);
+      if (action === 'mute') audio.setSpeakerMuted(true);
+      if (action === 'stop') audio.stop();
+      if (action === 'error') FakeContext.instances[0].interrupt();
+      expect(events.onPlaybackActive.mock.calls).toEqual([[true], [false]]);
+      audio.stop();
+      expect(events.onPlaybackActive).toHaveBeenCalledTimes(2);
+    },
+  );
+  it('never reports muted or discarded frames as audible', async () => {
+    const events = callbacks();
+    const audio = new LocalVoiceAudio(events);
+    await audio.startPlayback();
+    audio.setSpeakerMuted(true);
+    audio.play({ generation: 0, sequence: 0, pcm: pcm() });
+    audio.stop();
+    expect(events.onPlaybackActive).not.toHaveBeenCalled();
   });
 });

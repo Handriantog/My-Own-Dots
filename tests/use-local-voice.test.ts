@@ -32,6 +32,7 @@ interface FakeAudio {
       playedSamples: number;
     }): void;
     onError(error: Error): void;
+    onPlaybackActive(active: boolean): void;
   };
   startCapture: ReturnType<typeof vi.fn>;
   startPlayback: ReturnType<typeof vi.fn>;
@@ -65,6 +66,7 @@ let windowEvents: EventTarget;
 let documentEvents: EventTarget & { visibilityState: string };
 let bridge: {
   begin: ReturnType<typeof vi.fn>;
+  playback: ReturnType<typeof vi.fn>;
   end: ReturnType<typeof vi.fn>;
   reviewFolders: ReturnType<typeof vi.fn>;
   onStop: ReturnType<typeof vi.fn>;
@@ -117,6 +119,7 @@ beforeEach(async () => {
   });
   bridge = {
     begin: vi.fn(async () => {}),
+    playback: vi.fn(async () => {}),
     end: vi.fn(async () => {}),
     reviewFolders: vi.fn(async () => {}),
     onStop: vi.fn((callback: (reason: string) => void) => {
@@ -164,7 +167,7 @@ it('captures Basic input and displays text without initializing playback or acce
   });
   expect(audio.instances[0].startPlayback).not.toHaveBeenCalled();
   expect(audio.instances[0].startCapture).toHaveBeenCalledOnce();
-  expect(bridge.begin).toHaveBeenCalledWith('call', 'basic');
+  expect(bridge.begin).toHaveBeenCalledWith('call', 'basic', 'dot');
   await emit({ type: 'caption', text: 'Your answer is in chat.' });
   expect(voice.caption).toBe('Your answer is in chat.');
   await emit({ type: 'audio', generation: 0, sequence: 0, pcm: btoa('\0\0') });
@@ -201,7 +204,7 @@ it('unlocks playback in the click, waits for warm setup and event connection bef
   await act(async () => {
     created.resolve(json({ id: 'call', token: 'capability' }));
   });
-  expect(bridge.begin).toHaveBeenCalledWith('call');
+  expect(bridge.begin).toHaveBeenCalledWith('call', 'medium', 'dot');
   expect(current.startCapture).not.toHaveBeenCalled();
   await act(async () => {
     connected.resolve(
@@ -767,4 +770,16 @@ it('shows High captions without submitting a second subscription turn', async ()
   expect(onTranscript).not.toHaveBeenCalled();
   expect(controls('answer')).toHaveLength(0);
   expect(onSaved).toHaveBeenCalled();
+});
+
+it('forwards actual playback activity with the active call identity', async () => {
+  await act(async () => {
+    await voice.start();
+  });
+  audio.instances[0].options.onPlaybackActive(true);
+  audio.instances[0].options.onPlaybackActive(false);
+  expect(bridge.playback.mock.calls).toEqual([
+    ['call', true],
+    ['call', false],
+  ]);
 });

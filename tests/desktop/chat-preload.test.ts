@@ -105,6 +105,7 @@ it('delivers Talk received before React subscribes once and unsubscribes control
     'onStop',
     'onTalk',
     'phase',
+    'playback',
     'reportError',
     'reviewFolders',
     'setReady',
@@ -201,4 +202,18 @@ it('queues native workspace handoffs and commands until React subscribes, withou
   ]);
   await bridge.openWorkspace(destination);
   expect(host.invoke).toHaveBeenCalledWith('dot:workspace:open', destination);
+});
+
+it('forwards only call activity and Dot identity for music ducking', async () => {
+  await import('../../src/desktop/chat-preload.js');
+  const bridge = host.exposed.get('dotVoice') as DesktopVoiceBridge;
+  await bridge.begin('call-12345678', 'medium', 'jane-12345678');
+  await bridge.playback('call-12345678', true);
+  expect(host.invoke.mock.calls).toEqual([
+    [
+      'dot:voice:begin',
+      { callId: 'call-12345678', quality: 'medium', dotId: 'jane-12345678' },
+    ],
+    ['dot:voice:playback', { callId: 'call-12345678', active: true }],
+  ]);
 });

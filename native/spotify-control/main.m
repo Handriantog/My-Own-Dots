@@ -56,8 +56,10 @@ static NSAppleEventDescriptor *command(NSDictionary *input, pid_t pid) {
     }
     return request;
 }
+#include "duck.h"
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        if(argc==2 && strcmp(argv[1],"--duck")==0)return duckRun();
         // Exit even if a framework blocks; parent death never leaves an owned helper.
         pid_t parent=getppid();
         if(parent<=1)return 125;
@@ -80,6 +82,14 @@ int main(int argc, const char *argv[]) {
         NSArray<NSRunningApplication *> *apps=[NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.spotify.client"];
         if(apps.count!=1 || apps[0].terminated){emit(failure(@"setup_needed"));return 0;}
         NSAppleEventDescriptor *request=command(input,apps[0].processIdentifier);
+        // Request consent before the mutation's short reply timeout starts.
+        // This remains in the owned helper, never on Electron's main thread.
+        NSAppleEventDescriptor *target=[request attributeDescriptorForKeyword:keyAddressAttr];
+        OSStatus permission=AEDeterminePermissionToAutomateTarget(target.aeDesc,request.eventClass,request.eventID,true);
+        if(permission!=noErr){
+            emit(failure(permission==errAEEventNotPermitted || permission==errAEEventWouldRequireUserConsent ? @"permission_denied" : @"setup_needed"));
+            return 0;
+        }
         NSError *error=nil;
         NSAppleEventDescriptor *reply=[request sendEventWithOptions:NSAppleEventSendWaitForReply timeout:8 error:&error];
         NSInteger status=error ? error.code : [[reply paramDescriptorForKeyword:keyErrorNumber] int32Value];

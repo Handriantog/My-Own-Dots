@@ -314,6 +314,12 @@ export function useLocalVoice(options: Options) {
               if (current.sending === sending) current.sending = undefined;
             });
         },
+        onPlaybackActive: (active) => {
+          if (current.handle)
+            void window.dotVoice
+              ?.playback(current.handle.id, active)
+              .catch(() => {});
+        },
         onPlayed: ({ generation, sequence, playedSamples }) => {
           if (
             current.quality === 'basic' ||
@@ -587,8 +593,8 @@ export function useLocalVoice(options: Options) {
       }, 2000);
       current.expires = setTimeout(() => void finish(current), 15 * 60_000);
       if (current.quality === 'basic')
-        await window.dotVoice?.begin(result.id, 'basic');
-      else await window.dotVoice?.begin(result.id);
+        await window.dotVoice?.begin(result.id, 'basic', options.dotId);
+      else await window.dotVoice?.begin(result.id, 'medium', options.dotId);
       if (current.cancelled) return;
       current.connecting = setTimeout(
         () =>

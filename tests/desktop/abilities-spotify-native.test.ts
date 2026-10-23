@@ -8,7 +8,7 @@ const execute = promisify(execFile);
 describe.skipIf(process.platform !== 'darwin')(
   'Spotify event encoding (no app interaction)',
   () => {
-    let root: string, helper: string, labels: string;
+    let root: string, helper: string, labels: string, permission: string;
     beforeAll(async () => {
       root = await realpath(await mkdtemp(join(tmpdir(), 'spotify-native-')));
       helper = join(root, 'control');
@@ -66,6 +66,63 @@ int main(void){@autoreleasepool{char bytes[4096];size_t count=fread(bytes,1,size
         '-o',
         labels,
       ]);
+      permission = join(root, 'permission');
+      const permissionSource = join(root, 'permission.m');
+      await writeFile(
+        permissionSource,
+        `#import <AppKit/AppKit.h>
+#import <Carbon/Carbon.h>
+#import <objc/runtime.h>
+static OSStatus permissionStatus; static int permissionCalls, sendCalls;
+static BOOL correctTarget;
+static OSStatus fixturePermission(const AEAddressDesc *target, AEEventClass cls, AEEventID event, Boolean ask) {
+  permissionCalls++; pid_t pid=0; AEGetDescData(target,&pid,sizeof(pid));
+  correctTarget=target->descriptorType==typeKernelProcessID && pid==1234 && cls=='spfy' && event=='Play' && ask;
+  return permissionStatus;
+}
+@interface FixtureSpotifyApp:NSObject
++ (NSArray *)runningApplicationsWithBundleIdentifier:(NSString *)identifier;
+- (BOOL)terminated; - (pid_t)processIdentifier; - (BOOL)activateWithOptions:(NSUInteger)options;
+@end
+@implementation FixtureSpotifyApp
++ (NSArray *)runningApplicationsWithBundleIdentifier:(NSString *)identifier { return [identifier isEqual:@"com.spotify.client"] ? @[[self new]] : @[]; }
+- (BOOL)terminated { return NO; } - (pid_t)processIdentifier { return 1234; }
+- (BOOL)activateWithOptions:(NSUInteger)options { (void)options; abort(); }
+@end
+static NSAppleEventDescriptor *fixtureSend(id self, SEL selector, NSAppleEventSendOptions options, NSTimeInterval timeout, NSError **error) {
+  (void)self; (void)selector; (void)options; (void)timeout; (void)error; sendCalls++; return [NSAppleEventDescriptor recordDescriptor];
+}
+#define NSRunningApplication FixtureSpotifyApp
+#define AEDeterminePermissionToAutomateTarget fixturePermission
+#define main nativeMain
+#include ${JSON.stringify(resolve('native/spotify-control/main.m'))}
+#undef main
+int main(int argc,const char *argv[]) { @autoreleasepool {
+  permissionStatus=argc>1 ? atoi(argv[1]) : 0;
+  method_setImplementation(class_getInstanceMethod(NSAppleEventDescriptor.class,@selector(sendEventWithOptions:timeout:error:)),(IMP)fixtureSend);
+  int result=nativeMain(1,argv);
+  fprintf(stderr,"{\\"permissionCalls\\":%d,\\"sendCalls\\":%d,\\"correctTarget\\":%s}\\n",permissionCalls,sendCalls,correctTarget?"true":"false");
+  return result;
+}}
+`,
+      );
+      await execute('/usr/bin/xcrun', [
+        'clang',
+        '-Wno-unused-function',
+        '-fobjc-arc',
+        '-fblocks',
+        '-O2',
+        '-mmacosx-version-min=14.0',
+        '-framework',
+        'Foundation',
+        '-framework',
+        'AppKit',
+        '-framework',
+        'Carbon',
+        permissionSource,
+        '-o',
+        permission,
+      ]);
     });
     afterAll(async () => {
       if (root) await rm(root, { recursive: true, force: true });
@@ -120,6 +177,47 @@ int main(void){@autoreleasepool{char bytes[4096];size_t count=fread(bytes,1,size
       });
     });
     const code = (s: string) => Buffer.from(s).readUInt32BE();
+    it.each([
+      {
+        status: -1743,
+        sent: 0,
+        result: { ok: false, code: 'permission_denied' },
+      },
+      {
+        status: -1744,
+        sent: 0,
+        result: { ok: false, code: 'permission_denied' },
+      },
+      { status: -600, sent: 0, result: { ok: false, code: 'setup_needed' } },
+      { status: -1712, sent: 0, result: { ok: false, code: 'setup_needed' } },
+      {
+        status: 0,
+        sent: 1,
+        result: { ok: true, kind: 'app-control', status: 'success' },
+      },
+    ])(
+      'checks Automation before sending when permission returns $status',
+      async ({ status, sent, result }) => {
+        const reply = await new Promise<{ stdout: string; stderr: string }>(
+          (resolve, reject) => {
+            const child = execFile(
+              permission,
+              [String(status)],
+              { timeout: 5000 },
+              (error, stdout, stderr) =>
+                error ? reject(error) : resolve({ stdout, stderr }),
+            );
+            child.stdin!.end(JSON.stringify({ action: 'play' }));
+          },
+        );
+        expect(JSON.parse(reply.stdout)).toEqual(result);
+        expect(JSON.parse(reply.stderr)).toEqual({
+          permissionCalls: 1,
+          sendCalls: sent,
+          correctTarget: true,
+        });
+      },
+    );
     it.each([
       ['play', 'Play'],
       ['pause', 'Paus'],

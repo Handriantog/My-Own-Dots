@@ -92,7 +92,12 @@ export class WorkspaceWindow {
     this.voice = new CompanionVoiceSession(
       () => this.window,
       () => 'dots://workspace/',
-      { active() {}, ready() {}, reviewFolders },
+      {
+        active() {},
+        ready() {},
+        reviewFolders,
+        playback: (dotId, active) => this.voicePlayback(dotId, active),
+      },
       'dot:workspace-voice',
     );
     this.folders = new CompanionFolderPicker(
@@ -508,6 +513,10 @@ export class WorkspaceWindow {
     if (!this.trusted(event) || !isRecoveryPage(event.senderFrame?.url ?? ''))
       throw new Error('Configuration is available in workspace recovery.');
   }
+  voicePlayback(dotId: string, active: boolean): void {
+    this.abilities.voicePlayback(dotId, active);
+  }
+
   register(window: BrowserWindow, initializing = false): () => void {
     if (this.disposed) {
       if (!window.isDestroyed()) window.destroy();

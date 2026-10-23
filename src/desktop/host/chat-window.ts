@@ -53,6 +53,7 @@ export class CompanionChatWindow {
     },
     private readonly workspace?: {
       ready(): Promise<void>;
+      voicePlayback?(dotId: string, active: boolean): void;
       register(window: BrowserWindow, initializing?: boolean): () => void;
       recover(): Promise<void>;
       open(destination?: WorkspaceDestination): Promise<void>;
@@ -66,6 +67,8 @@ export class CompanionChatWindow {
       () => this.address,
       {
         ...voiceChanged,
+        playback: (dotId, active) =>
+          this.workspace?.voicePlayback?.(dotId, active),
         state: (value) => {
           if (!this.request || value !== null) voiceChanged.state?.(value);
         },

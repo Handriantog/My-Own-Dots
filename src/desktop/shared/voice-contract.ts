@@ -9,7 +9,12 @@ export interface DesktopVoiceBridge {
   activate(): Promise<void>;
   cancelTalk(): void;
   cancelStart(): Promise<void>;
-  begin(callId: string, quality?: 'basic' | 'medium'): Promise<void>;
+  begin(
+    callId: string,
+    quality?: 'basic' | 'medium',
+    dotId?: string,
+  ): Promise<void>;
+  playback(callId: string, active: boolean): Promise<void>;
   end(callId: string): Promise<void>;
   isWindowless(): boolean;
   phase(callId: string, phase: VoicePhase): Promise<void>;

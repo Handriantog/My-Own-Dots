@@ -660,3 +660,58 @@ with format/lint/types/build/speech checks and relocated signed-app
 native/JavaScript/Python/Spotify-helper smoke. Independent review reported no
 remaining findings. Packaged live continuation results are recorded in the draft
 PR.
+
+The corrected selection reached Play in the installed app. Its Apple-event send
+then timed out after about eight seconds with no Automation entry or consent
+prompt, and Spotify initially remained paused. Later owner requests to pause and resume
+both returned successful receipts; native inspection confirmed the Bus playlist
+playing. The first timeout therefore does not prove that playback never started.
+Playback now explicitly checks Automation
+for the exact Spotify process and event, allowing macOS to request consent before
+the mutation reply timeout starts. Any permission/preflight failure prevents the
+send. The helper remains owned, cancellable and limited to 30 seconds. If macOS
+blocks consent beyond that lifetime, the transport conservatively reports an
+uncertain result; this does not prove a mutation occurred.
+
+Five native regressions failed before this change and pass afterward. They run
+the real helper control flow while replacing only app lookup, the consent API and
+the final send with offline boundary fixtures. They verify the target/event,
+consent request, no send after denial/unavailable consent/preflight failure, and
+one send after successful authorization. They do not establish live OS permission
+attribution, which remains a separate packaged acceptance check.
+
+## Spotify voice volume (October 24, 2026)
+
+Actual local PCM playback now signals the trusted desktop voice session with the
+active call and Dot identity. Both workspace and companion windows use one shared
+volume coordinator. The active Dot must have an enabled, non-restored binding with
+approved Spotify volume control, and the installation's master switch must be on.
+The host checks this at start and every second while renewing the native lease.
+No public worker capability or renderer-selected app, path, volume or executable
+was added.
+
+The bundled helper temporarily sets Spotify's app volume to one quarter of the
+observed original. A 250 ms hold bridges short PCM gaps. EOF, missing heartbeat or
+parent exit triggers conditional restoration; a manual change relinquishes
+ownership. Every volume event targets the same Spotify PID and forbids new consent
+prompts at both preflight and send time. Volume reads/writes have one-second reply
+timeouts. Recovery remains best effort if the app is unavailable or OS access is
+revoked; system volume is never changed.
+
+Playback regressions cover natural completion, interruption/flush, mute, stop,
+audio errors and discarded frames. IPC checks cover call identity, trusted frame,
+legacy/basic calls and cleanup. Coordinator fixtures cover current grants,
+revocation, pending-start cancellation, short gaps and cross-Dot serialization.
+Offline native fixtures exercise the real helper with only app lookup, consent and
+event sends replaced, covering original/manual/zero volume, denial, EOF,
+heartbeat loss, parent exit and uncertain writes. Review found a transient-read
+cleanup gap and a missing send-time no-prompt flag. Both have failing-then-passing
+native regressions. The first full suite exposed only an outdated preload surface
+expectation, which now includes and tests the new bounded playback message.
+
+The final full suite passed **2,149 tests, one existing signing-identity skip**
+across 244 files. Formatting, lint, TypeScript, both speech protocol suites
+(31 + 17 tests), production build and desktop build pass. The native ducking tests
+use the Ability acceptance filename prefix so the macOS CI job executes them.
+Local macOS acceptance passes all 374 integration tests and both 14-probe native
+profiles. Packaged live acceptance and final remote status are recorded in PR #12.
