@@ -18,6 +18,8 @@ import { tmpdir } from 'node:os';
 import { AbilityController } from '../../src/desktop/host/abilities/controller.ts';
 import { parseManifest } from '../../src/shared/abilities/manifest.ts';
 import manifestFixture from '../fixtures/abilities/manifest.json';
+import activity from '../fixtures/abilities/activity.json';
+import type { ActivityStatus } from '../../src/shared/abilities/activity';
 import type { WorkspaceBackendConnection } from '../../src/desktop/host/workspace-backend.ts';
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -66,17 +68,34 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
     async function fixture(
       onUnavailable?: (stage: string, code: string) => void,
       interruptCleanup = false,
+      activities = false,
     ) {
       const home = await mkdtemp(join(root, 'fixture-')),
         profile = join(home, 'profile');
       await mkdir(profile, { mode: 0o700 });
       const manifest = parseManifest({
         ...manifestFixture,
+        ...(activities
+          ? {
+              activities: [activity],
+              permissions: [
+                {
+                  id: 'motion',
+                  kind: 'companion-activity',
+                  purpose: 'Fixture',
+                  activities: ['orbit'],
+                  pointer: true,
+                  keepAwake: 'display',
+                },
+              ],
+            }
+          : {}),
         entrypoint: { runtime: 'javascript', path: 'worker.mjs' },
         tools: [
           {
             ...manifestFixture.tools[0],
             id: 'run',
+            ...(activities ? { execution: 'interactive' } : {}),
             input: {
               type: 'object',
               properties: { op: { type: 'string', maxLength: 32 } },
@@ -92,7 +111,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
           dotId: 'dot',
           digest,
           manifest,
-          grants: ['account', 'search'],
+          grants: activities ? ['motion'] : ['account', 'search'],
           settings: {},
           revision: 1,
           enabled: true,
@@ -168,7 +187,19 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
           javascript: { executable, readRoots: [dirname(dirname(executable))] },
         },
       };
+      let activityStatus: ActivityStatus = 'inactive';
       const controller = new AbilityController({
+        activityDriver: () => ({
+          async start() {
+            activityStatus = 'approaching';
+          },
+          async stop() {
+            activityStatus = 'inactive';
+          },
+          status() {
+            return activityStatus;
+          },
+        }),
         ...options,
         onUnavailable,
         storage: {
@@ -230,6 +261,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       };
       return {
         home,
+        activityStatus: () => activityStatus,
         backend,
         connection,
         controller,
@@ -239,6 +271,40 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         statePath,
       };
     }
+    it('wires the controller driver, renews master authority and never replays after reconnect', async () => {
+      const f = await fixture(undefined, false, true);
+      await f.controller.attach(f.connection);
+      const result = await fetch(`${f.connection.url}/invoke`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'activity-start', interactive: true }),
+      });
+      expect(await result.json()).toMatchObject({ status: 'success' });
+      expect(f.activityStatus()).toBe('approaching');
+      await new Promise((r) => setTimeout(r, 700));
+      expect(f.activityStatus()).toBe('approaching');
+      await fetch(`${f.connection.url}/master-off`, { method: 'POST' });
+      await expect.poll(f.activityStatus, { timeout: 3000 }).toBe('inactive');
+      await f.controller.suspend();
+      await f.controller.attach(f.connection);
+      expect(f.activityStatus()).toBe('inactive');
+    });
+    it('acknowledges cancellation after a worker returned and releases its committed activity', async () => {
+      const f = await fixture(undefined, false, true);
+      await f.controller.attach(f.connection);
+      const response = await fetch(`${f.connection.url}/invoke`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ op: 'activity-start', interactive: true }),
+      });
+      expect(await response.json()).toMatchObject({ status: 'success' });
+      expect(f.activityStatus()).toBe('approaching');
+      const cancelled = await fetch(`${f.connection.url}/cancel-invocation`, {
+        method: 'POST',
+      });
+      expect(await cancelled.json()).toEqual({ ok: true });
+      expect(f.activityStatus()).toBe('inactive');
+    });
     it('keeps an attached backend alive while quit reaps its real Ability worker', async () => {
       const f = await fixture();
       await f.controller.attach(f.connection);

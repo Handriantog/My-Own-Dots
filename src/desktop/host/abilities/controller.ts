@@ -1,3 +1,4 @@
+import type { ActivityDriver } from '../../../shared/abilities/activity.js';
 import {
   SpotifyDucking,
   permitsSpotifyDucking,
@@ -62,6 +63,7 @@ type Options = {
   chooseAbility?(): Promise<string | undefined>;
   choosePython?(): Promise<string | undefined>;
   approvePython?(runtime: AbilityRuntime): Promise<boolean>;
+  activityDriver?(): ActivityDriver | undefined;
   runtimes?: AbilitySupervisorOptions['runtimes'];
   onUnavailable?(
     stage: AttachmentStage,
@@ -229,6 +231,38 @@ export class AbilityController {
         const controller = new AbortController();
         const local = new LocalAbilityPackages(() => bridge?.session);
         const host: AbilityHost = new AbilityHost({
+          activityDriver: this.options.activityDriver,
+          renewActivity: async (context, signal) => {
+            const data = z
+              .strictObject({
+                bindings: z.array(bindingSchema),
+                installed: z.array(installedAbilitySchema),
+              })
+              .parse(
+                await this.api(
+                  connection,
+                  `/dots/${encodeURIComponent(context.dotId)}/abilities`,
+                  undefined,
+                  AbortSignal.any([signal, controller.signal]),
+                ),
+              );
+            const binding = data.bindings.find(
+              (b) => b.id === context.bindingId,
+            );
+            const installed = data.installed.find(
+              (item) => item.digest === context.digest,
+            );
+            if (
+              this.current !== current ||
+              !this.available ||
+              this.maintenance ||
+              !binding ||
+              !installed?.enabled ||
+              installed.restored
+            )
+              throw new AbilityFailure('permission_denied');
+            return binding;
+          },
           appControl: createSpotifyTransport(
             join(this.options.bundle, 'native/spotify-control'),
           ),

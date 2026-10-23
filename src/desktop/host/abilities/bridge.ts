@@ -32,6 +32,7 @@ export interface DesktopAbilityHandlers {
     value: HostInvocation,
     signal: AbortSignal,
   ): Promise<InvocationOutcome>;
+  cancel?(invocationId: string): Promise<void>;
   revoke(bindingId: string, revision: number): Promise<void>;
   disconnect(bindingId: string): Promise<void>;
   eraseState(bindingId: string): Promise<void>;
@@ -294,7 +295,10 @@ export class DesktopAbilityBridge {
     const command = event.command!;
     if (command.type === 'cancel') {
       this.running.get(command.invocationId)?.controller.abort();
-      return;
+      if (!event.id) {
+        await this.handlers.cancel?.(command.invocationId);
+        return;
+      }
     }
     if (!event.id) throw new AbilityFailure('invalid_response');
     const session = this.sessionId;
@@ -302,6 +306,9 @@ export class DesktopAbilityBridge {
     try {
       if (!this.connected) throw new AbilityFailure('host_unavailable');
       switch (command.type) {
+        case 'cancel':
+          await this.handlers.cancel?.(command.invocationId);
+          break;
         case 'quiesce':
         case 'resume':
           if (!this.handlers[command.type])

@@ -22,7 +22,10 @@ import { folderTools } from './folder-tools.js';
 import { websiteTools, websiteInstructions } from './website-tools.js';
 import type { OpenWebsite } from '../shared/desktop-browser.js';
 import { isScheduledTaskMessage } from '../shared/scheduled-message.js';
-import { voiceComputeScope } from '../shared/voice-compute.js';
+import {
+  voiceComputeScope,
+  voiceComputeMessagePrefix,
+} from '../shared/voice-compute.js';
 import { voiceReceiptMessagePrefix } from '../shared/voice-receipt.js';
 import { voiceDelegationActive } from '../shared/voice-delegation.js';
 import { composioSession } from './composio.js';
@@ -571,6 +574,15 @@ export class DotAgent extends AbstractAgent {
                   delegation || isVoiceTurn(this.workspace, dot.id, input)
                     ? 'voice'
                     : 'text',
+                  Boolean(
+                    !this.channel &&
+                    ownerMessage &&
+                    !isScheduledTaskMessage(ownerMessage) &&
+                    !ownerMessage.id.startsWith(voiceReceiptMessagePrefix) &&
+                    (!ownerMessage.id.startsWith(voiceComputeMessagePrefix) ||
+                      delegation ||
+                      isVoiceTurn(this.workspace, dot.id, input)),
+                  ),
                 )
               : [];
             const serverTools = [

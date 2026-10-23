@@ -194,6 +194,7 @@ async function start(): Promise<void> {
       }
     },
     diagnostics,
+    () => activity.driver,
   );
   protocol.handle(
     'dots',

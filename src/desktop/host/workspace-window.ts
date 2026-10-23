@@ -1,3 +1,4 @@
+import type { ActivityDriver } from '../../shared/abilities/activity.js';
 import { AbilityController } from './abilities/controller.js';
 import {
   desktopAbilityMethods,
@@ -88,6 +89,7 @@ export class WorkspaceWindow {
       DEFAULT_ACCESSORIES,
     private readonly selectDesktopDot?: (dotId: string) => Promise<void>,
     diagnostics?: Pick<DesktopDiagnostics, 'record'>,
+    activityDriver?: () => ActivityDriver | undefined,
   ) {
     this.voice = new CompanionVoiceSession(
       () => this.window,
@@ -106,6 +108,7 @@ export class WorkspaceWindow {
       'dot:workspace-folders',
     );
     this.abilities = new AbilityController({
+      activityDriver,
       profile: data,
       bundle,
       storage: safeStorage,

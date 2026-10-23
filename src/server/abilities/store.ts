@@ -64,6 +64,7 @@ const contextSchema = z.strictObject({
   tool: boundedId,
   threadId: boundedId,
   channel: z.enum(['text', 'voice']).optional(),
+  interactive: z.boolean().optional(),
 });
 export type PackageRecord = Omit<VerifiedPackage, 'root'>;
 export type AbilityReceipt = {
@@ -425,6 +426,8 @@ export class AbilityStore {
         !binding.manifest.tools.some(
           (tool) =>
             tool.id === context.tool &&
+            (tool.execution !== 'interactive' ||
+              context.interactive === true) &&
             (!tool.channels ||
               tool.channels.includes(context.channel ?? 'text')),
         )
@@ -460,9 +463,14 @@ export class AbilityStore {
         : { status: outcome.status };
     this.db
       .prepare(
-        "UPDATE ability_receipts SET state='settled',outcome=?,settledAt=? WHERE invocationId=? AND state='running'",
+        "UPDATE ability_receipts SET state='settled',outcome=?,settledAt=? WHERE invocationId=? AND (state='running' OR (? AND json_extract(outcome,'$.status')='success'))",
       )
-      .run(JSON.stringify(generic), Date.now(), invocationId);
+      .run(
+        JSON.stringify(generic),
+        Date.now(),
+        invocationId,
+        outcome.status === 'uncertain' ? 1 : 0,
+      );
   }
   receipt(invocationId: string): AbilityReceipt | undefined {
     const row = this.db
