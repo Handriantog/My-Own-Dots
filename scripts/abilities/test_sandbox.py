@@ -157,7 +157,10 @@ class SandboxTests(unittest.TestCase):
 
     def run_probe(self, runtime, operation, *args, extra_fds=()):
         process, _, _ = self.start(runtime, operation, *args, extra_fds=extra_fds)
-        output, errors = process.communicate(timeout=5)
+        # Race probes perform 5,000 open/write/close attempts. The native
+        # positive control exceeded five seconds on shared macOS CI even before
+        # the replacement thread started. Keep the workload and a bounded budget.
+        output, errors = process.communicate(timeout=15 if operation == "race" else 5)
         self.assertEqual(process.returncode, 0, errors.decode(errors="replace"))
         return json.loads(output)
 
