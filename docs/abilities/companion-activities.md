@@ -92,7 +92,10 @@ Pointer activities require macOS Accessibility permission for the desktop app.
 Dot approaches the existing cursor and attaches it to the rendered palm. Native
 movement is bounded to the display and checks fresh physical input immediately
 before moving. It never emits clicks or key presses. At an extreme display edge,
-part of Dot can briefly clip while its hand reaches the cursor, then move inward.
+part of Dot can briefly clip while its hand reaches the cursor. Pickup preserves
+the exact pointer position anywhere on the full display; subsequent travel eases
+into the usable work area, clear of the Dock and menu bar. Native safety checks
+still use full display bounds.
 
 Physical mouse movement, scrolling or a held button releases the cursor. Dot
 resumes with a new approach after the package's `idleMs`; Mouse Mover uses 5,000 ms.

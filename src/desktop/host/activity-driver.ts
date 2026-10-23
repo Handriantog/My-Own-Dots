@@ -223,12 +223,14 @@ export class DesktopActivityDriver implements ActivityDriver {
       return this.env.frame();
     }
     const elapsed = Math.max(0, age - s.definition.approachMs);
+    const display = this.env.display(s.anchor);
     const target = sampleActivity(
       s.definition,
       elapsed,
       s.anchor,
-      this.env.display(s.anchor).bounds,
+      display.bounds,
       this.env.reducedMotion(),
+      display.workArea,
     );
     const approaching = age < s.definition.approachMs;
     s.status = approaching ? 'approaching' : 'running';

@@ -19,6 +19,7 @@ export function sampleActivity(
   anchor: Point,
   bounds: Rect,
   reducedMotion: boolean,
+  workArea: Rect = bounds,
 ): ActivitySample {
   const progress = definition.loop
     ? (Math.max(0, elapsedMs) % definition.durationMs) / definition.durationMs
@@ -57,30 +58,42 @@ export function sampleActivity(
       bounds.y + bounds.height - 1,
     ),
   };
-  if (!definition.pointer) return { root: point, pose };
-  const offset = palmPosition({ x: 0, y: 0 }, pose, definition.pointer.hand);
-  // At an extreme edge the initial rig may clip; keep exact contact and ease it inward.
+  const offset = definition.pointer
+    ? palmPosition({ x: 0, y: 0 }, pose, definition.pointer.hand)
+    : { x: 0, y: 0 };
+  // Pickup uses the full display. Ease both the rig and its held pointer into
+  // usable space afterward, so an anchor over the Dock never jumps at contact.
   const p = clamp(elapsedMs / 2000, 0, 1),
     settle = p * p * (3 - 2 * p);
   const root = { x: point.x - offset.x, y: point.y - offset.y };
+  const target = {
+    x: clamp(
+      clamp(root.x, workArea.x + 70, workArea.x + workArea.width - 70) +
+        offset.x,
+      workArea.x,
+      workArea.x + workArea.width - 1,
+    ),
+    y: clamp(
+      clamp(root.y, workArea.y + 130, workArea.y + workArea.height - 20) +
+        offset.y,
+      workArea.y,
+      workArea.y + workArea.height - 1,
+    ),
+  };
   point.x = clamp(
-    point.x +
-      (clamp(root.x, bounds.x + 70, bounds.x + bounds.width - 70) - root.x) *
-        settle,
+    mix(point.x, target.x, settle),
     bounds.x,
     bounds.x + bounds.width - 1,
   );
   point.y = clamp(
-    point.y +
-      (clamp(root.y, bounds.y + 130, bounds.y + bounds.height - 20) - root.y) *
-        settle,
+    mix(point.y, target.y, settle),
     bounds.y,
     bounds.y + bounds.height - 1,
   );
   return {
     root: { x: point.x - offset.x, y: point.y - offset.y },
     pose,
-    pointer: point,
+    ...(definition.pointer ? { pointer: point } : {}),
   };
 }
 

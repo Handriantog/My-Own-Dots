@@ -5,6 +5,8 @@ import {
   approachActivity,
 } from '../../src/desktop/core/activity.js';
 import { palmPosition } from '../../src/desktop/core/rig-model.js';
+import mousePackage from '../fixtures/abilities/mouse-mover/mouse-mover-0.1.0.json';
+import { activityDefinitionSchema } from '../../src/shared/abilities/activity.js';
 import { initialPose } from '../../src/desktop/core/pose.js';
 
 const bounds = { x: -1000, y: -300, width: 1000, height: 800 };
@@ -100,4 +102,76 @@ describe('definition-driven activity geometry', () => {
       (from.root.x + target.root.x) / 2,
     );
   });
+});
+
+describe('pickup and usable-area travel', () => {
+  const actual = activityDefinitionSchema.parse(
+    mousePackage.manifest.activities[0],
+  );
+  it.each([
+    {
+      name: 'bottom Dock',
+      bounds: { x: 0, y: 0, width: 1000, height: 800 },
+      workArea: { x: 0, y: 25, width: 1000, height: 675 },
+      anchor: { x: 500, y: 780 },
+    },
+    {
+      name: 'left Dock on negative-origin display',
+      bounds: { x: -1000, y: -300, width: 1000, height: 800 },
+      workArea: { x: -900, y: -275, width: 900, height: 775 },
+      anchor: { x: -990, y: 0 },
+    },
+    {
+      name: 'right Dock',
+      bounds: { x: 0, y: 0, width: 1000, height: 800 },
+      workArea: { x: 0, y: 25, width: 900, height: 775 },
+      anchor: { x: 990, y: 400 },
+    },
+  ])(
+    'keeps exact pickup then settles inside $name work area',
+    ({ bounds, workArea, anchor }) => {
+      const sample = (ms: number) =>
+        sampleActivity(actual, ms, anchor, bounds, false, workArea);
+      expect(sample(0).pointer).toEqual(anchor);
+      expect(
+        Math.hypot(
+          sample(1).pointer!.x - anchor.x,
+          sample(1).pointer!.y - anchor.y,
+        ),
+      ).toBeLessThan(1);
+      for (let ms = 2000; ms <= 48000; ms += 250) {
+        const frame = sample(ms);
+        for (const point of [frame.root, frame.pointer!]) {
+          expect(point.x).toBeGreaterThanOrEqual(workArea.x);
+          expect(point.x).toBeLessThan(workArea.x + workArea.width);
+          expect(point.y).toBeGreaterThanOrEqual(workArea.y);
+          expect(point.y).toBeLessThan(workArea.y + workArea.height);
+        }
+        const palm = palmPosition(frame.root, frame.pose, 'right');
+        expect(palm.x).toBeCloseTo(frame.pointer!.x, 10);
+        expect(palm.y).toBeCloseTo(frame.pointer!.y, 10);
+      }
+    },
+  );
+});
+
+it('settles an activity without pointer access inside the same usable area', () => {
+  const noPointer = structuredClone(definition);
+  delete noPointer.pointer;
+  const bounds = { x: 0, y: 0, width: 1000, height: 800 },
+    workArea = { x: 0, y: 25, width: 1000, height: 675 };
+  expect(
+    sampleActivity(noPointer, 0, { x: 500, y: 780 }, bounds, false, workArea)
+      .root,
+  ).toEqual({ x: 500, y: 780 });
+  const settled = sampleActivity(
+    noPointer,
+    4000,
+    { x: 500, y: 780 },
+    bounds,
+    false,
+    workArea,
+  );
+  expect(settled.root.y).toBeLessThanOrEqual(680);
+  expect(settled.pointer).toBeUndefined();
 });

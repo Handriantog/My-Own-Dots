@@ -829,10 +829,13 @@ descriptor/archive hashes and frozen source provenance are recorded in
 A generic second animation fixture also covers a different path and left hand.
 
 The actual PlushRig preview uses Mouse Mover's 1,600 ms approach, 5,000 ms idle
-threshold, authored pose and declared right hand. It recorded 823 frames and 240
-fake pointer moves, with maximum rendered-palm error `1.2710574864626038e-13` logical
-pixels, no browser errors and no retained sleep blocker. Pickup is captured after
-1,700 ms and completed resume after 11,200 ms. Production AbilityManager, Details,
+threshold, authored pose and declared right hand. The refreshed preview includes
+a simulated menu bar and bottom Dock, with work area `x=0, y=25, width=1000, height=525`. It recorded 1,033 frames and 450 fake
+pointer moves, with maximum rendered-palm error `1.6077746776921858e-13` logical
+pixels, zero initial pickup error and zero usable-area overflow across 210 settled
+frames. There are no browser errors or retained sleep blockers. Pickup is captured
+after 1,700 ms and settled travel/resume after 4,100/14,700 ms. Production
+AbilityManager, Details,
 PermissionReview and theme CSS were inspected in 56 headless Chromium captures at
 1,120px/360px in both themes using exact package manifests, catalog and packaged
 READMEs with a synthetic bridge. Installed/catalog icons, long permissions, README
@@ -841,13 +844,13 @@ inspected the package rig and representative UI captures. The resulting README
 polish moves authoring details below the owner instructions; setup explains desktop
 selection and macOS Accessibility.
 
-Frozen local implementation validation: **2,352 tests pass, one existing
+Frozen local implementation validation: **2,359 tests pass, one existing
 certificate-identity test skips**, across 254 files, using only the dedicated
 `dots_mouse_mover_test` PostgreSQL database. Format, lint, TypeScript, production
 build and both speech protocol suites (31 + 17) pass. macOS acceptance passes
-580 integration tests and both 14-probe sandbox profiles. After documentation-only
-package polish, all seven production installer/worker tests pass again against the
-final delivered bytes. The collection passes 164 worker/protocol/packaging tests,
+587 integration tests and both 14-probe sandbox profiles. All eight production
+installer/worker tests pass against the final delivered package bytes, including
+the new usable-area regression. The collection passes 164 worker/protocol/packaging tests,
 three icon-validation tests, all three manifest checks and repository validation;
 38 affected Mouse Mover tests also pass after README polish. Vite reports its
 existing bundle-size warning.
@@ -871,6 +874,23 @@ deep signature verification passes. The package uses ad-hoc signing without
 Keychain access. The packager warns about a missing optional `.icon` format;
 the generated `.icns` is included unchanged. Developer ID/notarization remain
 release work. The final ZIP SHA-256 is
-`db1d5082d718cab1d81912b519da20fdac61da2d01963428f5c9bcebe2980bfa`.
+`87c7abb58407a1795217681d5ae83d02fd7b1ff786d9b5661f9db4619f500988`.
 The app and ZIP are under this worktree's `release/`; they were not opened in
 the owner's workspace.
+
+### Final review: usable-area travel
+
+Review reproduced sustained movement in Dock-reserved space because the driver
+passed only full display bounds to the sampler. The correction passes both full
+bounds and the display work area. Initial pickup stays at the exact physical
+cursor; subsequent movement eases the rig and pointer into usable space. Native
+full-display bounds and rendered-hand alignment remain unchanged. No Ability IDs
+or package-specific constants were added.
+
+New regressions first failed for the actual package at a bottom Dock, side Docks
+and a display with negative coordinates, then passed after the fix. They cover
+exact initial contact, gentle entry, settled travel over two authored cycles,
+real-driver wiring, the sealed Mouse Mover worker and pointerless activities.
+The focused suite passes 39 tests; the new frozen full suite passes 2,359 tests
+with the same one certificate-identity skip. Collection source and delivery
+archive bytes are unchanged.

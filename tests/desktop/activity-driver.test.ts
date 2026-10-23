@@ -363,3 +363,42 @@ describe('desktop activity driver', () => {
     expect(f.sim.frame().root.x).toBeCloseTo(last.root.x, 0);
   });
 });
+
+it.each([
+  {
+    name: 'bottom Dock',
+    bounds: { x: 0, y: 0, width: 1000, height: 800 },
+    workArea: { x: 0, y: 25, width: 1000, height: 675 },
+    anchor: { x: 500, y: 780 },
+  },
+  {
+    name: 'negative-origin side Dock',
+    bounds: { x: -1000, y: -300, width: 1000, height: 800 },
+    workArea: { x: -900, y: -275, width: 900, height: 775 },
+    anchor: { x: -990, y: 0 },
+  },
+])(
+  'driver preserves $name pickup before usable-area travel',
+  async ({ bounds, workArea, anchor }) => {
+    const f = fixture();
+    f.env.display = () => ({ ...display, bounds, workArea });
+    f.input({ point: anchor });
+    await f.driver.start({ bindingId: 'b', dotId: 'dot' }, definition);
+    f.now = definition.approachMs;
+    await f.driver.presented(f.render());
+    expect((f.moves[0] as unknown[])[1]).toEqual(anchor);
+    f.now = definition.approachMs + 4000;
+    const settled = f.render();
+    await f.driver.presented(settled);
+    for (const point of [
+      settled.root,
+      (f.moves[1] as unknown[])[1] as { x: number; y: number },
+    ]) {
+      expect(point.x).toBeGreaterThanOrEqual(workArea.x);
+      expect(point.x).toBeLessThan(workArea.x + workArea.width);
+      expect(point.y).toBeGreaterThanOrEqual(workArea.y);
+      expect(point.y).toBeLessThan(workArea.y + workArea.height);
+    }
+    await f.driver.stop();
+  },
+);

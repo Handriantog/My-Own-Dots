@@ -107,6 +107,8 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         (server as Server).closeAllConnections();
         await new Promise<void>((done) => server.close(() => done()));
       });
+      let now = 0,
+        point = { x: 500, y: 780 };
       let awake = 0,
         begins = 0,
         ends = 0,
@@ -114,7 +116,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       const display = {
         id: 'fixture',
         bounds: { x: 0, y: 0, width: 1000, height: 800 },
-        workArea: { x: 0, y: 0, width: 1000, height: 800 },
+        workArea: { x: 0, y: 25, width: 1000, height: 675 },
         scaleFactor: 2,
       };
       const sim = new CompanionSimulation(buildWorld(null, [display], 0), 1, {
@@ -122,7 +124,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         y: 700,
       });
       const driver = new DesktopActivityDriver({
-        now: () => 0,
+        now: () => now,
         selectedDot: () => (mode === 'selection' ? 'other' : dot.id),
         available: () => mode !== 'hidden',
         accessibility: () => mode !== 'accessibility',
@@ -145,14 +147,15 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
           begin: async () => {
             begins++;
             return {
-              point: { x: 500, y: 400 },
+              point: { ...point },
               down: false,
               revision: 1,
               sampledAtMs: 0,
               idleMs: 10000,
             };
           },
-          move: async () => {
+          move: async (_generation, next) => {
+            point = { ...next };
             moves++;
             return true;
           },
@@ -256,6 +259,12 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         backend,
         driver,
         effects: () => ({ awake, begins, ends, moves }),
+        render: async (at: number) => {
+          now = at;
+          const frame = driver.frame(sim.frame(), now);
+          await driver.presented(frame);
+          return { frame, point: { ...point } };
+        },
         invoke,
         service,
         restartService: () => {
@@ -266,6 +275,16 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         },
       };
     }
+    it('carries the sealed package from exact Dock pickup into usable desktop space', async () => {
+      const f = await fixture();
+      expect(await f.invoke('start')).toMatchObject({ status: 'success' });
+      expect((await f.render(1600)).point).toEqual({ x: 500, y: 780 });
+      const settled = await f.render(5600);
+      expect(settled.frame.root.y).toBeLessThanOrEqual(680);
+      expect(settled.point.y).toBeLessThan(700);
+      expect(await f.invoke('stop')).toMatchObject({ status: 'success' });
+      expect(f.effects()).toMatchObject({ awake: 0, ends: 1 });
+    });
     it.each([
       ['accessibility', 'setup_needed'],
       ['hidden', 'host_unavailable'],

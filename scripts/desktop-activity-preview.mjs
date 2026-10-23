@@ -26,22 +26,24 @@ import { buildWorld } from './src/desktop/core/world';
 import { definition as fixture } from './tests/desktop/activity-fixture';
 const definition=${selected ? JSON.stringify(selected) : 'fixture'};
 const title=${JSON.stringify(manifest?.name ?? 'Companion activity')};
-const pickup=definition.approachMs, manual=pickup+2000, release=manual+500, resume=release+(definition.pointer?.idleMs??5000), resumed=resume+pickup+500, stop=resumed+1500, end=stop+1000, frames=Math.ceil(end/1000*60);
-const timeline={approach:pickup/2,pickup:pickup+100,running:pickup+1000,paused:manual+200,resumed,released:stop+500};
+const pickup=definition.approachMs, manual=pickup+3500, release=manual+500, resume=release+(definition.pointer?.idleMs??5000), resumed=resume+pickup+2500, stop=resumed+1500, end=stop+1000, frames=Math.ceil(end/1000*60);
+const timeline={approach:pickup/2,pickup:pickup+100,running:pickup+2500,paused:manual+200,resumed,released:stop+500};
 const app=new Application();await app.init({width:1000,height:650,resolution:2,autoDensity:true,backgroundAlpha:0,preference:'webgl',autoStart:false});document.body.appendChild(app.canvas);
-const display={id:'fixture',bounds:{x:0,y:0,width:1000,height:650},workArea:{x:0,y:0,width:1000,height:650},scaleFactor:2};
+const display={id:'fixture',bounds:{x:0,y:0,width:1000,height:650},workArea:{x:0,y:25,width:1000,height:525},scaleFactor:2};
+const reserved=new Graphics().rect(0,0,1000,25).rect(0,550,1000,100).fill(0x141a24);app.stage.addChild(reserved);
+const area=new Graphics().rect(0,25,1000,525).stroke({color:0x526171,width:1});app.stage.addChild(area);
 const rig=await PlushRig.create('/desktop-dot');app.stage.addChild(rig.container);
 const cursor=new Graphics().moveTo(0,0).lineTo(0,17).lineTo(5,12).lineTo(10,20).lineTo(14,18).lineTo(9,10).lineTo(16,10).closePath().fill(0xffffff).stroke({color:0x10151d,width:1});app.stage.addChild(cursor);
 const label=new Text({text:'',style:{fontFamily:'Arial',fontSize:20,fill:0xd7e3ef}});label.position.set(24,24);app.stage.addChild(label);
 const sim=new CompanionSimulation(buildWorld(null,[display],0),1,{x:250,y:550});
-let now=0,point={x:650,y:300},revision=1,down=false,awake=0,warps=0;
+let now=0,point={x:650,y:630},revision=1,down=false,awake=0,warps=0;
 const physical=()=>({point:{...point},down,revision,sampledAtMs:now,idleMs:revision===1?10000:Math.max(0,now-release)});
 const driver=new DesktopActivityDriver({now:()=>now,selectedDot:()=> 'fixture-dot',available:()=>true,accessibility:()=>true,display:()=>display,frame:()=>sim.frame(),reducedMotion:()=>false,handoff:f=>sim.adoptActivity(f),changed:()=>{},sleep:{start:()=>++awake,stop:()=>{awake--;}},pointer:{begin:async()=>physical(),move:async(g,target)=>{point={...target};warps++;return true;},end:()=>{}}});
 await driver.start({bindingId:'fixture',dotId:'fixture-dot'},definition);
 const samples=[];
 for(let i=0;i<=frames;i++) {
  now=i*1000/60;
- if(now>=manual && revision===1){revision++;down=true;point={x:830,y:240};}
+ if(now>=manual && revision===1){revision++;down=true;point={x:830,y:630};}
  if(now>=release && down){revision++;down=false;}
  driver.physical(physical());
  if(now>=stop && driver.active)await driver.stop();
@@ -49,9 +51,13 @@ for(let i=0;i<=frames;i++) {
  const frame=driver.frame(sim.frame(),now);
  // The preview transports only the frame that is actually rendered.
  rig.update(frame,'#45a7ff');app.render();await driver.presented(frame);
- samples.push({frame:structuredClone(frame),pointer:{...point},status:driver.status('fixture'),awake,at:now});
+ const settled=driver.status('fixture')==='running' && ((now<manual && now>=pickup+2000) || (now>=resume+pickup+2000 && now<stop));
+ samples.push({frame:structuredClone(frame),pointer:{...point},status:driver.status('fixture'),awake,at:now,settled});
 }
-let maxPalmError=0;
+let maxPalmError=0,maxUsableOverflow=0;
+for(const sample of samples.filter(s=>s.settled))for(const point of [sample.frame.root,sample.pointer]){const area=display.workArea;maxUsableOverflow=Math.max(maxUsableOverflow,area.x-point.x,point.x-(area.x+area.width-1),area.y-point.y,point.y-(area.y+area.height-1));}
+if(maxUsableOverflow>0.001)throw Error("Travel outside work area "+maxUsableOverflow);
+const contact=samples[Math.round(pickup/1000*60)].pointer,pickupError=Math.hypot(contact.x-650,contact.y-630);if(pickupError>0.001)throw Error("Pickup jumped "+pickupError);
 window.renderAt=(ms)=>{
  const sample=samples[Math.min(frames,Math.floor(ms/1000*60))];rig.update(sample.frame,'#45a7ff');cursor.position.set(sample.pointer.x,sample.pointer.y);const labels={approaching:'Picking up the pointer',running:'Moving together',paused:'Paused while you use the mouse',inactive:'Stopped'};label.text=title+' · '+labels[sample.status]+(sample.awake?' · Display stays awake':'');app.render();
  if(sample.status==='running' && definition.pointer){
@@ -61,7 +67,7 @@ window.renderAt=(ms)=>{
  }
 };
 for(let i=0;i<=frames;i++)window.renderAt(i*1000/60);
-window.previewEvidence={frames:samples.length,warps,maxPalmError,awake,hand:definition.pointer?.hand,approachMs:definition.approachMs,idleMs:definition.pointer?.idleMs,timeline,end,transport:'fake; no native helper'};
+window.previewEvidence={frames:samples.length,warps,maxPalmError,maxUsableOverflow,pickupError,workArea:display.workArea,settledFrames:samples.filter(s=>s.settled).length,awake,hand:definition.pointer?.hand,approachMs:definition.approachMs,idleMs:definition.pointer?.idleMs,timeline,end,transport:'fake; no native helper'};
 window.renderAt(0);window.previewReady=true;
 `;
 const compiled = await build({
