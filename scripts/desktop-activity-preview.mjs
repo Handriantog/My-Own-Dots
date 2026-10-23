@@ -9,13 +9,25 @@ import { chromium } from 'playwright';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const output = path.join(root, 'artifacts/desktop/activity');
 await mkdir(output, { recursive: true });
+const manifestPath = process.argv[2];
+const manifest = manifestPath
+  ? JSON.parse(await readFile(path.resolve(manifestPath), 'utf8'))
+  : undefined;
+const selected =
+  manifest?.activities?.find((a) => a.id === process.argv[3]) ??
+  manifest?.activities?.[0];
+if (manifest && !selected) throw Error('Manifest has no selected activity');
 const entry = `
 import { Application, Graphics, Text } from 'pixi.js';
 import { PlushRig } from './src/desktop/renderer/rig';
 import { DesktopActivityDriver } from './src/desktop/host/activity-driver';
 import { CompanionSimulation } from './src/desktop/core/simulation';
 import { buildWorld } from './src/desktop/core/world';
-import { definition } from './tests/desktop/activity-fixture';
+import { definition as fixture } from './tests/desktop/activity-fixture';
+const definition=${selected ? JSON.stringify(selected) : 'fixture'};
+const title=${JSON.stringify(manifest?.name ?? 'Companion activity')};
+const pickup=definition.approachMs, manual=pickup+2000, release=manual+500, resume=release+(definition.pointer?.idleMs??5000), resumed=resume+pickup+500, stop=resumed+1500, end=stop+1000, frames=Math.ceil(end/1000*60);
+const timeline={approach:pickup/2,pickup:pickup+100,running:pickup+1000,paused:manual+200,resumed,released:stop+500};
 const app=new Application();await app.init({width:1000,height:650,resolution:2,autoDensity:true,backgroundAlpha:0,preference:'webgl',autoStart:false});document.body.appendChild(app.canvas);
 const display={id:'fixture',bounds:{x:0,y:0,width:1000,height:650},workArea:{x:0,y:0,width:1000,height:650},scaleFactor:2};
 const rig=await PlushRig.create('/desktop-dot');app.stage.addChild(rig.container);
@@ -23,16 +35,16 @@ const cursor=new Graphics().moveTo(0,0).lineTo(0,17).lineTo(5,12).lineTo(10,20).
 const label=new Text({text:'',style:{fontFamily:'Arial',fontSize:20,fill:0xd7e3ef}});label.position.set(24,24);app.stage.addChild(label);
 const sim=new CompanionSimulation(buildWorld(null,[display],0),1,{x:250,y:550});
 let now=0,point={x:650,y:300},revision=1,down=false,awake=0,warps=0;
-const physical=()=>({point:{...point},down,revision,sampledAtMs:now,idleMs:revision===1?10000:Math.max(0,now-3500)});
+const physical=()=>({point:{...point},down,revision,sampledAtMs:now,idleMs:revision===1?10000:Math.max(0,now-release)});
 const driver=new DesktopActivityDriver({now:()=>now,selectedDot:()=> 'fixture-dot',available:()=>true,accessibility:()=>true,display:()=>display,frame:()=>sim.frame(),reducedMotion:()=>false,handoff:f=>sim.adoptActivity(f),changed:()=>{},sleep:{start:()=>++awake,stop:()=>{awake--;}},pointer:{begin:async()=>physical(),move:async(g,target)=>{point={...target};warps++;return true;},end:()=>{}}});
 await driver.start({bindingId:'fixture',dotId:'fixture-dot'},definition);
 const samples=[];
-for(let i=0;i<=720;i++) {
+for(let i=0;i<=frames;i++) {
  now=i*1000/60;
- if(i===180){revision++;down=true;point={x:830,y:240};}
- if(i===210){revision++;down=false;}
+ if(now>=manual && revision===1){revision++;down=true;point={x:830,y:240};}
+ if(now>=release && down){revision++;down=false;}
  driver.physical(physical());
- if(i===660)driver.stop();
+ if(now>=stop && driver.active)await driver.stop();
  if(!driver.animating)sim.advance(now);
  const frame=driver.frame(sim.frame(),now);
  // The preview transports only the frame that is actually rendered.
@@ -41,15 +53,15 @@ for(let i=0;i<=720;i++) {
 }
 let maxPalmError=0;
 window.renderAt=(ms)=>{
- const sample=samples[Math.min(720,Math.floor(ms/1000*60))];rig.update(sample.frame,'#45a7ff');cursor.position.set(sample.pointer.x,sample.pointer.y);label.text=sample.status+' · '+(sample.awake?'sleep assertion active':'sleep assertion released');app.render();
- if(sample.status==='running'){
-  const part=rig.definition.layers.rightArm,arm=rig.sprites.rightArm;
+ const sample=samples[Math.min(frames,Math.floor(ms/1000*60))];rig.update(sample.frame,'#45a7ff');cursor.position.set(sample.pointer.x,sample.pointer.y);const labels={approaching:'Picking up the pointer',running:'Moving together',paused:'Paused while you use the mouse',inactive:'Stopped'};label.text=title+' · '+labels[sample.status]+(sample.awake?' · Display stays awake':'');app.render();
+ if(sample.status==='running' && definition.pointer){
+  const hand=definition.pointer.hand+'Arm',part=rig.definition.layers[hand],arm=rig.sprites[hand];
   const palm=arm.toGlobal({x:(.5-part.pivot.x)*part.frame.width,y:(1-part.pivot.y)*part.frame.height});
   const error=Math.hypot(palm.x-sample.pointer.x,palm.y-sample.pointer.y);maxPalmError=Math.max(maxPalmError,error);if(error>0.001)throw Error('Rendered palm mismatch '+error);
  }
 };
-for(let i=0;i<=720;i++)window.renderAt(i*1000/60);
-window.previewEvidence={frames:samples.length,warps,maxPalmError,awake,transport:'fake; no native helper'};
+for(let i=0;i<=frames;i++)window.renderAt(i*1000/60);
+window.previewEvidence={frames:samples.length,warps,maxPalmError,awake,hand:definition.pointer?.hand,approachMs:definition.approachMs,idleMs:definition.pointer?.idleMs,timeline,end,transport:'fake; no native helper'};
 window.renderAt(0);window.previewReady=true;
 `;
 const compiled = await build({
@@ -111,19 +123,13 @@ try {
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto('http://127.0.0.1:' + server.address().port);
   await page.waitForFunction(() => window.previewReady, { timeout: 30000 });
-  for (const [name, ms] of [
-    ['approach', 250],
-    ['pickup', 500],
-    ['running', 1500],
-    ['paused', 3200],
-    ['resumed', 9200],
-    ['released', 11500],
-  ]) {
+  const timeline = await page.evaluate(() => window.previewEvidence.timeline);
+  for (const [name, ms] of Object.entries(timeline)) {
     await page.evaluate((ms) => window.renderAt(ms), ms);
     await page.screenshot({ path: path.join(output, name + '.png') });
   }
   await page.evaluate(async () => {
-    for (let ms = 0; ms <= 12000; ms += 100) {
+    for (let ms = 0; ms <= window.previewEvidence.end; ms += 100) {
       window.renderAt(ms);
       await new Promise((resolve) => setTimeout(resolve, 33));
     }

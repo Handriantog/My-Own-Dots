@@ -1,5 +1,6 @@
 import {
   activityDefinitionSchema,
+  ActivityDriverFailure,
   type ActivityDefinition,
   type ActivityDriver,
   type ActivityStatus,
@@ -94,9 +95,9 @@ export class DesktopActivityDriver implements ActivityDriver {
   ): Promise<void> {
     const definition = activityDefinitionSchema.parse(input);
     if (owner.dotId !== this.env.selectedDot() || !this.env.available())
-      throw Error('The selected desktop Dot is unavailable.');
+      throw new ActivityDriverFailure('host_unavailable');
     if (definition.pointer && !this.env.accessibility())
-      throw Error('Accessibility setup needed to control the pointer.');
+      throw new ActivityDriverFailure('setup_needed');
     const retirement = this.stop();
     const from = this.env.frame();
     const session: Session = {

@@ -78,3 +78,15 @@ export interface ActivityDriver {
   stop(bindingId?: string): void | Promise<void>;
   status(bindingId: string): ActivityStatus;
 }
+
+/** Fixed host-driver refusals; codes survive independently bundled host modules. */
+export class ActivityDriverFailure extends Error {
+  constructor(readonly code: 'setup_needed' | 'host_unavailable') {
+    super(
+      code === 'setup_needed'
+        ? 'Accessibility setup needed to control the pointer.'
+        : 'The selected desktop Dot is unavailable.',
+    );
+    this.name = 'ActivityDriverFailure';
+  }
+}

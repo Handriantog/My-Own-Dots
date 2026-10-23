@@ -67,7 +67,9 @@ Use short worker calls with the normal [protocol](protocol.md) envelope:
 
 Use `status` or `stop` for the other actions. Replies contain only `ok`, `kind`
 and one status: `inactive`, `approaching`, `running` or `paused`. Failures use the
-standard fixed error envelope. Workers cannot supply cursor coordinates, inline
+standard fixed error envelope. Missing Accessibility returns `setup_needed`; a
+hidden, unavailable or unselected desktop Dot returns `host_unavailable`, including
+when the native driver and Ability host are separately bundled. Workers cannot supply cursor coordinates, inline
 code or alternate animation definitions. Keep the successful tool output within
 its declared schema; invalid output rolls back a new activation.
 

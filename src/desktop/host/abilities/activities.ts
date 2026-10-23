@@ -94,12 +94,26 @@ export class AbilityActivities {
         };
         this.lease = lease;
         // Install ownership before invoking a possibly asynchronous driver.
-        lease.starting = Promise.resolve().then(() =>
-          driver.start(
-            { bindingId: context.bindingId, dotId: context.dotId },
-            definition,
-          ),
-        );
+        lease.starting = Promise.resolve().then(async () => {
+          try {
+            await driver.start(
+              { bindingId: context.bindingId, dotId: context.dotId },
+              definition,
+            );
+          } catch (error) {
+            // Only this trusted host-driver boundary accepts structural codes.
+            // main.cjs and ability-runtime.cjs have distinct class identities.
+            if (
+              error instanceof Error &&
+              error.name === 'ActivityDriverFailure' &&
+              'code' in error &&
+              (error.code === 'setup_needed' ||
+                error.code === 'host_unavailable')
+            )
+              throw new AbilityFailure(error.code);
+            throw error;
+          }
+        });
         signal.addEventListener('abort', abort, { once: true });
         try {
           await lease.starting;

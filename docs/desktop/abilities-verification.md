@@ -801,3 +801,76 @@ production/desktop builds and speech protocol checks (31 + 17 tests) pass. macOS
 Ability acceptance passes 431 integration tests plus both 14-probe sandbox profiles.
 Packaged smoke, installed-app inspection and current-commit remote results are
 recorded in PR #12. The prior real microphone-call acceptance remains separate.
+
+## Companion activities and Mouse Mover (October 24, 2026)
+
+The host executes bounded package-defined body poses and paths, optionally attaching
+the pointer to a declared hand and holding a scoped system/display sleep blocker.
+The separate collection owns Mouse Mover's worker, carrying pose, path, five-second
+idle choice and safe vector icons. The host contains no Mouse Mover ID dispatch.
+Installation and enablement do not start activity; an interactive owner text/voice
+turn is required. Provisional activation, committed ownership, native generation
+retirement, manual-input yield and lifecycle revocation have fixture coverage.
+
+The production integration uses a real sealed collection archive, built public
+`ability-runtime.cjs`, confined JavaScript worker, SQLite service and HTTP desktop
+bridges. Native pointer and sleep effects are fake. It verifies disabled install,
+non-starting enablement, voice tool admission, text start/status/stop, paused private
+status, consecutive stop, background denial and master-revoke cleanup. A regression
+first reproduced `invalid_response` for missing Accessibility and an unavailable or
+unselected Dot. Fixed typed driver codes are normalized only at the trusted driver
+boundary, so independently bundled classes preserve `setup_needed` and
+`host_unavailable` without relaxing worker-error validation.
+
+All three final archives from clean collection commit
+`d2b874679978456e61ce2304a89d277533e0bbad` pass production extraction/sealing. Exact
+descriptor/archive hashes and frozen source provenance are recorded in
+[the fixture provenance](../../tests/fixtures/abilities/mouse-mover/PROVENANCE.md).
+A generic second animation fixture also covers a different path and left hand.
+
+The actual PlushRig preview uses Mouse Mover's 1,600 ms approach, 5,000 ms idle
+threshold, authored pose and declared right hand. It recorded 823 frames and 240
+fake pointer moves, with maximum rendered-palm error `1.2710574864626038e-13` logical
+pixels, no browser errors and no retained sleep blocker. Pickup is captured after
+1,700 ms and completed resume after 11,200 ms. Production AbilityManager, Details,
+PermissionReview and theme CSS were inspected in 56 headless Chromium captures at
+1,120px/360px in both themes using exact package manifests, catalog and packaged
+READMEs with a synthetic bridge. Installed/catalog icons, long permissions, README
+and review footers are visible without horizontal overflow. Controller independently
+inspected the package rig and representative UI captures. The resulting README
+polish moves authoring details below the owner instructions; setup explains desktop
+selection and macOS Accessibility.
+
+Frozen local implementation validation: **2,352 tests pass, one existing
+certificate-identity test skips**, across 254 files, using only the dedicated
+`dots_mouse_mover_test` PostgreSQL database. Format, lint, TypeScript, production
+build and both speech protocol suites (31 + 17) pass. macOS acceptance passes
+580 integration tests and both 14-probe sandbox profiles. After documentation-only
+package polish, all seven production installer/worker tests pass again against the
+final delivered bytes. The collection passes 164 worker/protocol/packaging tests,
+three icon-validation tests, all three manifest checks and repository validation;
+38 affected Mouse Mover tests also pass after README polish. Vite reports its
+existing bundle-size warning.
+
+Reproduce visual fixtures with `node scripts/abilities-ui-preview.mjs` and
+`node scripts/desktop-activity-preview.mjs <path-to-ability.json> [activity-id]`.
+Local captures and video are in `artifacts/desktop/abilities/` and
+`artifacts/desktop/activity/`; command logs are in `artifacts/verification/task5/`.
+The preview timeline follows the selected package's approach and idle durations.
+
+No owner workspace, live cursor, account, microphone or audio devices were used.
+Physical pointer alignment, OS consent attribution, real multi-monitor behavior,
+hardware sleep/monitor behavior and final-app owner acceptance remain unverified.
+No install into the owner's app, public release, merge or remote CI claim is made
+by these local checks.
+
+`DOTS_CODESIGN_IDENTITY=- npm run desktop:package` and the relocated-app
+`npm run abilities:package:smoke` pass. Native, JavaScript and Python confined
+workers and the offline Spotify helper validate against the signed app; strict
+deep signature verification passes. The package uses ad-hoc signing without
+Keychain access. The packager warns about a missing optional `.icon` format;
+the generated `.icns` is included unchanged. Developer ID/notarization remain
+release work. The final ZIP SHA-256 is
+`db1d5082d718cab1d81912b519da20fdac61da2d01963428f5c9bcebe2980bfa`.
+The app and ZIP are under this worktree's `release/`; they were not opened in
+the owner's workspace.
