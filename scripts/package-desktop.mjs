@@ -35,6 +35,8 @@ const bundles = await packager({
     LSMinimumSystemVersion: '14.0',
     NSHighResolutionCapable: true,
     NSHumanReadableCopyright: 'My Own Dots',
+    NSAppleEventsUsageDescription:
+      'Use approved Ability commands to control playback in Spotify.',
     NSMicrophoneUsageDescription:
       'Talk with your selected Dot using local speech recognition. The microphone is active only during a call you start.',
   },

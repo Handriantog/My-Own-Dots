@@ -102,6 +102,16 @@ claim of live provider verification or release readiness.
 
 48. give the encrypted multi-stage portability test the existing archive-suite30s budget — it performs four real scrypt/encryption/decryption operations plus SQLite capture/restore on a shared Linux runner, where default5s expired; no runtime deadline or data/privacy assertion changes — cost if wrong: a real performance regression could take longer to fail; exact-head CI must pass and functional assertions remain intact.
 
+49. keep Spotify Local separate from the Web API worker and use fixed host-owned Apple Events plus Spotify-only Accessibility commands — local control needs no developer app or OAuth; no provider policy exemption is claimed — cost if wrong: Spotify UI changes fail closed and distribution-policy compatibility remains unresolved.
+
+50. seal chooser-selected local descriptor and archive bytes before review, then reuse the normal reviewed installer — a local path is not execution consent — cost if wrong: expired snapshots require selecting the package again.
+
+51. require every tool in any Spotify app-control package to be owner-only, at manifest validation and runtime — final review reproduced metadata forwarding through a second model-visible tool; private state persists between invocations — cost if wrong: even playback-only packages cannot expose custom model-visible values. Explicit HTTPS grants remain a separate disclosure boundary.
+
+52. keep live coverage specific to observed controls — isolated Electron testing verified search, visible playlists, supplied-track playback/pause, save, private creation and exact-track addition; it does not verify the final app's OS attribution, microphone flow, or playlist-category search layout — cost if wrong: those paths can require follow-up before public release.
+
 ## Deferred minors
 
-None identified by the independent whole-change review.
+None. The Spotify Local review's README table break was fixed. Its packaged-helper
+validation recommendation is included in the relocated-app smoke check; actual
+playlist-category search layout remains an explicitly unverified acceptance item.

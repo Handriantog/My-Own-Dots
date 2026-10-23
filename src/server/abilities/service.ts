@@ -1,6 +1,7 @@
 import {
   AbilityFailure,
   invocationContextSchema,
+  reviewSchema,
 } from '../../shared/abilities/bridge.js';
 import { validateValue } from '../../shared/abilities/manifest.js';
 import {
@@ -80,6 +81,29 @@ export class AbilityService {
       url,
       AbortSignal.timeout(30_000),
     );
+    return this.rememberReview(dotId, review);
+  }
+  async reviewLocal(dotId: string, input: unknown, sessionId: string) {
+    if (this.session().id !== sessionId)
+      throw new AbilityFailure('permission_denied');
+    if (!(await this.workspace.dot(dotId)))
+      throw new AbilityFailure('permission_denied');
+    const review = reviewSchema.parse(input);
+    if (
+      !review.localSource ||
+      review.descriptorUrl !== 'local-ability:' + review.id ||
+      review.archiveUrl !== review.descriptorUrl ||
+      review.expiresAt <= Date.now() ||
+      review.expiresAt > Date.now() + 600_000
+    )
+      throw new AbilityFailure('permission_denied');
+    return this.rememberReview(dotId, review);
+  }
+  private async rememberReview(dotId: string, review: InstallReview) {
+    this.session();
+    for (const [id, entry] of this.reviews)
+      if (entry.review.expiresAt <= Date.now()) this.reviews.delete(id);
+    if (this.reviews.size >= 128) throw new AbilityFailure('busy');
     const previous = (await this.workspace.abilities.list(dotId)).find(
       (binding) =>
         binding.manifest.id === review.descriptor.manifest.id &&

@@ -61,16 +61,16 @@ Ask a Dot to show a draft before saving it. A CopilotKit human-in-the-loop card 
 ### Abilities
 
 Teach an Ability to one Dot from **Dot settings → Abilities** using its public
-GitHub release descriptor link. Review the publisher, sealed package and actual
+GitHub release descriptor link or **Choose local Ability…**. Review the publisher, sealed package and actual
 permissions, then choose **Teach**. Approved actions run without repeated prompts;
 each Dot keeps separate access, settings and private state. **Disable** stops its
 workers, and quitting the desktop stops all Ability-owned processes.
 
 The first host supports confined JavaScript, optional local Python and native
-arm64 executables, with scoped HTTPS, browser OAuth and declared helpers. Desktop
-manipulation and printing capabilities are future work. Current execution evidence
-is macOS 26 Apple Silicon; no Spotify release or live account verification is
-claimed here. See [authoring](docs/abilities/authoring.md) and
+arm64 executables, with scoped HTTPS, browser OAuth, declared helpers, and
+[Spotify-only local app control](docs/abilities/spotify-local.md). General desktop
+manipulation and printing are future work. Current execution evidence is macOS 26
+Apple Silicon; no Ability release has been published. See [authoring](docs/abilities/authoring.md) and
 [verification](docs/desktop/abilities-verification.md).
 
 ### Connections

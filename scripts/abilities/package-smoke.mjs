@@ -9,7 +9,7 @@ import {
   rm,
 } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { execFile } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { promisify, parseArgs } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -62,6 +62,33 @@ try {
     '--strict',
     app,
   ]);
+  const usage = await promisify(execFile)('/usr/bin/plutil', [
+    '-extract',
+    'NSAppleEventsUsageDescription',
+    'raw',
+    '-o',
+    '-',
+    join(app, 'Contents/Info.plist'),
+  ]);
+  assert.match(usage.stdout, /Spotify/);
+  const spotifyHelper = join(bundle, 'native/spotify-control');
+  for (const [command, valid] of [
+    [{ action: 'pause' }, true],
+    [{ action: 'play', script: 'arbitrary' }, false],
+  ]) {
+    // Offline validation builds an event descriptor but never addresses a real app.
+    const result = spawnSync(spotifyHelper, ['--validate'], {
+      input: JSON.stringify(command),
+      encoding: 'utf8',
+      cwd,
+      env: { PATH: '/usr/bin:/bin' },
+      timeout: 5000,
+    });
+    assert.equal(result.status, 0);
+    const reply = JSON.parse(result.stdout);
+    if (valid) assert.equal(reply.valid, true);
+    else assert.deepEqual(reply, { ok: false, code: 'permission_denied' });
+  }
   const sealed = await promisify(execFile)(python, [
     '-I',
     '-S',
@@ -102,6 +129,7 @@ try {
       copiedApp: true,
       transport: 'offline-fixture',
       signing: 'verified',
+      spotifyHelper: 'offline-validated',
     }),
   );
 } finally {

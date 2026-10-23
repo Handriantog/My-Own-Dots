@@ -103,6 +103,18 @@ export class WorkspaceWindow {
       bundle,
       storage: safeStorage,
       open: (url) => shell.openExternal(url),
+      chooseAbility: async () => {
+        const window = this.window;
+        if (!window || this.disposed || !window.isVisible()) return;
+        const result = await dialog.showOpenDialog(window, {
+          title: 'Choose an Ability descriptor',
+          filters: [{ name: 'Ability descriptor', extensions: ['json'] }],
+          properties: ['openFile'],
+        });
+        return result.canceled || this.disposed
+          ? undefined
+          : result.filePaths[0];
+      },
       choosePython: async () => {
         const window = this.window;
         if (!window || this.disposed || !window.isVisible()) return;

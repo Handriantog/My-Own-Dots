@@ -434,3 +434,74 @@ commit push/PR checks must still pass before draft handoff.
 All implementation rulings and costs are retained in [the decision record](abilities-decisions.md).
 Visual/keyboard inspection, live account acceptance, provider branding, signed
 release publication and broader platform support remain explicit gates.
+
+## Spotify Local (October 23, development branch)
+
+A separate `spotify-local` package now uses an enumerated Spotify-only host broker,
+fixed Apple Events and app-scoped Accessibility sessions. No OAuth/API account
+setup is used. Local descriptor selection uses a bounded snapshot and the normal
+sealed installer/permission review. See [setup and limits](../abilities/spotify-local.md).
+The existing Spotify Web API worker remains separate and text-only.
+
+The final full host suite passed **241 files / 2,072 tests**, with the existing one
+certificate-identity skip, using a dedicated disposable PostgreSQL database on
+port 52880 (`dots_test`), never the owner's application database. The filtered-menu
+regression passes its 16-test suite. Latest macOS acceptance passes
+**14 native confinement tests in each of two profiles and 348 integration tests
+in 26 files**. This includes the real sealed Spotify Local worker with synthetic
+app transport, voice admission, private two-step selection, one-use references,
+Disable cancellation and uncertain-delivery behavior. Speech workers pass **31
+and 17 tests**. Format, lint, typecheck and production build pass. Final desktop
+packaging and the relocated, ad-hoc-signed app smoke pass for JavaScript, Python
+and native workers. The smoke also checks the Automation usage description and
+offline Spotify helper validation without accessing Spotify. Exact-commit push
+and pull-request CI links are recorded in the draft PR after they finish.
+
+Live testing used an isolated Electron test harness loading the production
+transport and compiled helper, with explicitly authorized temporary macOS access.
+Verified against Spotify: track search including changing the query, visible
+playlist listing, supplied-track playback, pause, saving the current song,
+private playlist creation and adding the selected recording. This caught two
+regressions: AXStaticText stored its text in AXValue, and filtering replaced a
+playlist-menu handle before dispatch. Both have failing-then-passing regressions;
+the corrected workflows passed live. Exact focus is checked after a bounded wait
+for Chromium's asynchronous update. No mutation is automatically replayed.
+
+The disposable private `Dot Ability Test` playlist remains with one selected song.
+Liked Songs was restored and playback paused. The test app's Accessibility and
+Spotify Automation grants were revoked and the app quit. The app's temporary
+ad-hoc signature needed an updated Accessibility entry after rebuild; first-run
+permission prompting is not claimed verified. The final My Own Dots package has
+not run these live account actions through the conversational UI.
+
+Chrome at 760px and 360px verified actual React/CSS local source review, declared
+OS access, wrapping filesystem paths, and the Teach transition with a synthetic
+bridge. Earlier result-button wrapping and Forget-checkbox spacing issues were
+corrected and rechecked. This supersedes the earlier unavailable-browser notes
+for those component views, but does not establish live native chooser acceptance.
+
+Not live-verified: skip/previous, volume, seek, shuffle/repeat, album/playlist
+playback, playlist search, microphone voice invocation, all Spotify layouts/tiers,
+and other platforms/locales. No release or merge has been performed. The host's
+text/voice admission for local control is technical behavior, not a policy
+exemption claim. [Apple's Automation permission API](https://developer.apple.com/documentation/coreservices/3025784-aedeterminepermissiontoautomatet)
+and [Apple Events entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.automation.apple-events)
+were consulted during permission diagnostics; no OS protections were bypassed.
+
+The Spotify Local final review reproduced a custom package forwarding private
+Spotify results through a model-visible tool. The fix requires every tool in an
+app-control package to be owner-only, both during manifest validation and runtime
+authorization, including previously bound packages. Three regressions failed
+before the fix and pass afterward; checking the whole package prevents another
+tool from forwarding retained private state. Explicit HTTPS grants remain a
+separate network-disclosure boundary. The review's README table issue is fixed.
+
+The sealed Spotify Local fixture comes from clean collection commit
+`3449c6e4399cde1fd3b2ff43324b4ee81d826755`, archive SHA-256
+`390ee4eb43490d19fc0daefea56b803245fb1a270620452afdaf538391db20a3`.
+
+One final acceptance run was interrupted by idle sleep: macOS power logs show
+704 seconds of sleep from 11:54:55 to 12:06:39, matching four unrelated test
+timeouts. The unchanged suite passed in 11.88 seconds after its native probes
+when rerun under a process-bound idle-sleep assertion. No test/runtime deadlines
+or assertions were relaxed.

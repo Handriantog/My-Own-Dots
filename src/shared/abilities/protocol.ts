@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { identifier, isHttpsUrl, type JsonValue } from './manifest.js';
 import { abilityLimits, assertBoundedJson } from './limits.js';
+import { appCommandSchema } from './app-control.js';
 
 const requestId = z
   .string()
@@ -82,6 +83,11 @@ export const ownerResultSchema = z.discriminatedUnion('kind', [
 export type OwnerResult = z.infer<typeof ownerResultSchema>;
 export const capabilitySchema = z.discriminatedUnion('kind', [
   z.strictObject({
+    kind: z.literal('app-control'),
+    ruleId: identifier,
+    command: appCommandSchema,
+  }),
+  z.strictObject({
     kind: z.literal('https'),
     ruleId: identifier,
     pathValues: z.record(
@@ -104,6 +110,12 @@ export const capabilitySchema = z.discriminatedUnion('kind', [
 ]);
 export type CapabilityRequest = z.infer<typeof capabilitySchema>;
 export const capabilityReplySchema = z.union([
+  z.strictObject({
+    ok: z.literal(true),
+    kind: z.literal('app-control'),
+    status: z.enum(['success', 'uncertain']),
+    result: ownerResultSchema.optional(),
+  }),
   z.strictObject({ ok: z.literal(false), code: errorCodeSchema }),
   z.strictObject({
     ok: z.literal(true),

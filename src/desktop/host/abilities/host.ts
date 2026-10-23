@@ -12,7 +12,10 @@ import {
   abilityLimits,
   assertBoundedJson,
 } from '../../../shared/abilities/limits.js';
-import { validateValue } from '../../../shared/abilities/manifest.js';
+import {
+  validateValue,
+  validAppControlVisibility,
+} from '../../../shared/abilities/manifest.js';
 import { canonicalJson } from '../../../shared/abilities/permissions.js';
 import {
   capabilitySchema,
@@ -36,6 +39,7 @@ import {
   requestAbilityHttps,
   type AbilityHttpsTransport,
 } from './http.js';
+import { AbilityAppControl, type AppControlTransport } from './app-control.js';
 import { AbilityInstaller } from './installer.js';
 import { AbilityOAuth } from './oauth.js';
 import { DirectoryAnchor } from './package.js';
@@ -58,6 +62,7 @@ type Options = {
   binding(id: string): Promise<Binding>;
   authorize(context: InvocationContext): Promise<Binding>;
   open(url: string): Promise<void>;
+  appControl?: AppControlTransport;
   http?: Pick<AbilityHttp, 'request'>;
   /** In-process acceptance transport; never read from a manifest, IPC or settings. */
   transport?: AbilityHttpsTransport;
@@ -65,6 +70,7 @@ type Options = {
 };
 export class AbilityHost implements DesktopAbilityHandlers {
   readonly accounts: AbilityOAuth;
+  private readonly appControl: AbilityAppControl;
   private readonly results = new OwnerResultStore();
   private readonly supervisor: AbilitySupervisor;
   private readonly installer: Pick<AbilityInstaller, 'prepare'>;
@@ -78,6 +84,12 @@ export class AbilityHost implements DesktopAbilityHandlers {
   private maintenance = 0;
   private stopping?: Promise<void>;
   constructor(private readonly options: Options) {
+    this.appControl = new AbilityAppControl({
+      authorize: (context) => this.authorize(context),
+      dispatch:
+        options.appControl ??
+        (async () => ({ ok: false, code: 'unsupported_platform' })),
+    });
     this.installer =
       options.installer ?? new AbilityInstaller(options.packageRoot);
     const credentials = new AbilityCredentials({
@@ -160,6 +172,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
       context.workspaceId === this.options.workspaceId &&
       context.sessionId === this.options.session() &&
       binding.enabled &&
+      validAppControlVisibility(binding.manifest) &&
       !binding.restored &&
       binding.id === context.bindingId &&
       binding.dotId === context.dotId &&
@@ -196,6 +209,8 @@ export class AbilityHost implements DesktopAbilityHandlers {
       const request = capabilitySchema.parse(input);
       const binding = await this.authorize(context);
       signal.throwIfAborted();
+      if (request.kind === 'app-control')
+        return await this.appControl.request(context, request, signal);
       if (request.kind === 'https')
         return await this.http.request(context, request, signal);
       if (request.kind === 'account') {

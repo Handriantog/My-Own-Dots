@@ -889,10 +889,39 @@
             },
             "kind": {
               "type": "string",
+              "const": "app-control"
+            },
+            "application": {
+              "type": "string",
+              "const": "com.spotify.client"
+            },
+            "actions": {
+              "minItems": 1,
+              "maxItems": 14,
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/__schema79"
+              }
+            }
+          },
+          "required": ["id", "purpose", "kind", "application", "actions"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/__schema2"
+            },
+            "purpose": {
+              "$ref": "#/$defs/__schema4"
+            },
+            "kind": {
+              "type": "string",
               "const": "https"
             },
             "origin": {
-              "$ref": "#/$defs/__schema79"
+              "$ref": "#/$defs/__schema80"
             },
             "method": {
               "type": "string",
@@ -903,7 +932,7 @@
               "maxItems": 16,
               "type": "array",
               "items": {
-                "$ref": "#/$defs/__schema81"
+                "$ref": "#/$defs/__schema82"
               }
             },
             "pathValues": {
@@ -945,13 +974,13 @@
               "const": "oauth"
             },
             "authorizationUrl": {
-              "$ref": "#/$defs/__schema82"
+              "$ref": "#/$defs/__schema83"
             },
             "tokenUrl": {
-              "$ref": "#/$defs/__schema82"
+              "$ref": "#/$defs/__schema83"
             },
             "resourceOrigin": {
-              "$ref": "#/$defs/__schema79"
+              "$ref": "#/$defs/__schema80"
             },
             "clientIdSetting": {
               "$ref": "#/$defs/__schema44"
@@ -961,7 +990,7 @@
               "maxItems": 50,
               "type": "array",
               "items": {
-                "$ref": "#/$defs/__schema83"
+                "$ref": "#/$defs/__schema84"
               }
             }
           },
@@ -1000,13 +1029,32 @@
       ]
     },
     "__schema79": {
-      "$ref": "#/$defs/__schema80"
+      "type": "string",
+      "enum": [
+        "play",
+        "pause",
+        "next",
+        "previous",
+        "volume",
+        "seek",
+        "shuffle",
+        "repeat",
+        "play_uri",
+        "search",
+        "playlists",
+        "save_current",
+        "create_playlist",
+        "add_to_playlist"
+      ]
     },
     "__schema80": {
+      "$ref": "#/$defs/__schema81"
+    },
+    "__schema81": {
       "type": "string",
       "maxLength": 2048
     },
-    "__schema81": {
+    "__schema82": {
       "anyOf": [
         {
           "type": "string",
@@ -1026,10 +1074,10 @@
         }
       ]
     },
-    "__schema82": {
-      "$ref": "#/$defs/__schema80"
-    },
     "__schema83": {
+      "$ref": "#/$defs/__schema81"
+    },
+    "__schema84": {
       "type": "string",
       "minLength": 1,
       "maxLength": 100,

@@ -43,6 +43,23 @@ export const ownerViewSchema = z.discriminatedUnion('kind', [
 ]);
 export type OwnerView = z.infer<typeof ownerViewSchema>;
 const ok = z.strictObject({ ok: z.literal(true) });
+const reviewOutput = reviewSchema.extend({
+  storage: z
+    .strictObject({
+      packagePath: z.string().max(4096),
+      stateParent: z.string().max(4096),
+    })
+    .optional(),
+  changes: z
+    .array(
+      z.strictObject({
+        key: z.string().max(256),
+        kind: z.enum(['added', 'changed', 'removed']),
+        requiresConsent: z.boolean(),
+      }),
+    )
+    .max(1000),
+});
 export const desktopAbilityMethods = {
   list: {
     input: z.strictObject(dot),
@@ -59,29 +76,14 @@ export const desktopAbilityMethods = {
         .optional(),
     }),
   },
+  reviewLocal: { input: z.strictObject(dot), output: reviewOutput.nullable() },
   choosePython: {
     input: z.strictObject(dot),
     output: z.strictObject({ selected: z.boolean() }),
   },
   review: {
     input: z.strictObject({ ...dot, url: z.string().min(1).max(2048) }),
-    output: reviewSchema.extend({
-      storage: z
-        .strictObject({
-          packagePath: z.string().max(4096),
-          stateParent: z.string().max(4096),
-        })
-        .optional(),
-      changes: z
-        .array(
-          z.strictObject({
-            key: z.string().max(256),
-            kind: z.enum(['added', 'changed', 'removed']),
-            requiresConsent: z.boolean(),
-          }),
-        )
-        .max(1000),
-    }),
+    output: reviewOutput,
   },
   teach: {
     input: z.strictObject({

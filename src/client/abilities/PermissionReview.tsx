@@ -6,9 +6,26 @@ import type {
 } from '../../shared/abilities/types';
 import { validateValue } from '../../shared/abilities/manifest';
 import './abilities.css';
+import {
+  appActionLabels,
+  uiAppActions,
+} from '../../shared/abilities/app-control';
 export type AbilityReview = DesktopAbilityOutput<'review'>;
 export function permissionSummary(permission: AbilityPermission): string {
   switch (permission.kind) {
+    case 'app-control': {
+      const access = [
+        permission.actions.some((action) => !uiAppActions.has(action))
+          ? 'Automation'
+          : '',
+        permission.actions.some((action) => uiAppActions.has(action))
+          ? 'Accessibility'
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' and ');
+      return `Spotify only: ${permission.actions.map((action) => appActionLabels[action]).join(', ')}. macOS ${access} access required.`;
+    }
     case 'https':
       return `${permission.method} ${permission.origin}/${permission.path.map((part) => (typeof part === 'string' ? part : `{${part.param}}`)).join('/')}`;
     case 'oauth':
@@ -93,6 +110,13 @@ export function PermissionReview({
         </div>
       </div>
       <p>{manifest.description}</p>
+      {review.localSource && (
+        <p>
+          Local package: <code>{review.localSource}</code>
+          <br />
+          Publisher and source below are declared by this file.
+        </p>
+      )}
       <p className="ability-source">
         <a
           href={`https://github.com/${manifest.source.owner}/${manifest.source.repository}/commit/${review.descriptor.sourceCommit}`}

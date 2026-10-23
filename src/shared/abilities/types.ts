@@ -22,6 +22,7 @@ export interface InstallReview {
   id: string;
   descriptor: ReleaseDescriptor;
   descriptorUrl: string;
+  localSource?: string;
   descriptorSha256: string;
   archiveUrl: string;
   expiresAt: number;

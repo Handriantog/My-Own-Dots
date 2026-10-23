@@ -141,6 +141,7 @@
   border-top: 1px solid var(--border, #dbe2e8);
 }
 .ability-result li > div {
+  min-width: 0;
   display: grid;
   gap: 4px;
 }
@@ -200,6 +201,11 @@
   align-items: center;
   gap: 0.5rem;
 }
+.ability-result li > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.ability-forget input[type='checkbox'],
 .ability-notice input[type='checkbox'] {
   width: auto;
   flex: 0 0 auto;

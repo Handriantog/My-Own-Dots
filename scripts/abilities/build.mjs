@@ -20,6 +20,25 @@ export async function buildAbilityRuntime(root, out) {
     '-o',
     join(out, 'native/ability-launcher'),
   ]);
+  await promisify(execFile)('/usr/bin/xcrun', [
+    'clang',
+    '-Wall',
+    '-Wextra',
+    '-Werror',
+    '-fobjc-arc',
+    '-fblocks',
+    '-O2',
+    '-mmacosx-version-min=14.0',
+    '-framework',
+    'Foundation',
+    '-framework',
+    'AppKit',
+    '-framework',
+    'Carbon',
+    join(root, 'native/spotify-control/main.m'),
+    '-o',
+    join(out, 'native/spotify-control'),
+  ]);
   await build({
     entryPoints: [join(root, 'src/desktop/host/abilities/distribution.ts')],
     outfile: join(out, 'ability-runtime.cjs'),

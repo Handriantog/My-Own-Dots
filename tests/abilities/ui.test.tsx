@@ -3,7 +3,10 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AbilitiesSection } from '../../src/client/abilities/AbilitiesSection.tsx';
-import { PermissionReview } from '../../src/client/abilities/PermissionReview.tsx';
+import {
+  PermissionReview,
+  permissionSummary,
+} from '../../src/client/abilities/PermissionReview.tsx';
 import {
   AbilityResultCard,
   OwnerResultView,
@@ -368,4 +371,16 @@ it('shows immutable package notices and requires explicit agreement before Teach
     );
   });
   expect(button('Teach').props.disabled).toBe(true);
+});
+
+it('names both macOS permissions when one rule mixes playback and UI actions', () => {
+  expect(
+    permissionSummary({
+      id: 'spotify',
+      kind: 'app-control',
+      purpose: 'Control Spotify',
+      application: 'com.spotify.client',
+      actions: ['pause', 'search'],
+    }),
+  ).toContain('Automation and Accessibility');
 });

@@ -1,6 +1,6 @@
 import { Hono, type MiddlewareHandler } from 'hono';
 import { z } from 'zod';
-import { failureCode } from '../../shared/abilities/bridge.js';
+import { failureCode, reviewSchema } from '../../shared/abilities/bridge.js';
 import {
   assertBoundedJson,
   abilityLimits,
@@ -47,6 +47,18 @@ export function abilityRoutes(
       .strictObject({ url: z.string().min(1).max(2048) })
       .parse(await c.req.json());
     return c.json(await service.review(c.req.param('dotId'), body.url));
+  });
+  guarded.post('/dots/:dotId/abilities/review-local', async (c) => {
+    const body = z
+      .strictObject({ review: reviewSchema, sessionId: z.uuid() })
+      .parse(await c.req.json());
+    return c.json(
+      await service.reviewLocal(
+        c.req.param('dotId'),
+        body.review,
+        body.sessionId,
+      ),
+    );
   });
   guarded.post('/dots/:dotId/abilities/teach', async (c) => {
     const body = z

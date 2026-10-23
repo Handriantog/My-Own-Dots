@@ -268,6 +268,12 @@ export function AbilitiesSection({
     );
     if (value) setReview(value);
   };
+  const reviewLocal = async () => {
+    const value = await run('review-local', async () =>
+      unwrap(await window.dotAbilities?.reviewLocal({ dotId })),
+    );
+    if (value) setReview(value);
+  };
   const teach = async (
     settings: Record<string, JsonValue>,
     acceptedNotices?: string[],
@@ -336,6 +342,13 @@ export function AbilitiesSection({
           {busy === 'review' ? 'Reviewing…' : 'Review'}
         </button>
       </div>
+      <button
+        type="button"
+        disabled={!state?.available || !!busy}
+        onClick={reviewLocal}
+      >
+        Choose local Ability…
+      </button>
       {review && (
         <PermissionReview
           key={review.id}

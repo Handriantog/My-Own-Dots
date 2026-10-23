@@ -196,3 +196,33 @@ it('highlights changed notices and expanded invocation channels in update review
     ]),
   );
 });
+
+it('local packages require the active desktop session and normal Teach consent', async () => {
+  const f = fixture();
+  const original = await f.review();
+  const id = randomUUID();
+  const local = {
+    ...original,
+    id,
+    descriptorUrl: 'local-ability:' + id,
+    archiveUrl: 'local-ability:' + id,
+    localSource: '/chosen/fixture.json',
+  };
+  // Strip the UI-only diff before sending the bridge contract.
+  const { changes, ...review } = local;
+  expect(changes).toBeDefined();
+  await expect(
+    f.service.reviewLocal(f.dot.id, review, 'other'),
+  ).rejects.toMatchObject({ code: 'permission_denied' });
+  await expect(
+    f.service.reviewLocal('wrong-dot', review, 'session'),
+  ).rejects.toMatchObject({ code: 'permission_denied' });
+  const prepared = await f.service.reviewLocal(f.dot.id, review, 'session');
+  expect(f.install).not.toHaveBeenCalled();
+  await expect(
+    f.service.teach(f.dot.id, prepared.id, {}, []),
+  ).rejects.toMatchObject({ code: 'permission_denied' });
+  await f.service.reviewLocal(f.dot.id, review, 'session');
+  const binding = await f.service.teach(f.dot.id, review.id, {}, ['terms']);
+  expect(binding.dotId).toBe(f.dot.id);
+});

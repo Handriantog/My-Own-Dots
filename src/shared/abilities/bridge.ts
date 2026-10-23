@@ -47,6 +47,7 @@ export const reviewSchema = z.strictObject({
   id: z.uuid(),
   descriptor: releaseDescriptorSchema,
   descriptorUrl: z.string().max(2048),
+  localSource: z.string().min(1).max(4096).optional(),
   descriptorSha256: digest,
   archiveUrl: z.string().max(2048),
   expiresAt: z.number().int().positive(),

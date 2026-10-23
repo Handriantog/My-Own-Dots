@@ -77,12 +77,20 @@ reviewed descriptor. Moving a tag or replacing an asset invalidates that review.
 Private repositories are outside this first installer. Limits are 256 KiB for
 the descriptor, 256 MiB compressed, 1 GiB extracted, and 20,000 archive entries.
 
+Local testing can use **Choose local Ability…** with a descriptor and adjacent
+archive, through the same sealed installer and consent flow. See
+[local setup and limits](spotify-local.md#teach-a-local-package).
+
 ## Permissions
 
 Each permission has a unique `id`, `kind`, and plain-text `purpose`. The UI shows
 the actual structured access as well as the explanation. Private binding state
 is implicit. Only these explicit capability kinds are accepted:
 
+- `app-control`: `application: "com.spotify.client"` and an explicit, nonempty
+  `actions` list from the [Spotify command schema](../../src/shared/abilities/app-control.ts).
+  The host owns the fixed adapter; workers cannot supply raw automation. See
+  [Spotify Local](spotify-local.md) for OS access, behavior and limits.
 - `https`: exact HTTPS `origin`, one `method`, `path` segments, `pathValues`
   schema, `query` schema, optional `body` schema, and optional OAuth `account` ID.
   A path segment is a literal or `{ "param": "itemId" }`. Parameters are required
@@ -100,7 +108,8 @@ OAuth, HTTP, and helper references must resolve within this manifest. Account
 resource origins must match the corresponding HTTP rule. Network resolution and
 actual socket destinations are checked by the host; declaring a hostname does
 not allow private-address access. No wildcard origins, arbitrary headers, proxies,
-redirected credentials, Accessibility, printing, or system services are supported.
+redirected credentials, arbitrary desktop Accessibility, printing, or system services
+are supported. Spotify-only app control is the bounded exception described above.
 
 ## Schemas and updates
 
@@ -138,4 +147,11 @@ both channels for API-1 compatibility. Dot derives the channel from trusted turn
 state, including delegated voice tasks, excludes unavailable tools from inference,
 and enforces the restriction again at invocation/host authority boundaries. A
 worker or model cannot change the invocation channel. Use this for provider
-restrictions; Spotify's current policy prohibits third-party voice control.
+restrictions. The Spotify Web API package is text-only. Spotify Local declares
+both channels; technical admission is not a claim of provider policy approval.
+
+Spotify app-control permissions require every tool in the Ability to be
+`owner-only`. The host rejects mixed visibility during review and execution,
+including previously bound packages, because workers can retain private results
+between calls. This boundary covers model tool results; separately approved HTTPS
+grants still authorize their declared network requests.

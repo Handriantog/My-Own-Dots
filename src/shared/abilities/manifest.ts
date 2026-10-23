@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { abilityLimits, assertBoundedJson } from './limits.js';
+import { appActionSchema, spotifyApplication } from './app-control.js';
 
 export type JsonValue =
   null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -166,7 +167,23 @@ const entrypoint = z.strictObject({
   path: relativePath,
 });
 const permissionBase = { id: identifier, purpose: text };
+// Package-wide: a worker or helper can retain private data between tool calls.
+export function validAppControlVisibility(manifest: {
+  permissions: readonly { kind: string }[];
+  tools: readonly { visibility: string }[];
+}): boolean {
+  return (
+    !manifest.permissions.some((p) => p.kind === 'app-control') ||
+    manifest.tools.every((tool) => tool.visibility === 'owner-only')
+  );
+}
 export const permissionSchema = z.discriminatedUnion('kind', [
+  z.strictObject({
+    ...permissionBase,
+    kind: z.literal('app-control'),
+    application: z.literal(spotifyApplication),
+    actions: z.array(appActionSchema).min(1).max(14).refine(unique),
+  }),
   z.strictObject({
     ...permissionBase,
     kind: z.literal('https'),
@@ -271,6 +288,11 @@ export const manifestSchema = z
     permissions: z.array(permissionSchema).max(100),
   })
   .superRefine((manifest, ctx) => {
+    if (!validAppControlVisibility(manifest))
+      ctx.addIssue({
+        code: 'custom',
+        message: 'Spotify app-control requires owner-only tools',
+      });
     const bad = () =>
       ctx.addIssue({ code: 'custom', message: 'Invalid Ability references' });
     for (const list of [manifest.helpers, manifest.tools, manifest.permissions])

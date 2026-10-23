@@ -86,6 +86,15 @@ through an owner-only tool. Credentials are injected by the host, never returned
 
 Other requests use the same envelope:
 
+- App control: `{"kind":"app-control","ruleId":"playback","command":{"action":"pause"}}`.
+  The command must match the named permission's allowed actions. Result is
+  `{"ok":true,"kind":"app-control","status":"success"}` or `status:"uncertain"`,
+  with an optional private `result` using the owner presentation schema below.
+  Failures use the fixed error envelope. See [Spotify Local](spotify-local.md)
+  and the [strict command schema](../../src/shared/abilities/app-control.ts).
+  App commands are serialized across Dots, with up to eight queued. Authority is
+  checked again immediately before dispatch and after the reply. Cancellation
+  kills owned helpers; a delivered mutation can still have happened.
 - Account presence: `{"kind":"account","accountId":"account"}`. Result is
   `{"ok":true,"kind":"account","connected":true,"handle":"HOST-UUID"}`,
   or `connected:false` without a handle. This cannot start browser sign-in.
@@ -170,3 +179,9 @@ mutations. A second 401 is returned for the worker to request reconnection.
 Optional tool `channels` and manifest `notices` are declared in the reviewed
 manifest. Channel identity and required notice acceptance are host-owned; neither
 is a worker-supplied protocol field.
+
+Spotify app-control permissions require every tool in the Ability to be
+`owner-only`. The host rejects mixed visibility during review and execution,
+including previously bound packages, because workers can retain private results
+between calls. This boundary covers model tool results; separately approved HTTPS
+grants still authorize their declared network requests.

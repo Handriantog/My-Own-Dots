@@ -19,6 +19,9 @@ import { assertBoundedJson } from '../../../shared/abilities/limits.js';
 import type { ProtectedStorage } from '../backup-keys.js';
 import type { WorkspaceBackendConnection } from '../workspace-backend.js';
 import { DesktopAbilityBridge } from './bridge.js';
+import { createSpotifyTransport } from './spotify.js';
+import { LocalAbilityPackages } from './local.js';
+import { AbilityInstaller } from './installer.js';
 import { AbilityHost } from './host.js';
 import { DirectoryAnchor } from './package.js';
 import { inspectPython, loadPython, savePython } from './runtime.js';
@@ -29,6 +32,7 @@ type Current = {
   connection: WorkspaceBackendConnection;
   controller: AbortController;
   host: AbilityHost;
+  local: LocalAbilityPackages;
   bridge: DesktopAbilityBridge;
   python?: AbilityRuntime;
 };
@@ -37,6 +41,7 @@ type Options = {
   bundle: string;
   storage: ProtectedStorage;
   open(url: string): Promise<void>;
+  chooseAbility?(): Promise<string | undefined>;
   choosePython?(): Promise<string | undefined>;
   approvePython?(runtime: AbilityRuntime): Promise<boolean>;
   runtimes?: AbilitySupervisorOptions['runtimes'];
@@ -45,6 +50,7 @@ type Options = {
 export class AbilityController {
   private current?: Current;
   private choosingPython = false;
+  private choosingAbility = false;
   private maintenance = false;
   private connection?: WorkspaceBackendConnection;
   private operations: Promise<unknown> = Promise.resolve();
@@ -77,6 +83,7 @@ export class AbilityController {
       const old = this.current;
       this.current = undefined;
       old?.controller.abort();
+      old?.local.clear();
       await old?.bridge.stop();
       if (this.stopped || generation !== this.generation) return;
       if (process.platform !== 'darwin' || process.arch !== 'arm64') {
@@ -127,7 +134,15 @@ export class AbilityController {
         }
         if (this.stopped || generation !== this.generation) return;
         const controller = new AbortController();
+        const local = new LocalAbilityPackages(() => bridge?.session);
         const host: AbilityHost = new AbilityHost({
+          appControl: createSpotifyTransport(
+            join(this.options.bundle, 'native/spotify-control'),
+          ),
+          installer: new AbilityInstaller(
+            join(root, 'installation'),
+            local.transport,
+          ),
           workspaceId: connection.workspaceId,
           packageRoot: join(root, 'installation'),
           stateRoot: join(root, 'state'),
@@ -161,6 +176,7 @@ export class AbilityController {
           connection: { ...connection },
           controller,
           host,
+          local,
           bridge,
           python: runtime.python,
         };
@@ -175,6 +191,7 @@ export class AbilityController {
       } catch {
         this.unavailable = 'host_unavailable';
         current?.controller.abort();
+        current?.local.clear();
         await current?.bridge.stop();
         if (this.current === current) this.current = undefined;
       }
@@ -195,6 +212,7 @@ export class AbilityController {
     const current = this.current;
     this.current = undefined;
     current?.controller.abort();
+    current?.local.clear();
     const stopping = current?.bridge.stop();
     return this.serial(async () => {
       await stopping;
@@ -367,6 +385,45 @@ export class AbilityController {
             ...(current?.python ? { python: current.python } : {}),
             ...(!this.available ? { reason: this.unavailable } : {}),
           };
+          break;
+        }
+        case 'reviewLocal': {
+          if (this.choosingAbility || !this.options.chooseAbility)
+            throw new AbilityFailure('busy');
+          this.choosingAbility = true;
+          try {
+            const args = desktopAbilityMethods.reviewLocal.input.parse(input);
+            const path = await this.options.chooseAbility();
+            if (!path) {
+              value = null;
+              break;
+            }
+            if (!authority.trusted() || this.current !== current)
+              throw new AbilityFailure('permission_denied');
+            const review = await current!.local.review(path, signal);
+            if (!authority.trusted() || this.current !== current)
+              throw new AbilityFailure('permission_denied');
+            const prepared = desktopAbilityMethods.review.output.parse(
+              await api(
+                `/dots/${encodeURIComponent(args.dotId)}/abilities/review-local`,
+                { review, sessionId: current!.bridge.session },
+              ),
+            );
+            value = {
+              ...prepared,
+              storage: {
+                packagePath: join(
+                  connection.abilityRoot!,
+                  'installation',
+                  'packages',
+                  review.descriptor.asset.sha256,
+                ),
+                stateParent: join(connection.abilityRoot!, 'state'),
+              },
+            };
+          } finally {
+            this.choosingAbility = false;
+          }
           break;
         }
         case 'review': {
