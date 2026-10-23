@@ -45,3 +45,28 @@ jobs:
           python3 -I -S -B scripts/local-voice/test_worker.py
           python3 -I -S -B scripts/local-voice/test_native_worker.py
       - run: npm run build
+  abilities-macos:
+    name: Ability acceptance (macOS arm64)
+    runs-on: macos-26
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '24.20.0'
+          architecture: arm64
+          cache: npm
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: '0.11.6'
+          python-version: '3.12'
+      - name: Verify the runner and select the fixture interpreter
+        run: |
+          node -e 'if(process.platform !== "darwin" || process.arch !== "arm64") process.exit(1)'
+          echo "DOTS_ABILITY_TEST_PYTHON=$(uv python find 3.12)" >> "$GITHUB_ENV"
+      - run: npm ci
+      - run: npm run abilities:acceptance
+      - run: npm run desktop:package
+      - run: npm run abilities:package:smoke

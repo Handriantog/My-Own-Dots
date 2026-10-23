@@ -115,6 +115,7 @@ const config: PlatformConfig = {
   slackDotId: process.env.SLACK_DOT_ID || undefined,
   runtimeUrl: `http://${host === '::1' ? '[::1]' : '127.0.0.1'}:${port}/api/copilotkit`,
   ownerToken,
+  workspaceId,
 };
 const desktopBrowser =
   process.env.DOTS_DESKTOP_BROWSER === '1' && process.send && process.connected
@@ -130,6 +131,8 @@ const snapshotOptions = {
   ownerId: workspace.ownerId,
   workspaceId,
   gate: platform.maintenance,
+  quiesceAbilities: () =>
+    platform.abilities?.quiesce() ?? Promise.resolve(async () => {}),
   configurationPath: existsSync(configurationPath)
     ? configurationPath
     : undefined,
@@ -211,7 +214,11 @@ app.get('/api/desktop/identity', (c) =>
     service: 'my-own-dots',
     protocol: 1,
     workspaceId,
-    capabilities: snapshots ? ['workspace-snapshot-v1'] : [],
+    abilityRoot: join(dirname(resolve(database)), 'abilities'),
+    capabilities: [
+      ...(snapshots ? ['workspace-snapshot-v1'] : []),
+      ...(platform.abilities ? ['abilities-v1'] : []),
+    ],
     setup: platform.setup(),
   }),
 );

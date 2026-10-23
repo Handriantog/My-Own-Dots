@@ -60,6 +60,7 @@ let window: ReturnType<typeof windowDouble>;
 let voice: CompanionVoiceSession;
 let active: boolean[];
 let reviews: number;
+let playback: unknown[][];
 let canStart: boolean;
 function sender() {
   return {
@@ -92,6 +93,7 @@ beforeEach(() => {
   window = windowDouble();
   active = [];
   reviews = 0;
+  playback = [];
   canStart = true;
   voice = new CompanionVoiceSession(
     () => window as unknown as BrowserWindow,
@@ -99,6 +101,7 @@ beforeEach(() => {
     {
       active: (value) => active.push(value),
       ready() {},
+      playback: (dotId, active) => playback.push([dotId, active]),
       canStart: () => canStart,
       reviewFolders: () => {
         reviews++;
@@ -472,4 +475,49 @@ it('shares session permission routing while preventing two native windows from c
   } finally {
     mainVoice.destroy();
   }
+});
+
+describe('voice playback scope', () => {
+  const dotId = '068ff3b5-813a-4f50-a596-6cfabc359fea';
+  it('binds playback to the active call and rejects other frames and identities', () => {
+    ready();
+    invoke('begin', { callId: 'duck-call-123', quality: 'medium', dotId });
+    invoke('playback', { callId: 'duck-call-123', active: true });
+    expect(playback).toEqual([[dotId, true]]);
+    expect(() =>
+      invoke('playback', { callId: 'other-call-123', active: true }),
+    ).toThrow();
+    expect(() =>
+      invoke('playback', { callId: 'duck-call-123', active: 'yes' }),
+    ).toThrow();
+    expect(() =>
+      invoke('playback', { callId: 'duck-call-123', active: true }, {
+        ...sender(),
+        senderFrame: {},
+      } as IpcMainInvokeEvent),
+    ).toThrow();
+    expect(playback).toHaveLength(1);
+  });
+  it.each(['end', 'stop', 'reset', 'destroy'])(
+    'releases playback on %s',
+    (action) => {
+      ready();
+      invoke('begin', { callId: 'duck-call-123', quality: 'medium', dotId });
+      invoke('playback', { callId: 'duck-call-123', active: true });
+      if (action === 'end') invoke('end', 'duck-call-123');
+      else if (action === 'stop') voice.stop('interrupted');
+      else if (action === 'reset') voice.reset();
+      else voice.destroy();
+      expect(playback.at(-1)).toEqual([dotId, false]);
+    },
+  );
+  it('does not grant music control to legacy or basic calls', () => {
+    ready();
+    invoke('begin', 'legacy-call-123');
+    invoke('playback', { callId: 'legacy-call-123', active: true });
+    invoke('end', 'legacy-call-123');
+    invoke('begin', { callId: 'basic-call-123', quality: 'basic', dotId });
+    invoke('playback', { callId: 'basic-call-123', active: true });
+    expect(playback).toEqual([]);
+  });
 });

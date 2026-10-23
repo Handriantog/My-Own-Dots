@@ -11,7 +11,8 @@ import {
   type RunAgentParameters,
 } from '@ag-ui/client';
 import { CopilotKitCore, CopilotKitCoreErrorCode } from '@copilotkit/core';
-import { from, lastValueFrom, throwError, toArray } from 'rxjs';
+import { from, lastValueFrom, Subject, throwError, toArray } from 'rxjs';
+import { z } from 'zod';
 
 const harness = vi.hoisted(() => {
   type Subscriber = {
@@ -151,7 +152,7 @@ import { VoiceSettings } from '../src/client/local-voice/VoiceSettings';
 class ReplayAgent extends AbstractAgent {
   events: BaseEvent[] = [];
 
-  run() {
+  run(_input: RunAgentInput) {
     return from(this.events);
   }
 
@@ -282,6 +283,35 @@ async function mountChat() {
   await act(async () => {
     root = create(createElement(Chat, props));
   });
+}
+
+async function submitMessage(text = 'Hello') {
+  await act(async () => {
+    root.root.findByProps({ 'aria-label': 'Message your Dot' }).props.onChange({
+      target: { value: text },
+    });
+  });
+  await act(async () => {
+    root.root.findByType('form').props.onSubmit({ preventDefault() {} });
+  });
+}
+
+function assistantResponse(runId: string): BaseEvent[] {
+  return [
+    runStarted(runId),
+    {
+      type: EventType.TEXT_MESSAGE_START,
+      messageId: 'reply',
+      role: 'assistant',
+    },
+    {
+      type: EventType.TEXT_MESSAGE_CONTENT,
+      messageId: 'reply',
+      delta: 'Hello back',
+    },
+    { type: EventType.TEXT_MESSAGE_END, messageId: 'reply' },
+    ...runFinished(runId).slice(1),
+  ];
 }
 
 function alertText(): string[] {
@@ -542,6 +572,277 @@ it('clears a historical run error when replay later finishes successfully', asyn
   expect(root.root.findAllByProps({ children: 'Reconnect' })).toHaveLength(0);
 });
 
+it('preserves the SDK transport failure when the submitted turn resolves empty', async () => {
+  const { agent } = useReplayAgent([]);
+  await mountChat();
+  vi.spyOn(agent, 'run').mockReturnValueOnce(
+    throwError(() => new Error('Runtime connection refused')),
+  );
+  await submitMessage();
+  expect(alertText()).toEqual(['Runtime connection refused']);
+});
+
+it('preserves a current RUN_ERROR instead of replacing it with no response', async () => {
+  const { agent } = useReplayAgent([]);
+  await mountChat();
+  vi.spyOn(agent, 'run').mockImplementationOnce((input) =>
+    from(runError(input.runId, 'Provider session expired')),
+  );
+  await submitMessage();
+  expect(alertText()).toEqual(['Provider session expired']);
+});
+
+it('preserves a failure from the SDK tool follow-up within the submitted turn', async () => {
+  const { agent, copilotkit } = useReplayAgent([]);
+  copilotkit.addTool({
+    name: 'fixture',
+    parameters: z.object({}),
+    handler: async () => 'Done',
+  });
+  vi.spyOn(agent, 'run')
+    .mockImplementationOnce((input) =>
+      from([
+        runStarted(input.runId),
+        {
+          type: EventType.TOOL_CALL_START,
+          toolCallId: 'tool',
+          toolCallName: 'fixture',
+        },
+        { type: EventType.TOOL_CALL_ARGS, toolCallId: 'tool', delta: '{}' },
+        { type: EventType.TOOL_CALL_END, toolCallId: 'tool' },
+        ...runFinished(input.runId).slice(1),
+      ]),
+    )
+    .mockImplementationOnce((input) =>
+      from(runError(input.runId, 'Follow-up session expired')),
+    );
+  await mountChat();
+  await submitMessage();
+  expect(alertText()).toEqual(['Follow-up session expired']);
+});
+
+it('rejects a voice turn with the SDK failure that caused its empty result', async () => {
+  const { agent } = useReplayAgent([]);
+  await mountChat();
+  vi.spyOn(agent, 'run').mockReturnValueOnce(
+    throwError(() => new Error('Runtime connection refused')),
+  );
+  await act(async () => {
+    await expect(
+      harness.localVoiceOptions!.onTranscript({
+        messageId: 'failed-voice',
+        text: 'Hello',
+      }),
+    ).rejects.toThrow('Runtime connection refused');
+  });
+});
+
+it('does not let an old replay failure poison a new successful turn', async () => {
+  const { agent } = useReplayAgent([]);
+  const events = new Subject<BaseEvent>();
+  let currentRunId = '';
+  vi.spyOn(agent, 'run').mockImplementationOnce((input) => {
+    currentRunId = input.runId;
+    return events;
+  });
+  await mountChat();
+  await submitMessage();
+  agent.events = runError('historical-failure', 'Old failure');
+  await act(async () => {
+    await agent.connectAgent();
+    for (const event of assistantResponse(currentRunId)) events.next(event);
+    events.complete();
+  });
+  expect(alertText()).toEqual([]);
+});
+
+it('does not mistake a replay failure for the cause of a current empty turn', async () => {
+  const { agent } = useReplayAgent([]);
+  const events = new Subject<BaseEvent>();
+  let currentRunId = '';
+  vi.spyOn(agent, 'run').mockImplementationOnce((input) => {
+    currentRunId = input.runId;
+    return events;
+  });
+  await mountChat();
+  await submitMessage();
+  agent.events = runError('historical-failure', 'Old failure');
+  await act(async () => {
+    await agent.connectAgent();
+    for (const event of runFinished(currentRunId)) events.next(event);
+    events.complete();
+  });
+  expect(alertText()).toEqual([
+    'The current turn returned no response. Check the runtime connection and retry.',
+  ]);
+});
+
+it('keeps the composer unavailable after an SDK connect failure', async () => {
+  const { agent } = useReplayAgent([]);
+  vi.spyOn(agent, 'connectAgent').mockRejectedValueOnce(
+    new Error('Runtime is unavailable'),
+  );
+  await mountChat();
+  await submitMessage();
+  expect(alertText()).toEqual(['Runtime is unavailable']);
+  expect(
+    root.root.findByProps({ 'aria-label': 'Send message' }).props.disabled,
+  ).toBe(true);
+  expect(agent.messages).toEqual([]);
+});
+
+it('keeps the composer unavailable when initial connect returns a bare runtime error', async () => {
+  const { agent, copilotkit } = useReplayAgent([
+    {
+      type: EventType.RUN_ERROR,
+      code: 'LOCAL_CONVERSATION_ERROR',
+      message: 'Connection terminated unexpectedly',
+    },
+  ]);
+  const run = vi.spyOn(copilotkit, 'runAgent');
+  await mountChat();
+  await act(async () => {
+    root.root.findByProps({ 'aria-label': 'Message your Dot' }).props.onChange({
+      target: { value: 'Hello' },
+    });
+  });
+  expect(alertText()).toEqual(['Connection terminated unexpectedly']);
+  expect(
+    root.root.findByProps({ 'aria-label': 'Send message' }).props.disabled,
+  ).toBe(true);
+  expect(agent.messages).toEqual([]);
+  expect(run).not.toHaveBeenCalled();
+});
+
+it.each([
+  runStarted('historical-run'),
+  { type: EventType.MESSAGES_SNAPSHOT, messages: [] },
+  { type: EventType.STATE_SNAPSHOT, snapshot: {} },
+])(
+  'allows sending after replay starts with $type and contains a historical error',
+  async (event) => {
+    useReplayAgent([
+      event,
+      {
+        type: EventType.RUN_ERROR,
+        code: 'LOCAL_CONVERSATION_ERROR',
+        message: 'Previous run failed',
+      },
+    ]);
+    await mountChat();
+    await act(async () => {
+      root.root
+        .findByProps({ 'aria-label': 'Message your Dot' })
+        .props.onChange({
+          target: { value: 'Hello' },
+        });
+    });
+    expect(alertText()).toEqual(['Previous run failed']);
+    expect(
+      root.root.findByProps({ 'aria-label': 'Send message' }).props.disabled,
+    ).toBe(false);
+  },
+);
+
+it('shows a pending reconnect and its success without rerunning the failed turn', async () => {
+  const { agent, copilotkit } = useReplayAgent([]);
+  const run = vi.spyOn(copilotkit, 'runAgent');
+  await mountChat();
+  vi.spyOn(agent, 'run').mockReturnValueOnce(
+    throwError(() => new Error('Runtime connection refused')),
+  );
+  await submitMessage();
+  let finish!: () => void;
+  vi.spyOn(agent, 'connectAgent').mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = () => resolve({ newMessages: [], result: undefined });
+      }),
+  );
+  await act(async () => {
+    root.root.findByProps({ children: 'Reconnect' }).props.onClick();
+  });
+  expect(
+    root.root
+      .findAllByType('button')
+      .find((node) => node.children[0] === 'Reconnecting…')?.props.disabled,
+  ).toBe(true);
+  expect(
+    root.root
+      .findAllByProps({ role: 'status' })
+      .map((node) => node.children.join('')),
+  ).toContain('Reconnecting…');
+  await act(async () => finish());
+  expect(
+    root.root
+      .findAllByProps({ role: 'status' })
+      .map((node) => node.children.join('')),
+  ).toContain('Reconnected. Send a message to try again.');
+  expect(run).toHaveBeenCalledOnce();
+});
+
+it('shows a failed reconnect and keeps sending disabled when the SDK resolves its error', async () => {
+  const { agent, copilotkit } = useReplayAgent([]);
+  const run = vi.spyOn(copilotkit, 'runAgent');
+  await mountChat();
+  vi.spyOn(agent, 'run').mockReturnValueOnce(
+    throwError(() => new Error('Runtime connection refused')),
+  );
+  await submitMessage();
+  vi.spyOn(agent, 'connectAgent').mockRejectedValueOnce(
+    new Error('Runtime still unavailable'),
+  );
+  await act(async () => {
+    root.root.findByProps({ children: 'Reconnect' }).props.onClick();
+  });
+  expect(alertText()).toEqual(['Runtime still unavailable']);
+  await submitMessage('Try again');
+  expect(
+    root.root.findByProps({ 'aria-label': 'Send message' }).props.disabled,
+  ).toBe(true);
+  expect(
+    root.root
+      .findAllByProps({ role: 'status' })
+      .map((node) => node.children.join('')),
+  ).not.toContain('Reconnected. Send a message to try again.');
+  expect(run).toHaveBeenCalledOnce();
+});
+
+it('does not report reconnect success when the runtime returns a bare connection error', async () => {
+  const { agent, copilotkit } = useReplayAgent([]);
+  const run = vi.spyOn(copilotkit, 'runAgent');
+  await mountChat();
+  vi.spyOn(agent, 'run').mockReturnValueOnce(
+    throwError(() => new Error('Runtime connection refused')),
+  );
+  await submitMessage();
+  agent.events = [
+    {
+      type: EventType.RUN_ERROR,
+      code: 'LOCAL_CONVERSATION_ERROR',
+      message: 'Connection terminated unexpectedly',
+    },
+  ];
+  await act(async () => {
+    root.root.findByProps({ children: 'Reconnect' }).props.onClick();
+  });
+  await act(async () => {
+    root.root.findByProps({ 'aria-label': 'Message your Dot' }).props.onChange({
+      target: { value: 'Try again' },
+    });
+  });
+  expect(alertText()).toEqual(['Connection terminated unexpectedly']);
+  expect(
+    root.root.findByProps({ 'aria-label': 'Send message' }).props.disabled,
+  ).toBe(true);
+  expect(
+    root.root
+      .findAllByProps({ role: 'status' })
+      .map((node) => node.children.join('')),
+  ).not.toContain('Reconnected. Send a message to try again.');
+  expect(run).toHaveBeenCalledOnce();
+});
+
 it('keeps a latest historical failure visible without a later success', async () => {
   await mountChat();
   await act(async () => {
@@ -757,6 +1058,7 @@ it('submits a final voice transcript once through the chat agent and preserves t
   });
   expect(harness.copilotkit.runAgent).toHaveBeenCalledExactlyOnceWith({
     agent: harness.agent,
+    runId: expect.any(String),
   });
   expect(draft().props.value).toBe('My unfinished typed thought');
 });

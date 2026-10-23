@@ -29,7 +29,7 @@ Rejecting, forgetting, or reversing newly learned evidence suppresses its future
 
 ## Context and speed
 
-The default input budget is 24,000 estimated units, with at most 2,000 for pinned essentials. Estimation currently uses one UTF-8 byte per token as a deliberately conservative fallback; these are not provider token-usage counts. Set `MEMORY_INPUT_TOKEN_LIMIT` and `MEMORY_PINNED_TOKEN_LIMIT` only when the chosen model can accommodate them.
+The default input budget is 64,000 estimated units, with at most 2,000 for pinned essentials. The desktop tool catalog plus Spotify Local occupies about 23,000 units before conversation history; the default leaves room for messages and tool results. Estimation currently uses one UTF-8 byte per token as a deliberately conservative fallback; these are not provider token-usage counts. Automatic compaction and the hard limit still apply to the complete serialized request, including tools and response schemas. Set `MEMORY_INPUT_TOKEN_LIMIT` and `MEMORY_PINNED_TOKEN_LIMIT` only when the chosen model can accommodate them. Explicit limits are preserved. A large set of enabled tools can still exceed the budget; compacting history cannot shrink tool definitions.
 
 Compact creates a source-backed checkpoint containing the current goal, constraints, decisions, completed work, questions, and next steps. Recent messages and unresolved tool-call/result groups remain intact. Canonical messages, tool IDs, approvals, and run events are never rewritten by compaction. A large indivisible input can still exceed capacity; shorten it or start a new conversation if Compact cannot safely make room.
 

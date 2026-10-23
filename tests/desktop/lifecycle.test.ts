@@ -69,6 +69,7 @@ vi.mock('../../src/desktop/host/workspace-window.js', () => ({
     }
     async command() {}
     suspend() {}
+    resume() {}
     async destroy() {
       host.lifecycle.push('workspace-terminal');
       await host.shutdown;
@@ -615,17 +616,18 @@ it('makes the workspace terminal before stopping the backend and ignores activat
   const preventDefault = vi.fn();
   app.emit('before-quit', { preventDefault });
   expect(preventDefault).toHaveBeenCalledOnce();
-  expect(host.lifecycle).toEqual(['workspace-terminal', 'backend-stop']);
+  expect(host.lifecycle).toEqual(['workspace-terminal']);
   app.emit('activate');
   app.emit('second-instance');
   const windows = host.windows.length;
   for (const label of ['Chat with Dot', 'Talk with Dot', 'Customize Dot'])
     host.menu.find((item) => item.label === label)?.click?.();
   expect(host.windows).toHaveLength(windows);
-  expect(host.lifecycle).toEqual(['workspace-terminal', 'backend-stop']);
+  expect(host.lifecycle).toEqual(['workspace-terminal']);
   expect(app.exit).not.toHaveBeenCalled();
   finish();
   await vi.advanceTimersByTimeAsync(0);
+  expect(host.lifecycle).toEqual(['workspace-terminal', 'backend-stop']);
   expect(app.exit).toHaveBeenCalledExactlyOnceWith(0);
 });
 

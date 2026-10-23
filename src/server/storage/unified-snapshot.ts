@@ -1,7 +1,8 @@
+import { captureAbilityState } from './ability-snapshot.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { mkdir, open, readFile, rm, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type {
   ArchiveEntry,
   ArchiveManifest,
@@ -17,6 +18,7 @@ interface Options {
   workspaceId: string;
   gate: MaintenanceGate;
   configurationPath?: string;
+  quiesceAbilities?(): Promise<() => Promise<void>>;
 }
 export class UnifiedSnapshotSource implements SnapshotSource {
   private configuration?: Buffer;
@@ -87,9 +89,11 @@ export class UnifiedSnapshotSource implements SnapshotSource {
     await this.unchanged();
     const lease = await this.options.gate.acquire({ origin, signal });
     signal = lease.signal;
+    let resumeAbilities: (() => Promise<void>) | undefined;
     let created = false;
     try {
       signal.throwIfAborted();
+      resumeAbilities = await this.options.quiesceAbilities?.();
       await mkdir(directory, { mode: 0o700 });
       created = true;
       await mkdir(join(directory, 'core'), { mode: 0o700 });
@@ -140,10 +144,30 @@ export class UnifiedSnapshotSource implements SnapshotSource {
         }
         entries.push({ path, bytes, sha256: hash.digest('hex') });
       }
+      if (
+        !this.options.quiesceAbilities &&
+        (await stat(
+          join(dirname(this.options.sqlitePath), 'abilities/state'),
+        ).catch((error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error;
+        }))
+      )
+        throw new Error('Ability host must confirm shutdown before capture');
+      const abilities = await captureAbilityState(
+        dirname(this.options.sqlitePath),
+        directory,
+        signal,
+      );
+      entries.push(...abilities.entries);
       signal.throwIfAborted();
       return {
-        version: 2,
-        minimumReader: 2,
+        ...(abilities.entries.length
+          ? {
+              version: 3 as const,
+              minimumReader: 3 as const,
+              abilities: { version: 1 as const },
+            }
+          : { version: 2 as const, minimumReader: 2 as const }),
         kind: 'workspace-backup',
         storage: { engine: 'sqlite', schema: sqliteStorageSchema },
         archiveId: randomUUID(),
@@ -155,6 +179,20 @@ export class UnifiedSnapshotSource implements SnapshotSource {
           { component: 'core-sqlite', state: 'included' },
           { component: 'local-conversations-memory', state: 'included' },
           { component: 'recovery-configuration', state: 'included' },
+          ...(abilities.entries.length
+            ? [
+                {
+                  component: 'ability-private-state',
+                  state: 'included' as const,
+                },
+                {
+                  component: 'ability-credentials-and-executables',
+                  state: 'excluded' as const,
+                  reason:
+                    'Account credentials stay on this desktop. Packages require digest verification and fresh consent.',
+                },
+              ]
+            : []),
           {
             component: 'computer-volumes',
             state: 'excluded',
@@ -167,7 +205,11 @@ export class UnifiedSnapshotSource implements SnapshotSource {
       if (created) await rm(directory, { recursive: true, force: true });
       throw error;
     } finally {
-      lease.release();
+      try {
+        await resumeAbilities?.();
+      } finally {
+        lease.release();
+      }
     }
   }
 }

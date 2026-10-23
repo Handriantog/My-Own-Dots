@@ -3,12 +3,15 @@ import { WorkspaceStore } from '../src/server/workspace.js';
 import { Store } from '../src/server/store.js';
 import { MemoryAccess } from '../src/server/memory-access.js';
 import { MemoryRecall } from '../src/server/memory-recall.js';
-import { ContextBuilder } from '../src/server/context-builder.js';
+import {
+  ContextBuilder,
+  type ContextLimits,
+} from '../src/server/context-builder.js';
 import { estimateTokens } from '../src/server/context-budget.js';
 import { renderSubscriptionPrompt } from '../src/server/subscription-prompt.js';
 const close: (() => void)[] = [];
 afterEach(() => close.splice(0).forEach((f) => f()));
-function setup() {
+function setup(limits: Partial<ContextLimits> = {}) {
   const ws = new WorkspaceStore(':memory:', 'owner'),
     store = new Store(':memory:');
   close.push(() => {
@@ -34,7 +37,7 @@ function setup() {
     },
     new MemoryAccess(ws, store),
   );
-  const builder = new ContextBuilder(recall);
+  const builder = new ContextBuilder(recall, limits);
   const frame = {
     ownerId: 'owner',
     dotId: dot.id,
@@ -81,7 +84,7 @@ it('loads only essentials despite 10000 unrelated memories and preserves the inp
   expect(payload).toEqual(original);
 });
 it('accounts for Unicode, schemas, and final serialization before admitting inference', async () => {
-  const { builder, frame, payload } = setup();
+  const { builder, frame, payload } = setup({ inputTokenLimit: 24_000 });
   await expect(
     builder.project(
       { ...payload, messages: [{ role: 'user', content: '漢'.repeat(9000) }] },
@@ -104,6 +107,19 @@ it('accounts for Unicode, schemas, and final serialization before admitting infe
   await expect(
     builder.project(
       { ...payload, responseSchema: { description: 'x'.repeat(25000) } },
+      frame,
+      new AbortController().signal,
+    ),
+  ).rejects.toThrow(/capacity/i);
+});
+it('still rejects requests larger than the default capacity', async () => {
+  const { builder, frame, payload } = setup();
+  await expect(
+    builder.project(
+      {
+        ...payload,
+        messages: [{ role: 'user', content: 'x'.repeat(65_000) }],
+      },
       frame,
       new AbortController().signal,
     ),

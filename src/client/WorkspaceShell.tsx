@@ -5,6 +5,7 @@ import {
   MessageCircle,
   PanelLeft,
   Search,
+  Sparkles,
   Settings2,
 } from 'lucide-react';
 import type { WorkspaceView } from './workspace-navigation';
@@ -59,6 +60,7 @@ export function WorkspaceRail({
           { view: 'space', label: 'Spaces', icon: Folder },
           { view: 'tasks', label: 'Activity', icon: Clock3 },
           { view: 'memories', label: 'Memory', icon: BookOpen },
+          { view: 'abilities', label: 'Abilities', icon: Sparkles },
           { view: 'settings', label: 'Settings', icon: Settings2 },
         ] as const
       ).map((item) => (

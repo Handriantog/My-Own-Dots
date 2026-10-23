@@ -52,10 +52,12 @@ if (
       void ipcRenderer.invoke(`${voiceChannel}:cancel-talk`).catch(() => {});
     },
     cancelStart: () => ipcRenderer.invoke(`${voiceChannel}:cancel-start`),
-    begin: async (callId, quality) => {
+    begin: async (callId, quality, dotId) => {
       await ipcRenderer.invoke(
         `${voiceChannel}:begin`,
-        quality ? { callId, quality } : callId,
+        quality || dotId
+          ? { callId, quality: quality ?? 'medium', dotId }
+          : callId,
       );
       if (quality === 'basic') windowless = false;
     },
@@ -64,6 +66,8 @@ if (
       return ipcRenderer.invoke(`${voiceChannel}:end`, callId);
     },
     isWindowless: () => windowless,
+    playback: (callId, active) =>
+      ipcRenderer.invoke(`${voiceChannel}:playback`, { callId, active }),
     phase: (callId, phase) =>
       ipcRenderer.invoke(`${voiceChannel}:phase`, { callId, phase }),
     reviewFolders: (callId) =>

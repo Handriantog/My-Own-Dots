@@ -27,6 +27,7 @@ function fixture(version: number): string {
   for (const executable of [
     'Contents/MacOS/DotFixture',
     'Contents/Resources/app/native/desktop-observer',
+    'Contents/Resources/app/native/ability-launcher',
   ]) {
     const compile = spawnSync(
       'clang',
@@ -63,6 +64,11 @@ afterAll(() => {
 describe.skipIf(process.platform !== 'darwin')(
   'desktop package signing',
   () => {
+    it('refuses a bundle missing the Ability launcher', () => {
+      const app = fixture(0);
+      rmSync(path.join(app, 'Contents/Resources/app/native/ability-launcher'));
+      expect(sign(app, '').status).not.toBe(0);
+    });
     it('signs the bundled observer and app with explicit ad-hoc fallback', () => {
       const app = fixture(0);
       const result = sign(app, '');
@@ -82,6 +88,11 @@ describe.skipIf(process.platform !== 'darwin')(
       );
       expect(observerInfo.stderr).not.toContain('linker-signed');
       expect(requirement(app)).toContain('cdhash');
+      expect(
+        requirement(
+          path.join(app, 'Contents/Resources/app/native/ability-launcher'),
+        ),
+      ).toContain('cdhash');
     });
     it.skipIf(
       !process.env.DOTS_CODESIGN_IDENTITY ||

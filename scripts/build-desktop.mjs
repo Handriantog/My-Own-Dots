@@ -10,12 +10,17 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { build } from 'esbuild';
 import { buildDesktopRuntime, buildStorageWorker } from './desktop-runtime.mjs';
+import {
+  buildAbilityRuntime,
+  abilityRuntimePlugin,
+} from './abilities/build.mjs';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const out = path.join(root, 'dist/desktop');
 await buildStorageWorker(root, path.join(out, 'archive-worker.cjs'));
 mkdirSync(path.join(out, 'native'), { recursive: true });
 await buildDesktopRuntime(root, path.join(out, 'app'));
+await buildAbilityRuntime(root, out);
 writeFileSync(
   path.join(out, 'dev-source.json'),
   JSON.stringify({ sourceRoot: root }),
@@ -45,6 +50,7 @@ await build({
   format: 'cjs',
   target: 'node24',
   external: ['electron'],
+  plugins: [abilityRuntimePlugin],
   define: { 'import.meta.url': '__dotsBundleUrl' },
   banner: {
     js: "const __dotsBundleUrl = require('node:url').pathToFileURL(__filename).href;",

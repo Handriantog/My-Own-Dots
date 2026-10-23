@@ -1,0 +1,266 @@
+{
+  "asset": {
+    "compressedBytes": 10202,
+    "extractedBytes": 31574,
+    "fileCount": 10,
+    "id": 1,
+    "name": "spotify-local-0.1.0.dot-ability.tar.gz",
+    "sha256": "390ee4eb43490d19fc0daefea56b803245fb1a270620452afdaf538391db20a3"
+  },
+  "formatVersion": 1,
+  "manifest": {
+    "apiVersion": 1,
+    "description": "Control the Spotify desktop app on this Mac. No Spotify developer app or API credentials.",
+    "entrypoint": { "path": "src/worker.mjs", "runtime": "javascript" },
+    "formatVersion": 1,
+    "helpers": [],
+    "id": "spotify-local",
+    "license": "MIT",
+    "name": "Spotify Local",
+    "notices": [
+      {
+        "id": "local-control",
+        "required": false,
+        "text": "This Ability can change Spotify playback and your library. It uses the Spotify account already signed in on this Mac, shared across Dots. Per-Dot permission grants do not create separate Spotify accounts. UI actions can bring Spotify forward. Metadata stays in private owner cards; your own requests still follow the configured AI provider and chat storage. No audio is captured or downloaded. Spotify remains open when Dot quits. Check Spotify before repeating an uncertain action. This independent MIT project is not endorsed by Spotify. Local automation is not a guarantee of exemption from Spotify terms. Playlist creation starts with an empty default-named playlist using Spotify’s default visibility, then makes it private. UI automation currently requires Spotify in English and stops on unfamiliar layouts or duplicate target names.",
+        "title": "Spotify desktop control"
+      }
+    ],
+    "permissions": [
+      {
+        "actions": [
+          "play",
+          "pause",
+          "next",
+          "previous",
+          "volume",
+          "seek",
+          "shuffle",
+          "repeat",
+          "play_uri"
+        ],
+        "application": "com.spotify.client",
+        "id": "playback",
+        "kind": "app-control",
+        "purpose": "Control playback in Spotify."
+      },
+      {
+        "actions": [
+          "search",
+          "playlists",
+          "save_current",
+          "create_playlist",
+          "add_to_playlist"
+        ],
+        "application": "com.spotify.client",
+        "id": "library-ui",
+        "kind": "app-control",
+        "purpose": "Search, save songs, and edit playlists through the Spotify interface."
+      }
+    ],
+    "platforms": ["darwin-arm64"],
+    "publisher": "Handriantog",
+    "settings": {
+      "additionalProperties": false,
+      "properties": {},
+      "required": [],
+      "type": "object"
+    },
+    "source": { "owner": "handriantog", "repository": "my-own-dot-abilities" },
+    "tools": [
+      {
+        "channels": ["text", "voice"],
+        "description": "Resume Spotify or play a supplied Spotify URI/link, or the selected private search result.",
+        "id": "play",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "uri": { "maxLength": 2048, "minLength": 1, "type": "string" }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text", "voice"],
+        "description": "Pause Spotify.",
+        "id": "pause",
+        "input": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text", "voice"],
+        "description": "Skip to the next Spotify track.",
+        "id": "next",
+        "input": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text", "voice"],
+        "description": "Go to the previous Spotify track.",
+        "id": "previous",
+        "input": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text", "voice"],
+        "description": "Set Spotify volume from 0 to 100.",
+        "id": "volume",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "percent": { "maximum": 100, "minimum": 0, "type": "integer" }
+          },
+          "required": ["percent"],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text", "voice"],
+        "description": "Seek within the current Spotify track in seconds.",
+        "id": "seek",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "seconds": { "maximum": 86400, "minimum": 0, "type": "number" }
+          },
+          "required": ["seconds"],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text", "voice"],
+        "description": "Set Spotify shuffle on or off.",
+        "id": "shuffle",
+        "input": {
+          "additionalProperties": false,
+          "properties": { "enabled": { "type": "boolean" } },
+          "required": ["enabled"],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text", "voice"],
+        "description": "Set Spotify repeat on or off.",
+        "id": "repeat",
+        "input": {
+          "additionalProperties": false,
+          "properties": { "enabled": { "type": "boolean" } },
+          "required": ["enabled"],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text", "voice"],
+        "description": "Search the Spotify app; show results privately for the owner to choose.",
+        "id": "search",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "category": {
+              "enum": ["tracks", "playlists"],
+              "maxLength": 9,
+              "type": "string"
+            },
+            "query": { "maxLength": 200, "minLength": 1, "type": "string" }
+          },
+          "required": ["query", "category"],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text", "voice"],
+        "description": "Show currently visible Spotify library playlists privately. A choice can be used when adding a song.",
+        "id": "playlists",
+        "input": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text", "voice"],
+        "description": "Save the current Spotify song to the library.",
+        "id": "save_current",
+        "input": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text", "voice"],
+        "description": "Create an empty Spotify playlist, then save it as private with the requested name. A failed operation may leave an empty default-named playlist; check Spotify before retrying.",
+        "id": "create_playlist",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "name": { "maxLength": 100, "minLength": 1, "type": "string" }
+          },
+          "required": ["name"],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text", "voice"],
+        "description": "Add a song to a playlist. Supply a song search query; the owner chooses the exact recording privately. A playlist name is optional; omitted names use a private playlist choice. Duplicate playlist names are unsupported.",
+        "id": "add_to_playlist",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "playlistName": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "query": { "maxLength": 200, "minLength": 1, "type": "string" }
+          },
+          "required": ["query"],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      }
+    ],
+    "version": "0.1.0"
+  },
+  "releaseTag": "spotify-local/development-3449c6e4399c",
+  "sourceCommit": "3449c6e4399cde1fd3b2ff43324b4ee81d826755"
+}

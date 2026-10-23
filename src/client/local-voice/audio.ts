@@ -22,6 +22,7 @@ export interface LocalVoiceAudioOptions {
   /** Must synchronously enqueue or reject. HTTP backpressure belongs to the caller. */
   onFrame(frame: CaptureFrame): void;
   onPlayed(frame: PlayedFrame): void;
+  onPlaybackActive?(active: boolean): void;
   onError(error: Error): void;
   onCaptureSettings?(settings: MediaTrackSettings): void;
 }
@@ -300,6 +301,7 @@ export class LocalVoiceAudio {
         if (!this.sources.delete(source)) return;
         source.onended = null;
         source.disconnect();
+        if (!this.sources.size) this.options.onPlaybackActive?.(false);
         if (
           this.stopped ||
           frame.generation !== this.generation ||
@@ -319,6 +321,7 @@ export class LocalVoiceAudio {
       this.sources.add(source);
       const start = Math.max(context.currentTime, this.nextPlaybackTime);
       source.start(start);
+      if (this.sources.size === 1) this.options.onPlaybackActive?.(true);
       this.nextPlaybackTime = start + buffer.duration;
       this.lastSequence = frame.sequence;
       this.allowSequenceGap = false;
@@ -371,6 +374,7 @@ export class LocalVoiceAudio {
   private clearPlayback(): void {
     const sources = [...this.sources];
     this.sources.clear();
+    if (sources.length) this.options.onPlaybackActive?.(false);
     for (const source of sources) {
       source.onended = null;
       try {

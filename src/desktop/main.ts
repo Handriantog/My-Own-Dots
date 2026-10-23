@@ -188,6 +188,7 @@ async function start(): Promise<void> {
         switchingDesktop = false;
       }
     },
+    diagnostics,
   );
   protocol.handle(
     'dots',
@@ -1226,6 +1227,7 @@ async function start(): Promise<void> {
     syncVisibility();
   };
   const resume = () => {
+    workspace.resume();
     osSuspended = false;
     worldKey = '';
     refreshWorld(null);
@@ -1275,8 +1277,7 @@ async function start(): Promise<void> {
     helper.stop();
     void Promise.allSettled([
       savePreferences(),
-      backend.stop(),
-      workspaceShutdown,
+      workspaceShutdown.finally(() => backend.stop()),
     ]).finally(() => {
       tray.destroy();
       settingsWindow?.destroy();

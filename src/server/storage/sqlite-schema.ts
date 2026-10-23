@@ -1,10 +1,14 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { beginSQLiteTransaction } from './sqlite-transaction.js';
+import {
+  initializeAbilitySchema,
+  initializeAbilityManagementSchema,
+} from '../abilities/store.js';
 import { sqliteStorageSchema } from '../../shared/workspace-manifest.js';
 export { sqliteStorageSchema } from '../../shared/workspace-manifest.js';
 export function initializeSQLiteSchema(
   db: DatabaseSync,
-  targetVersion: 2 | 3 = sqliteStorageSchema,
+  targetVersion: 2 | 3 | 4 | 5 = sqliteStorageSchema,
 ) {
   const transaction = beginSQLiteTransaction(db);
   try {
@@ -117,6 +121,18 @@ export function initializeSQLiteSchema(
         CREATE UNIQUE INDEX voice_delegations_active_dot ON voice_delegations(owner_id,dot_id) WHERE status IN ('queued','running','approval');
         CREATE INDEX voice_delegations_parent ON voice_delegations(owner_id,parent_thread_id,created_at);`);
       db.prepare('INSERT INTO workspace_storage_schema VALUES(3,?)').run(
+        Date.now(),
+      );
+    }
+    if (version < 4 && targetVersion >= 4) {
+      initializeAbilitySchema(db);
+      db.prepare('INSERT INTO workspace_storage_schema VALUES(4,?)').run(
+        Date.now(),
+      );
+    }
+    if (version < 5 && targetVersion >= 5) {
+      initializeAbilityManagementSchema(db);
+      db.prepare('INSERT INTO workspace_storage_schema VALUES(5,?)').run(
         Date.now(),
       );
     }

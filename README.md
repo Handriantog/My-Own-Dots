@@ -58,6 +58,29 @@ _Ask Scout to open a website, summarize it, save notes, and verify the file. Eve
 
 Ask a Dot to show a draft before saving it. A CopilotKit human-in-the-loop card pauses the conversation for **Approve & save** or **Decline**. Approval creates the page in an authorized Space and returns a link; retries with the same draft recover that saved page. A changed draft needs a new review. The agent continues after your decision.
 
+### Abilities
+
+Open **Abilities** in the sidebar, below Memory, to search installed Abilities and
+the public GitHub collection. Select a row to read its full README and manage it.
+Released entries offer **Install**; planned and development entries show their
+status. Use **+ → Add Ability** for a GitHub release descriptor or
+**Choose local Ability…**. Review the publisher, sealed package and permissions
+before installing. New installs
+start disabled. **Enable/Disable** controls the workspace master switch and keeps
+each Dot’s selection. **Apply to all Dot** enables it for all existing Dots;
+new Dots stay off. Choose individual Abilities in **Dot settings → Abilities**.
+Approved actions run without repeated prompts, with separate per-Dot settings and
+private state. Disable stops owned work; quitting the desktop stops all workers.
+**Uninstall** asks before removing an Ability from all Dots and keeps its private
+files.
+
+The first host supports confined JavaScript, optional local Python and native
+arm64 executables, with scoped HTTPS, browser OAuth, declared helpers, and
+[Spotify-only local app control](docs/abilities/spotify-local.md). General desktop
+manipulation and printing are future work. Current execution evidence is macOS 26
+Apple Silicon; no Ability release has been published. See [authoring](docs/abilities/authoring.md) and
+[verification](docs/desktop/abilities-verification.md).
+
 ### Connections
 
 Give a Dot tools from any MCP server, such as email, calendar, GitHub, or your own services. Read-only tools run on their own. Any other tool pauses for an **Approve & run** card in chat, and only your approval runs it. You can turn each tool on or off per Dot. See [Connections](docs/CONNECTIONS.md).

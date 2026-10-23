@@ -49,6 +49,8 @@ export interface WorkspaceBackendOptions {
   portableMachineId?: string;
 }
 export interface WorkspaceBackendConnection {
+  workspaceId?: string;
+  abilityRoot?: string;
   url: string;
   ownerToken?: string;
   owned: boolean;
@@ -418,6 +420,7 @@ export class WorkspaceBackend {
         service?: string;
         protocol?: number;
         workspaceId?: string;
+        abilityRoot?: string;
       };
       return value.service === 'my-own-dots' && value.protocol === 1
         ? value
@@ -441,7 +444,8 @@ export class WorkspaceBackend {
     let ownerToken = env.OWNER_TOKEN || undefined;
     if (env.DOTS_WORKSPACE_URL) {
       const url = localUrl(env.DOTS_WORKSPACE_URL);
-      let identified = !!(await this.identity(url, ownerToken));
+      const identity = await this.identity(url, ownerToken);
+      let identified = !!identity;
       if (!identified) {
         try {
           const response = await fetch(`${url}/api/state`, {
@@ -471,7 +475,17 @@ export class WorkspaceBackend {
         );
       if (generation !== this.generation)
         throw new Error('Workspace startup was cancelled.');
-      this.active = { url, ownerToken, owned: false };
+      this.active = {
+        url,
+        ownerToken,
+        owned: false,
+        ...(identity?.workspaceId
+          ? {
+              workspaceId: identity.workspaceId,
+              abilityRoot: identity.abilityRoot,
+            }
+          : {}),
+      };
       this.update('ready', 'Connected to your existing workspace.');
       return this.active;
     }
@@ -486,13 +500,20 @@ export class WorkspaceBackend {
     const workspaceId =
       this.config!.workspaceId ?? workspaceIdentity(this.config!.database);
     if (await portOpen(host, port)) {
-      if ((await this.identity(url, ownerToken))?.workspaceId !== workspaceId)
+      const identity = await this.identity(url, ownerToken);
+      if (identity?.workspaceId !== workspaceId)
         throw new Error(
           'Workspace port is occupied by an unidentified or different service. Stop that service yourself or change PORT; no second runner was started.',
         );
       if (generation !== this.generation)
         throw new Error('Workspace startup was cancelled.');
-      this.active = { url, ownerToken, owned: false };
+      this.active = {
+        url,
+        ownerToken,
+        owned: false,
+        workspaceId,
+        abilityRoot: identity.abilityRoot,
+      };
       this.update('ready', 'Connected to your existing workspace.');
       return this.active;
     }
@@ -591,7 +612,8 @@ export class WorkspaceBackend {
       if (failure) throw failure;
       if (generation !== this.generation)
         throw new Error('Workspace startup was cancelled.');
-      if ((await this.identity(url, ownerToken))?.workspaceId === workspaceId) {
+      const identity = await this.identity(url, ownerToken);
+      if (identity?.workspaceId === workspaceId) {
         if (generation !== this.generation || this.child !== child)
           throw new Error('Workspace startup was cancelled.');
         if (failure || child.exitCode !== null || child.signalCode !== null)
@@ -602,6 +624,8 @@ export class WorkspaceBackend {
           url,
           ownerToken,
           owned: true,
+          workspaceId,
+          abilityRoot: identity.abilityRoot,
           ...(warning ? { warning } : {}),
         };
         this.update(

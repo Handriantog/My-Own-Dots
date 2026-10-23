@@ -135,6 +135,7 @@ export class StorageClient {
       pages: groups.pages,
       computers: groups.computers,
       connections: groups.connections,
+      abilities: groups.abilities,
       folders: groups.folders,
     });
     groups.evidence.indexRun = async (runId: string) => {

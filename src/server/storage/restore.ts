@@ -1,3 +1,5 @@
+import { DatabaseSync } from 'node:sqlite';
+import { restoreAbilityState, abilityStateRemap } from './ability-snapshot.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
   mkdir,
@@ -140,12 +142,28 @@ export class RestoreService {
       const migration = this.options.migration;
       if (
         migration &&
-        (manifest.version !== 1 ||
+        ((manifest.version !== 1 &&
+          !(
+            manifest.version === 3 &&
+            manifest.storage.engine === 'legacy-postgres'
+          )) ||
           manifest.ownerId !== migration.proof.source.ownerId ||
           manifest.workspaceId !== migration.proof.source.workspaceId)
       )
         throw new Error('Migration capture identity changed');
-      const unified = manifest.version === 2 || !!migration;
+      const sqliteArchive =
+        manifest.version === 2 ||
+        (manifest.version === 3 && manifest.storage.engine === 'sqlite');
+      const unified = sqliteArchive || !!migration;
+      const abilityEntries =
+        manifest.version === 3
+          ? manifest.entries.filter((entry) =>
+              entry.path.startsWith('abilities/state/'),
+            )
+          : [];
+      journal.abilityPaths = abilityEntries.map(
+        (entry) => 'snapshot/' + entry.path,
+      );
       journal.storage = unified ? 'sqlite' : 'legacy-postgres';
       if (!unified && !input.postgresTarget)
         throw new Error('Choose a PostgreSQL server for this legacy backup');
@@ -153,11 +171,12 @@ export class RestoreService {
       const expected = [
         'core/workspace.sqlite',
         'recovery/configuration.json',
-        ...(manifest.version === 2
+        ...(sqliteArchive
           ? []
           : Object.keys(POSTGRES_RECORDS).map(
               (table) => `postgres/${table}.jsonl`,
             )),
+        ...abilityEntries.map((entry) => entry.path),
       ];
       if (
         manifest.kind !== 'workspace-backup' ||
@@ -192,7 +211,9 @@ export class RestoreService {
             manifest.ownerId,
             signal,
             unified ? 'sqlite' : 'legacy-postgres',
-            manifest.version === 2 ? manifest.storage.schema : undefined,
+            manifest.version !== 1 && manifest.storage.engine === 'sqlite'
+              ? manifest.storage.schema
+              : undefined,
           );
       const postgres = unified
         ? undefined
@@ -218,6 +239,32 @@ export class RestoreService {
           storage: 'sqlite',
           schema: sqliteStorageSchema,
         });
+      if (manifest.version === 3) {
+        const targetWorkspace =
+          (await readWorkspaceManifest(destination))?.id ??
+          workspaceIdentity(join(destination, 'data/opendots.sqlite'));
+        const db = new DatabaseSync(join(destination, 'data/opendots.sqlite'), {
+          readOnly: true,
+        });
+        let remap: Record<string, string>;
+        try {
+          remap = abilityStateRemap(db, manifest.workspaceId, targetWorkspace);
+        } finally {
+          db.close();
+        }
+        const targets = abilityEntries.map((entry) => {
+          const parts = entry.path.split('/');
+          parts[2] = remap[parts[2]] ?? parts[2];
+          return 'data/' + parts.join('/');
+        });
+        journal.abilityPaths = [...journal.abilityPaths!, ...targets];
+        await saveJournal(this.options.profile, journal);
+        await restoreAbilityState(
+          { version: 1, directory: snapshot, entries: abilityEntries, remap },
+          join(destination, 'data'),
+          signal,
+        );
+      }
       // Only app-generated safe defaults and the explicitly selected target server.
       const quote = (value: string) => {
         if (/[\r\n\0']/.test(value))
@@ -257,6 +304,9 @@ export class RestoreService {
           ? 'recovery/migration-verification.json'
           : 'recovery/access-audit.jsonl',
         ...manifest.entries.map((entry) => 'snapshot/' + entry.path),
+        ...(journal.abilityPaths ?? []).filter((path) =>
+          path.startsWith('data/'),
+        ),
       ])
         journal.files.push({
           path,
@@ -395,6 +445,7 @@ export class RestoreService {
         (table) => `snapshot/postgres/${table}.jsonl`,
       ),
       ...(journal.movement?.targetPaths ?? []),
+      ...(journal.abilityPaths ?? []),
     ]);
     validateArchivePaths([...allowed]);
     const inspect = async (prefix = '') => {

@@ -95,6 +95,8 @@ interface Options {
   request?: typeof fetch;
   stopWorkspace(): Promise<void>;
   afterRestore(): Promise<void>;
+  beforeMaintenance?(): Promise<void>;
+  afterMaintenance?(): Promise<void>;
 }
 const password = z
   .string()
@@ -807,6 +809,7 @@ export class StorageController {
     const controller = new AbortController();
     this.operation = { id, kind, phase: 'queued' };
     const done = Promise.resolve()
+      .then(() => this.options.beforeMaintenance?.())
       .then(() => action(controller.signal))
       .then(
         () => {
@@ -828,8 +831,12 @@ export class StorageController {
       )
       .finally(async () => {
         this.running = undefined;
-        if ((kind === 'migration' || kind === 'move') && !this.preview)
-          await this.resumeMigrationSource();
+        try {
+          if ((kind === 'migration' || kind === 'move') && !this.preview)
+            await this.resumeMigrationSource();
+        } finally {
+          await this.options.afterMaintenance?.();
+        }
         await this.emit().catch(() => {});
       });
     this.running = { controller, done };

@@ -1,3 +1,8 @@
+import { ownerOutcomeSchema } from '../shared/abilities/protocol';
+import {
+  AbilityToolCard,
+  RecentAbilityResults,
+} from './abilities/AbilityResultCard';
 import { MemoryActivity, type MemoryActivityHandle } from './MemoryActivity';
 import { SavedMessages } from './SavedMessages';
 import { useMessageMarks } from './useMessageMarks';
@@ -20,7 +25,7 @@ import { FolderAccessSettings } from './FolderAccessSettings';
 import { contextualMessage, type PageContext } from './page-context';
 import { api } from './api';
 import type { Page } from '../server/pages';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { CopilotKitCoreErrorCode } from '@copilotkit/core';
 import {
   CopilotChatToolCallsView,
@@ -177,6 +182,46 @@ export function Chat({
   const chatError = error || runError;
   const [loaded, setLoaded] = useState(false);
   const [running, setRunning] = useState(false);
+  const [reconnectState, setReconnectState] = useState<
+    'idle' | 'pending' | 'success'
+  >('idle');
+  const connectionAttempt = useRef<
+    { failed: boolean; replayStarted: boolean } | undefined
+  >(undefined);
+  const currentTurn = useRef<
+    { runIds: Set<string>; error?: Error } | undefined
+  >(undefined);
+  const connect = useCallback(
+    async (reconnect = false) => {
+      if (connectionAttempt.current) return;
+      const attempt = { failed: false, replayStarted: false };
+      connectionAttempt.current = attempt;
+      setLoaded(false);
+      if (reconnect) {
+        setError('');
+        setReconnectState('pending');
+      }
+      try {
+        await copilotkit.connectAgent({ agent });
+        if (connectionAttempt.current !== attempt) return;
+        // CopilotKit reports failed connections through onError, then resolves.
+        setLoaded(!attempt.failed);
+        if (reconnect) setReconnectState(attempt.failed ? 'idle' : 'success');
+      } catch (cause) {
+        if (connectionAttempt.current !== attempt) return;
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : 'Conversation could not connect.',
+        );
+        setReconnectState('idle');
+      } finally {
+        if (connectionAttempt.current === attempt)
+          connectionAttempt.current = undefined;
+      }
+    },
+    [agent, copilotkit],
+  );
   const voiceSettings = useRef<VoiceSettingsHandle>(null);
   const voiceRun = useRef<
     | { messageId: string; done?: Promise<unknown>; cancelled: boolean }
@@ -342,8 +387,26 @@ export function Chat({
   }, [waitingForTalk, voiceIntent]);
   useEffect(() => {
     const subscription = copilotkit.subscribe({
-      onError: ({ error, code }) => {
+      onError: ({ error, code, context }) => {
+        if (
+          (context?.agentId && context.agentId !== agent.agentId) ||
+          (context?.threadId && context.threadId !== agent.threadId)
+        )
+          return;
         if (voiceRun.current?.cancelled) return;
+        if (code === CopilotKitCoreErrorCode.AGENT_CONNECT_FAILED) {
+          if (connectionAttempt.current)
+            connectionAttempt.current.failed = true;
+          else setReconnectState('idle');
+          setLoaded(false);
+        }
+        // RUN_ERROR events may be historical replay. Capture those below using
+        // the request's run ID; this code covers failures in SDK result handling.
+        if (
+          code === CopilotKitCoreErrorCode.AGENT_RUN_FAILED &&
+          currentTurn.current
+        )
+          currentTurn.current.error ??= error;
         if (
           code === CopilotKitCoreErrorCode.AGENT_RUN_ERROR_EVENT ||
           code === CopilotKitCoreErrorCode.AGENT_RUN_FAILED_EVENT ||
@@ -354,9 +417,39 @@ export function Chat({
         else setError(error.message);
       },
     });
+    const markReplayStarted = () => {
+      if (connectionAttempt.current)
+        connectionAttempt.current.replayStarted = true;
+    };
     const events = agent.subscribe({
-      onRunErrorEvent: ({ event }) => {
-        if (!voiceRun.current?.cancelled) setRunError(event.message);
+      onRunStartedEvent: ({ event, input }) => {
+        markReplayStarted();
+        // SDK tool follow-ups have new run IDs. Live starts echo their input;
+        // historical replay starts belong to a different request.
+        if (event.runId === input.runId)
+          currentTurn.current?.runIds.add(input.runId);
+      },
+      onMessagesSnapshotEvent: markReplayStarted,
+      onStateSnapshotEvent: markReplayStarted,
+      onRunErrorEvent: ({ event, input }) => {
+        if (voiceRun.current?.cancelled) return;
+        // A connect failure before any replay arrives is a bare RUN_ERROR.
+        // Once replay starts, RUN_ERROR can describe a saved historical turn.
+        if (
+          connectionAttempt.current &&
+          !connectionAttempt.current.replayStarted
+        )
+          connectionAttempt.current.failed = true;
+        if (currentTurn.current?.runIds.has(input.runId))
+          currentTurn.current.error = new Error(event.message);
+        setRunError(event.message);
+      },
+      onRunFailed: ({ error, input }) => {
+        if (
+          !voiceRun.current?.cancelled &&
+          currentTurn.current?.runIds.has(input.runId)
+        )
+          currentTurn.current.error = error;
       },
       onRunFinishedEvent: ({ outcome }) => {
         if (outcome === 'success') setRunError('');
@@ -369,22 +462,11 @@ export function Chat({
   }, [agent, copilotkit]);
   useEffect(() => {
     if (!isReady) return;
-    let active = true;
-    void copilotkit
-      .connectAgent({ agent })
-      .then(() => {
-        if (active) setLoaded(true);
-      })
-      .catch((e) => {
-        if (active)
-          setError(
-            e instanceof Error ? e.message : 'Conversation could not connect.',
-          );
-      });
+    void connect();
     return () => {
-      active = false;
+      connectionAttempt.current = undefined;
     };
-  }, [agent, copilotkit, isReady]);
+  }, [connect, isReady]);
   const send = async (text: string, voiceMessageId?: string) => {
     if (voiceMessageId && voiceMessages.current.has(voiceMessageId)) return;
     // The transport waits for the previous voice promise; React may not have
@@ -398,6 +480,7 @@ export function Chat({
     if (!voiceMessageId && voice.status !== 'idle') return;
     setError('');
     setRunError('');
+    setReconnectState('idle');
     const command =
       localMemory && !voiceMessageId ? parseMemoryCommand(text) : null;
     if (command) {
@@ -433,6 +516,12 @@ export function Chat({
       setSource('');
       setSourceOpen(false);
     }
+    const runId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    const turn = {
+      runIds: new Set([runId]),
+      error: undefined as Error | undefined,
+    };
+    currentTurn.current = turn;
     try {
       const current = voiceMessageId
         ? {
@@ -442,10 +531,11 @@ export function Chat({
           }
         : undefined;
       if (current) voiceRun.current = current;
-      const pending = copilotkit.runAgent({ agent });
+      const pending = copilotkit.runAgent({ agent, runId });
       if (current) current.done = pending;
       const result = await pending;
       if (current?.cancelled) return;
+      if (turn.error) throw turn.error;
       if (!result.newMessages.some((message) => message.role === 'assistant'))
         throw new Error(
           'The current turn returned no response. Check the runtime connection and retry.',
@@ -460,6 +550,7 @@ export function Chat({
       );
       if (voiceMessageId) throw e;
     } finally {
+      if (currentTurn.current === turn) currentTurn.current = undefined;
       if (voiceRun.current?.messageId === voiceMessageId)
         voiceRun.current = undefined;
       setRunning(false);
@@ -566,9 +657,36 @@ export function Chat({
             showScreen={props.toolCallId === latestBrowserCall?.id}
             onExpand={onComputer}
           />
+        ) : props.name.startsWith('ability_') ? (
+          <AbilityToolCard
+            dotId={dot.id}
+            status={props.status}
+            result={props.result}
+            onSelect={(selectionRef) =>
+              send(
+                `Use my selected item for the previous Ability request. Selection reference: ${selectionRef}`,
+              )
+            }
+          />
         ) : null,
     },
     [dot.id, dot.name, running, latestBrowserCall?.id, onComputer],
+  );
+  const abilityHandles = new Set(
+    agent.messages.flatMap((message) => {
+      if (message.role !== 'tool' || typeof message.content !== 'string')
+        return [];
+      try {
+        const result = ownerOutcomeSchema.safeParse(
+          JSON.parse(message.content),
+        );
+        return result.success && result.data.resultRef
+          ? [result.data.resultRef]
+          : [];
+      } catch {
+        return [];
+      }
+    }),
   );
   const visible = agent.messages.filter(
     (message) =>
@@ -579,6 +697,7 @@ export function Chat({
           message.toolCalls?.some(
             (call) =>
               call.function.name.startsWith('computer_') ||
+              call.function.name.startsWith('ability_') ||
               call.function.name === 'COMPOSIO_MANAGE_CONNECTIONS' ||
               call.function.name === pageReviewTool.name ||
               call.function.name === connectionActionTool.name ||
@@ -773,6 +892,16 @@ export function Chat({
               />
             )}
           />
+          <RecentAbilityResults
+            dotId={dot.id}
+            threadId={thread.id}
+            hiddenHandles={abilityHandles}
+            onSelect={(selectionRef) =>
+              send(
+                `Use my selected item for the previous Ability request. Selection reference: ${selectionRef}`,
+              )
+            }
+          />
           {running && (
             <div className="thinking">
               <span />
@@ -821,19 +950,20 @@ export function Chat({
           {chatError || voice.error}
           {chatError && (
             <button
-              onClick={() => {
-                setError('');
-                setRunError('');
-                void copilotkit
-                  .connectAgent({ agent })
-                  .then(() => setLoaded(true))
-                  .catch((e) => setError(e.message));
-              }}
+              disabled={reconnectState === 'pending' || running}
+              onClick={() => void connect(true)}
             >
-              Reconnect
+              {reconnectState === 'pending' ? 'Reconnecting…' : 'Reconnect'}
             </button>
           )}
         </div>
+      )}
+      {reconnectState !== 'idle' && (
+        <p className="chat-compose-note" role="status">
+          {reconnectState === 'pending'
+            ? 'Reconnecting…'
+            : 'Reconnected. Send a message to try again.'}
+        </p>
       )}
       <CallView
         key={voice.status === 'idle' ? 'idle' : 'call'}

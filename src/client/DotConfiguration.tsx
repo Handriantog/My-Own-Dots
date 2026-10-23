@@ -1,13 +1,28 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Brain, Layers, Mic, Plug, SlidersHorizontal, X } from 'lucide-react';
+import {
+  Brain,
+  Layers,
+  Mic,
+  Plug,
+  Sparkles,
+  SlidersHorizontal,
+  X,
+} from 'lucide-react';
 import type { Dot, State, WorkspaceState } from '../shared/types';
 import type { LocalVoiceStatus } from '../shared/local-voice';
 import { Mascot } from './Mascot';
+import { AbilitiesSection } from './abilities/AbilitiesSection';
 import { ConnectionsSection } from './ConnectionsSection';
 import { LocalLearningSettings } from './LocalLearningSettings';
 import { VoiceSettings } from './local-voice/VoiceSettings';
 
 const categories = [
+  {
+    id: 'abilities',
+    label: 'Abilities',
+    icon: Sparkles,
+    description: 'Choose from installed Abilities.',
+  },
   {
     id: 'general',
     label: 'General',
@@ -605,6 +620,18 @@ export function DotConfiguration({
                       Set up Learning ↗
                     </a>
                   </>
+                ),
+              )}
+              {panel(
+                'abilities',
+                dot ? (
+                  visited.has('abilities') && (
+                    <AbilitiesSection dotId={dot.id} dotName={dot.name} />
+                  )
+                ) : (
+                  <p className="dot-config-empty">
+                    Create this Dot to enable installed Abilities.
+                  </p>
                 ),
               )}
               {panel(

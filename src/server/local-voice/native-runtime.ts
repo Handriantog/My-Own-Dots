@@ -419,6 +419,7 @@ export class NativeVoiceRuntime {
       this.platform.memory,
       this.coordinator.jobs,
       this.platform.openWebsite,
+      this.platform.abilities,
     );
     const work = this.run(agent, {
       threadId: job.workerThreadId,

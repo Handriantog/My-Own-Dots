@@ -250,15 +250,15 @@ class Agent extends AbstractAgent {
       events.push(
         {
           type: EventType.TEXT_MESSAGE_START,
-          messageId: 'result',
+          messageId: `result:${i.runId}`,
           role: 'assistant',
         },
         {
           type: EventType.TEXT_MESSAGE_CONTENT,
-          messageId: 'result',
+          messageId: `result:${i.runId}`,
           delta: 'Fixed and verified.',
         },
-        { type: EventType.TEXT_MESSAGE_END, messageId: 'result' },
+        { type: EventType.TEXT_MESSAGE_END, messageId: `result:${i.runId}` },
       );
     events.push({
       type: EventType.RUN_FINISHED,
@@ -314,6 +314,92 @@ it('settles the canonical result and refuses a completed task replay', async () 
   });
   await collect(runner, agent, 'replay', []);
   expect(agent.calls).toBe(1);
+});
+
+it('allows a fresh message after a completed voice task without changing its receipt', async () => {
+  const f = await fixture();
+  await f.jobs.enqueue(f.input);
+  const coordinator = new VoiceDelegationCoordinator(f.jobs, f.conversations);
+  const changed = vi.fn();
+  coordinator.listen(changed);
+  const runner = new LocalAgentRunner(
+    f.conversations,
+    undefined,
+    undefined,
+    coordinator,
+  );
+  cleanup.push(() => runner.close());
+  const agent = new Agent(f.dot.id);
+  await collect(runner, agent, 'work', [
+    { id: 'voice-task:job', role: 'user', content: f.input.request },
+  ]);
+  const completed = await f.jobs.get('job');
+  const parent = await f.conversations.getSnapshot('parent');
+  changed.mockClear();
+  const reply = await collect(runner, agent, 'follow-up', [
+    {
+      id: 'new-message',
+      role: 'user',
+      content: 'Thanks. Can we keep chatting?',
+    },
+  ]);
+  expect(reply.some((event) => event.type === EventType.RUN_ERROR)).toBe(false);
+  expect(agent.calls).toBe(2);
+  expect((await f.conversations.getSnapshot('worker')).messages).toContainEqual(
+    expect.objectContaining({
+      id: 'result:follow-up',
+      role: 'assistant',
+      content: 'Fixed and verified.',
+    }),
+  );
+  expect(await f.jobs.get('job')).toEqual(completed);
+  expect(await f.conversations.getSnapshot('parent')).toEqual(parent);
+  expect(changed).not.toHaveBeenCalled();
+  await collect(runner, agent, 'replay', []);
+  expect(agent.calls).toBe(2);
+});
+
+it('allows only pending approval results from a new follow-up to a completed task', async () => {
+  const f = await fixture();
+  await f.jobs.enqueue(f.input);
+  const coordinator = new VoiceDelegationCoordinator(f.jobs, f.conversations);
+  const runner = new LocalAgentRunner(
+    f.conversations,
+    undefined,
+    undefined,
+    coordinator,
+  );
+  cleanup.push(() => runner.close());
+  await collect(runner, new Agent(f.dot.id), 'work', [
+    { id: 'voice-task:job', role: 'user', content: f.input.request },
+  ]);
+  const completed = await f.jobs.get('job');
+  const approval = new Agent(f.dot.id, true);
+  await collect(runner, approval, 'new-action', [
+    { id: 'new-message', role: 'user', content: 'Please do this new action.' },
+  ]);
+  expect(approval.calls).toBe(1);
+  const continuation = new Agent(f.dot.id);
+  const reply = await collect(runner, continuation, 'new-decision', [
+    {
+      id: 'decision',
+      role: 'tool',
+      toolCallId: 'approval',
+      content: '{"approved":false}',
+    },
+  ]);
+  expect(reply.some((event) => event.type === EventType.RUN_ERROR)).toBe(false);
+  expect(continuation.calls).toBe(1);
+  expect(await f.jobs.get('job')).toEqual(completed);
+  await collect(runner, continuation, 'invented', [
+    {
+      id: 'fake-decision',
+      role: 'tool',
+      toolCallId: 'invented',
+      content: '{"approved":true}',
+    },
+  ]);
+  expect(continuation.calls).toBe(1);
 });
 
 it('keeps approval waiting and fences duplicate or invented continuations', async () => {

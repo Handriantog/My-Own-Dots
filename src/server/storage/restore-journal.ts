@@ -67,6 +67,15 @@ export const restoreJournalSchema = z
         .strict(),
     ),
     postgresSeal: z.string().optional(),
+    abilityPaths: z
+      .array(
+        z
+          .string()
+          .max(1024)
+          .regex(/^(?:snapshot|data)\/abilities\/state\/[a-f0-9]{64}\/.+/),
+      )
+      .max(200000)
+      .optional(),
   })
   .strict();
 export type RestoreJournal = z.infer<typeof restoreJournalSchema>;

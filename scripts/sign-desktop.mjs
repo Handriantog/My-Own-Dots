@@ -66,10 +66,13 @@ export function signDesktopApp(
   if (
     !app.endsWith('.app') ||
     !existsSync(path.join(app, 'Contents/Info.plist')) ||
-    !existsSync(observer)
+    !existsSync(observer) ||
+    !existsSync(
+      path.join(app, 'Contents/Resources/app/native/ability-launcher'),
+    )
   )
     throw new Error(
-      'Desktop signing failed: expected the assembled app and bundled observer.',
+      'Desktop signing failed: expected the assembled app, observer and Ability launcher.',
     );
   const components = [...nestedCode(app), app];
   // Sign inside out, including the observer under Resources (which codesign's

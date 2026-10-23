@@ -1,0 +1,728 @@
+{
+  "asset": {
+    "compressedBytes": 24252,
+    "extractedBytes": 91031,
+    "fileCount": 20,
+    "id": 1,
+    "name": "spotify-0.1.0.dot-ability.tar.gz",
+    "sha256": "672dc437bf767efa974a9f15569770b15baa8b782d083ae080216b041e04619f"
+  },
+  "formatVersion": 1,
+  "manifest": {
+    "apiVersion": 1,
+    "description": "Search Spotify, control your existing player, create private playlists and save songs. Spotify results stay on screen.",
+    "entrypoint": { "path": "src/worker.mjs", "runtime": "javascript" },
+    "formatVersion": 1,
+    "helpers": [],
+    "id": "spotify",
+    "license": "MIT",
+    "name": "Spotify",
+    "notices": [
+      {
+        "id": "terms",
+        "required": true,
+        "text": "# Spotify Ability terms and provider notices\n\nDevelopment version 0.1.0, October 23, 2026.\n\nThis independent, personal-use integration is provided by this repository's\nmaintainer, not Spotify. It is not sponsored, certified or endorsed by Spotify.\nSpotify names, marks, content and services belong to their respective owners.\nResults identify Spotify as their source and link back to the corresponding item.\nThe Ability does not distribute music, download audio or grant rights to content.\n\nOriginal code is licensed under [MIT](LICENSE), including its warranty disclaimer\nand limitation of liability. That source license does not license Spotify's\nservice, content or marks. Your Spotify account and personal developer app remain\nsubject to Spotify's [user terms](https://www.spotify.com/legal/end-user-agreement/),\n[Developer Terms](https://developer.spotify.com/terms), and\n[Developer Policy](https://developer.spotify.com/policy).\n\nUse only an account and developer app you are authorized to connect. Review the\nrequested permissions before installation and browser consent. Actions you request\ncan change playback, playlists and saved songs. Check Spotify after an uncertain\nresult before requesting the action again. Access may be limited or withdrawn by\nSpotify, and features may stop working as its API or account eligibility changes.\n\nThe maintainer is responsible for this Ability; Spotify has no responsibility for\nits support. The maintainer makes no warranties on Spotify's behalf. To the extent\npermitted by law, all implied warranties concerning the Spotify Platform, Service\nand Content are disclaimed, including merchantability, fitness for a particular\npurpose and non-infringement. Do not modify or create derivative works of the\nSpotify Platform, Service or Content, or decompile, reverse-engineer or disassemble\nthem to human-perceivable form, to the extent those restrictions are lawful. These\nprovider restrictions do not change the MIT rights in this Ability's original code. To the extent permitted by applicable law, Spotify disclaims warranties\nrelating to the Ability and is not liable for loss or damage arising from its use.\nSpotify is an intended third-party beneficiary of these terms and the privacy\nnotice, and may directly enforce these terms. Nothing here excludes rights or liabilities that cannot lawfully\nbe excluded. See [PRIVACY.md](PRIVACY.md) for data use and disconnect instructions.\n\nThis version does not offer voice control, games, audio analysis, recommendations,\nAI ingestion of provider results, commercial streaming or a replacement Spotify\nplayer. Do not use the integration to manipulate listening metrics or bypass\nSpotify quotas. These notices are not a claim of Spotify approval or a guarantee\nthat every distribution model satisfies its requirements; release review remains\nthe maintainer's responsibility.\n",
+        "title": "Spotify Ability terms"
+      },
+      {
+        "id": "privacy",
+        "required": false,
+        "text": "# Spotify Ability privacy notice\n\nEffective for development version 0.1.0, October 23, 2026.\n\nThis Ability runs locally within My Own Dots. It requests Spotify playback/device\ninformation, search results and playlists to perform the commands you request.\nIt can control your player, create/edit private playlists and save library items;\nthis worker's library tools accept tracks only. The exact scopes and API routes\nare listed in [ability.json](ability.json) and shown before approval.\n\nDot sends your requested searches and actions to Spotify. Spotify handles these\nunder its [privacy policy](https://www.spotify.com/legal/privacy-policy/).\nGitHub serves the installation package and source. This worker has no analytics,\nadvertising, telemetry, background polling or additional service endpoint.\n\nThe host owns browser authorization and encrypted local credentials. The worker\nreceives neither tokens nor your Spotify password. Your public developer Client\nID is stored as per-Dot configuration. Changing it requires a new connection.\nCredentials are separate for each Dot and are excluded from portable backups.\n\nProvider results are local, owner-only UI data, retained in memory for at most\nten minutes and removed earlier on disconnect/revocation or host shutdown. They\nare not persisted into conversations, model prompts, summaries, memory,\nembeddings, logs, backups or AI speech input. This worker writes no provider\ncatalog or operation journal to disk. The host may persist generic invocation\nreceipts and opaque references to prevent duplicate actions; these contain no\nSpotify response metadata and cannot restore expired private results.\n\nYour own typed requests still follow Dot's configured chat/inference and storage\nbehavior. If you type a song title or playlist name, that user-authored text can\nbe sent to your selected AI provider and saved in your conversation. This notice\ndoes not promise that your own messages are private from the model you use.\n\nUse **Disconnect** in the selected Dot's Ability settings to clear its stored\nSpotify credentials and private results. Remove provider access on Spotify's\n[Apps page](https://www.spotify.com/account/apps/) to revoke the developer app too.\nDisconnecting does not delete playlists or liked songs already saved in Spotify.\nUse Spotify to change those. Disable is not the same as disconnect.\n\nFor source or privacy questions, contact the maintainer through the repository's\n[issue tracker](https://github.com/Handriantog/My-Own-Dot-Abilities/issues).\nNever include tokens, passwords or private Spotify data in an issue.\n",
+        "title": "Spotify Ability privacy notice"
+      }
+    ],
+    "permissions": [
+      {
+        "authorizationUrl": "https://accounts.spotify.com/authorize",
+        "clientIdSetting": "clientId",
+        "id": "spotify-account",
+        "kind": "oauth",
+        "purpose": "Connect Spotify to read playback and playlists, control your player, edit private playlists and save library items.",
+        "resourceOrigin": "https://api.spotify.com",
+        "scopes": [
+          "user-read-playback-state",
+          "user-read-currently-playing",
+          "user-modify-playback-state",
+          "playlist-read-private",
+          "playlist-modify-private",
+          "user-library-modify"
+        ],
+        "tokenUrl": "https://accounts.spotify.com/api/token"
+      },
+      {
+        "account": "spotify-account",
+        "id": "search",
+        "kind": "https",
+        "method": "GET",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "search"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "purpose": "Spotify search.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": { "maximum": 10, "minimum": 1, "type": "integer" },
+            "q": { "maxLength": 300, "minLength": 1, "type": "string" },
+            "type": { "maxLength": 40, "minLength": 1, "type": "string" }
+          },
+          "required": ["q", "type", "limit"],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "id": "playback",
+        "kind": "https",
+        "method": "GET",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "me", "player"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "purpose": "Spotify playback.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "id": "devices",
+        "kind": "https",
+        "method": "GET",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "me", "player", "devices"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "purpose": "Spotify devices.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "id": "currently-playing",
+        "kind": "https",
+        "method": "GET",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "me", "player", "currently-playing"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "purpose": "Spotify currently playing.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "body": {
+          "additionalProperties": false,
+          "properties": {
+            "context_uri": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "uris": {
+              "items": { "maxLength": 100, "minLength": 1, "type": "string" },
+              "maxItems": 40,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "id": "play",
+        "kind": "https",
+        "method": "PUT",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "me", "player", "play"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "purpose": "Spotify play.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {
+            "device_id": { "maxLength": 128, "minLength": 1, "type": "string" }
+          },
+          "required": ["device_id"],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "body": {
+          "additionalProperties": false,
+          "properties": {
+            "device_ids": {
+              "items": { "maxLength": 128, "minLength": 1, "type": "string" },
+              "maxItems": 1,
+              "minItems": 1,
+              "type": "array"
+            },
+            "play": { "enum": [false], "type": "boolean" }
+          },
+          "required": ["device_ids", "play"],
+          "type": "object"
+        },
+        "id": "transfer",
+        "kind": "https",
+        "method": "PUT",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "me", "player"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "purpose": "Spotify transfer.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "id": "pause",
+        "kind": "https",
+        "method": "PUT",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "me", "player", "pause"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "purpose": "Spotify pause.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {
+            "device_id": { "maxLength": 128, "minLength": 1, "type": "string" }
+          },
+          "required": ["device_id"],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "id": "next",
+        "kind": "https",
+        "method": "POST",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "me", "player", "next"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "purpose": "Spotify next.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {
+            "device_id": { "maxLength": 128, "minLength": 1, "type": "string" }
+          },
+          "required": ["device_id"],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "id": "previous",
+        "kind": "https",
+        "method": "POST",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "me", "player", "previous"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "purpose": "Spotify previous.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {
+            "device_id": { "maxLength": 128, "minLength": 1, "type": "string" }
+          },
+          "required": ["device_id"],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "id": "queue",
+        "kind": "https",
+        "method": "POST",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "me", "player", "queue"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "purpose": "Spotify queue.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {
+            "device_id": { "maxLength": 128, "minLength": 1, "type": "string" },
+            "uri": { "maxLength": 100, "minLength": 1, "type": "string" }
+          },
+          "required": ["device_id", "uri"],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "id": "volume",
+        "kind": "https",
+        "method": "PUT",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "me", "player", "volume"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "purpose": "Spotify volume.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {
+            "device_id": { "maxLength": 128, "minLength": 1, "type": "string" },
+            "volume_percent": {
+              "maximum": 100,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": ["device_id", "volume_percent"],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "id": "playlists",
+        "kind": "https",
+        "method": "GET",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "me", "playlists"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "purpose": "Spotify playlists.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": { "maximum": 10, "minimum": 1, "type": "integer" },
+            "offset": { "maximum": 10000, "minimum": 0, "type": "integer" }
+          },
+          "required": ["limit", "offset"],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "id": "playlist",
+        "kind": "https",
+        "method": "GET",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "playlists", { "param": "playlistId" }],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {
+            "playlistId": { "maxLength": 22, "minLength": 22, "type": "string" }
+          },
+          "required": ["playlistId"],
+          "type": "object"
+        },
+        "purpose": "Spotify playlist.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "body": {
+          "additionalProperties": false,
+          "properties": {
+            "collaborative": { "enum": [false], "type": "boolean" },
+            "description": {
+              "maxLength": 300,
+              "minLength": 0,
+              "type": "string"
+            },
+            "name": { "maxLength": 100, "minLength": 1, "type": "string" },
+            "public": { "enum": [false], "type": "boolean" }
+          },
+          "required": ["name", "public", "collaborative"],
+          "type": "object"
+        },
+        "id": "create-playlist",
+        "kind": "https",
+        "method": "POST",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "me", "playlists"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "purpose": "Spotify create playlist.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "body": {
+          "additionalProperties": false,
+          "properties": {
+            "uris": {
+              "items": { "maxLength": 100, "minLength": 1, "type": "string" },
+              "maxItems": 40,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": ["uris"],
+          "type": "object"
+        },
+        "id": "add-items",
+        "kind": "https",
+        "method": "POST",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "playlists", { "param": "playlistId" }, "items"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {
+            "playlistId": { "maxLength": 22, "minLength": 22, "type": "string" }
+          },
+          "required": ["playlistId"],
+          "type": "object"
+        },
+        "purpose": "Spotify add items.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        }
+      },
+      {
+        "account": "spotify-account",
+        "id": "save-tracks",
+        "kind": "https",
+        "method": "PUT",
+        "origin": "https://api.spotify.com",
+        "path": ["v1", "me", "library"],
+        "pathValues": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "purpose": "Save items to your Spotify library; this worker offers track-only tools.",
+        "query": {
+          "additionalProperties": false,
+          "properties": {
+            "uris": { "maxLength": 4000, "minLength": 1, "type": "string" }
+          },
+          "required": ["uris"],
+          "type": "object"
+        }
+      }
+    ],
+    "platforms": ["darwin-arm64"],
+    "publisher": "Handriantog",
+    "settings": {
+      "additionalProperties": false,
+      "properties": {
+        "clientId": { "maxLength": 128, "minLength": 1, "type": "string" }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "source": { "owner": "handriantog", "repository": "my-own-dot-abilities" },
+    "tools": [
+      {
+        "channels": ["text"],
+        "description": "Search Spotify. Results and choices appear privately on screen.",
+        "id": "search",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": { "maximum": 10, "minimum": 1, "type": "integer" },
+            "query": { "maxLength": 300, "minLength": 1, "type": "string" },
+            "types": {
+              "items": {
+                "enum": ["track", "artist", "album", "playlist"],
+                "maxLength": 8,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxItems": 4,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": ["query"],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text"],
+        "description": "Show playback and available devices privately on screen.",
+        "id": "playback",
+        "input": {
+          "additionalProperties": false,
+          "properties": {},
+          "required": [],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text"],
+        "description": "Play a query, supplied Spotify URI/list, or privately selected result; omit targets to resume. Only name a device when explicitly requested.",
+        "id": "play",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "artist": { "maxLength": 200, "minLength": 1, "type": "string" },
+            "device": { "maxLength": 200, "minLength": 1, "type": "string" },
+            "query": { "maxLength": 300, "minLength": 1, "type": "string" },
+            "uri": { "maxLength": 100, "minLength": 1, "type": "string" },
+            "uris": {
+              "items": { "maxLength": 100, "minLength": 1, "type": "string" },
+              "maxItems": 40,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text"],
+        "description": "Pause the active device or an explicitly named device.",
+        "id": "pause",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "device": { "maxLength": 200, "minLength": 1, "type": "string" }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text"],
+        "description": "Go to the next or previous track on the active or explicitly named device.",
+        "id": "skip",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "device": { "maxLength": 200, "minLength": 1, "type": "string" },
+            "direction": {
+              "enum": ["next", "previous"],
+              "maxLength": 8,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text"],
+        "description": "Queue one track from a query, supplied URI or private selection.",
+        "id": "queue",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "artist": { "maxLength": 200, "minLength": 1, "type": "string" },
+            "device": { "maxLength": 200, "minLength": 1, "type": "string" },
+            "query": { "maxLength": 300, "minLength": 1, "type": "string" },
+            "uri": { "maxLength": 100, "minLength": 1, "type": "string" }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text"],
+        "description": "Set volume from 0 to 100 on the active or explicitly named device.",
+        "id": "volume",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "device": { "maxLength": 200, "minLength": 1, "type": "string" },
+            "percent": { "maximum": 100, "minimum": 0, "type": "integer" }
+          },
+          "required": ["percent"],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text"],
+        "description": "Show private playlist choices. Use a selected continuation to see the next page.",
+        "id": "playlists",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": { "maximum": 10, "minimum": 1, "type": "integer" }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text"],
+        "description": "Create a private playlist, optionally adding supplied track URIs, one resolved query or a private selection. Resolve choices before creating; never retry an uncertain creation.",
+        "id": "create_playlist",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "artist": { "maxLength": 200, "minLength": 1, "type": "string" },
+            "description": {
+              "maxLength": 300,
+              "minLength": 0,
+              "type": "string"
+            },
+            "name": { "maxLength": 100, "minLength": 1, "type": "string" },
+            "query": { "maxLength": 300, "minLength": 1, "type": "string" },
+            "uris": {
+              "items": { "maxLength": 100, "minLength": 1, "type": "string" },
+              "maxItems": 40,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": ["name"],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text"],
+        "description": "Add supplied track URIs, one resolved query or a private selection to a writable private playlist. Specify a supplied playlist URI or playlist name.",
+        "id": "add_to_playlist",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "artist": { "maxLength": 200, "minLength": 1, "type": "string" },
+            "playlistName": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "playlistUri": {
+              "maxLength": 100,
+              "minLength": 1,
+              "type": "string"
+            },
+            "query": { "maxLength": 300, "minLength": 1, "type": "string" },
+            "uris": {
+              "items": { "maxLength": 100, "minLength": 1, "type": "string" },
+              "maxItems": 40,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      },
+      {
+        "channels": ["text"],
+        "description": "Save supplied track URIs, one resolved query or a privately selected track to Liked Songs.",
+        "id": "save_tracks",
+        "input": {
+          "additionalProperties": false,
+          "properties": {
+            "artist": { "maxLength": 200, "minLength": 1, "type": "string" },
+            "query": { "maxLength": 300, "minLength": 1, "type": "string" },
+            "uris": {
+              "items": { "maxLength": 100, "minLength": 1, "type": "string" },
+              "maxItems": 40,
+              "minItems": 1,
+              "type": "array"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "output": { "type": "null" },
+        "visibility": "owner-only"
+      }
+    ],
+    "version": "0.1.0"
+  },
+  "releaseTag": "spotify/development-89573743f1be",
+  "sourceCommit": "89573743f1be4accd4e1a643fcae1fb960b72a7e"
+}

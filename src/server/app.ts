@@ -20,6 +20,7 @@ import { VoiceService } from './voice.js';
 import { workspaceRoutes } from './workspace-routes.js';
 import { localVoiceRoutes } from './local-voice/routes.js';
 import type { LocalVoiceService } from './local-voice/service.js';
+import { abilityRoutes } from './abilities/routes.js';
 const interval = z.number().int().min(60).max(31_536_000).nullable();
 export interface AppOptions {
   store: StoreRepository;
@@ -44,6 +45,8 @@ export function createApp({
   snapshots,
 }: AppOptions) {
   const app = new Hono();
+  if (platform?.abilityHost)
+    app.route('/ability-host/v1', platform.abilityHost.routes(ownerToken));
   app.use(
     '/api/*',
     bodyLimit({
@@ -130,6 +133,14 @@ export function createApp({
     await maintenance.runWrite(c.req.raw.signal, next, { background: read });
   });
   if (snapshots && ownerToken) app.route('/api', snapshotRoutes(snapshots));
+  if (platform?.abilities)
+    app.route(
+      '/api',
+      abilityRoutes(
+        platform.abilities,
+        Boolean(ownerToken && ownerToken.length >= 24),
+      ),
+    );
   if (platform) app.route('/api', computerRoutes(platform.computers));
   app.route('/api', localVoiceRoutes(localVoice));
   if (platform?.workspace?.folders)

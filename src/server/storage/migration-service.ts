@@ -73,6 +73,8 @@ export class MigrationService {
     return new LegacySnapshotSource({
       ...source,
       gate: new MaintenanceGate(),
+      // Both callers stopped the desktop/backend and hold the source ownership claim.
+      quiesceAbilities: async () => async () => {},
       owned: true,
       conversationBackend: 'local',
     }).capture(directory, signal);

@@ -1,3 +1,4 @@
+import { invalidateAbilityTrust } from './ability-snapshot.js';
 import { createHash, randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -389,9 +390,11 @@ export async function migrateLegacySnapshot(options: {
       };
       counts[table] = after.count;
     }
-    // Preserve definitions, approval evidence and credentials on the same machine.
+    // Preserve ordinary integration definitions and credentials on the same
+    // machine. Ability execution consent never follows a relocated workspace.
     // Pause automation and fence interrupted operations without replaying effects.
     db.exec('BEGIN');
+    invalidateAbilityTrust(db);
     for (const table of [
       'settings',
       'tasks',

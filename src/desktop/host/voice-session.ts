@@ -14,6 +14,7 @@ export class CompanionVoiceSession {
   private static sessions = new Set<CompanionVoiceSession>();
   private available = false;
   private callId: string | null = null;
+  private playbackDot: string | null = null;
   private stoppingId: string | null = null;
   private endedId: string | null = null;
   private stopTimer: ReturnType<typeof setTimeout> | null = null;
@@ -32,6 +33,7 @@ export class CompanionVoiceSession {
       active(value: boolean): void;
       ready(value: boolean): void;
       state?(value: CompanionVoiceState): void;
+      playback?(dotId: string, active: boolean): void;
       reviewFolders?(): void;
       error?(message: string): void;
       canStart?(): boolean;
@@ -103,6 +105,19 @@ export class CompanionVoiceSession {
         throw new Error('Invalid voice phase');
       this.changed.state?.(data.phase as CompanionVoiceState);
     });
+    ipcMain.handle(`${this.channel}:playback`, (event, value: unknown) => {
+      this.requireTrusted(event);
+      const data = value as { callId?: unknown; active?: unknown } | null;
+      if (
+        !data ||
+        !this.callId ||
+        data.callId !== this.callId ||
+        typeof data.active !== 'boolean'
+      )
+        throw new Error('Invalid voice playback');
+      if (this.playbackDot)
+        this.changed.playback?.(this.playbackDot, data.active);
+    });
     ipcMain.handle(`${this.channel}:error`, (event, value: unknown) => {
       this.requireTrusted(event);
       if (typeof value !== 'string' || value.length > 500)
@@ -124,11 +139,12 @@ export class CompanionVoiceSession {
       this.requireCanStart();
       const data =
         typeof value === 'object' && value !== null
-          ? (value as { callId?: unknown; quality?: unknown })
+          ? (value as { callId?: unknown; quality?: unknown; dotId?: unknown })
           : undefined;
       if (data && !['basic', 'medium'].includes(String(data.quality)))
         throw new Error('Invalid voice quality');
       const callId = this.validId(data ? data.callId : value);
+      const dotId = data?.dotId === undefined ? null : this.validId(data.dotId);
       if (
         [...CompanionVoiceSession.sessions].some(
           (session) => session !== this && session.engaged,
@@ -147,6 +163,7 @@ export class CompanionVoiceSession {
       if (this.callId || this.endedId === callId)
         throw new Error('Invalid active call');
       this.callId = callId;
+      this.playbackDot = data?.quality === 'basic' ? null : dotId;
       if (data?.quality === 'basic') {
         // Reveal this renderer's selected conversation; no cross-window handoff.
         window.show();
@@ -167,6 +184,7 @@ export class CompanionVoiceSession {
         throw new Error('Invalid active call');
       if (this.callId === callId) {
         this.talkUntil = 0;
+        this.releasePlayback();
         this.callId = null;
         this.windowless = false;
         this.starting = false;
@@ -342,6 +360,7 @@ export class CompanionVoiceSession {
 
   /** Revoke before asking the renderer to release tracks and acknowledge via end. */
   stop(reason: string): void {
+    this.releasePlayback();
     this.talkUntil = 0;
     this.starting = false;
     this.windowless = false;
@@ -368,6 +387,7 @@ export class CompanionVoiceSession {
 
   /** Navigation destroys capture itself; do not reload a newly loaded page. */
   reset(): void {
+    this.releasePlayback();
     this.talkUntil = 0;
     this.starting = false;
     this.windowless = false;
@@ -378,6 +398,11 @@ export class CompanionVoiceSession {
     this.callId = null;
     this.clearStop();
     this.setReady(false);
+  }
+
+  private releasePlayback(): void {
+    if (this.playbackDot) this.changed.playback?.(this.playbackDot, false);
+    this.playbackDot = null;
   }
 
   private clearStop(): void {
@@ -398,6 +423,7 @@ export class CompanionVoiceSession {
       'begin',
       'end',
       'phase',
+      'playback',
       'review-folders',
       'error',
     ])

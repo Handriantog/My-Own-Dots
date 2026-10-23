@@ -1,4 +1,5 @@
 import type { WebConfig } from './parallel.js';
+import { memoryDefaults } from './memory-config.js';
 import type { SetupStatus } from '../shared/types.js';
 
 // `copilotkit project select` writes the CLI name and deletes the template name.
@@ -37,8 +38,14 @@ export function localAiConfigFromEnv(
     localDatabaseUrl: env.LOCAL_DATABASE_URL?.trim() || undefined,
     llmProvider: env.LLM_PROVIDER?.trim() || 'codex',
     subscriptionModel: env.LLM_MODEL?.trim() || undefined,
-    memoryInputTokenLimit: memoryLimit(env.MEMORY_INPUT_TOKEN_LIMIT, 24000),
-    memoryPinnedTokenLimit: memoryLimit(env.MEMORY_PINNED_TOKEN_LIMIT, 2000),
+    memoryInputTokenLimit: memoryLimit(
+      env.MEMORY_INPUT_TOKEN_LIMIT,
+      memoryDefaults.inputTokenLimit,
+    ),
+    memoryPinnedTokenLimit: memoryLimit(
+      env.MEMORY_PINNED_TOKEN_LIMIT,
+      memoryDefaults.pinnedTokenLimit,
+    ),
   };
 }
 
@@ -122,6 +129,7 @@ export interface PlatformConfig extends WebConfig, LocalAiConfig {
   slackDotId?: string;
   runtimeUrl: string;
   ownerToken?: string;
+  workspaceId?: string;
 }
 export function setupStatus(
   config: PlatformConfig,

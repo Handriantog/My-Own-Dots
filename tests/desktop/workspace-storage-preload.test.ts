@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import type { DesktopStorageBridge } from '../../src/desktop/shared/storage-contract.js';
+import type { DesktopAbilities } from '../../src/shared/abilities/desktop.js';
 const host = vi.hoisted(() => ({
   trusted: true,
   exposed: new Map<string, unknown>(),
@@ -61,4 +62,59 @@ it('requires a user gesture for storage actions and sends no chooser paths', asy
     'dot:storage:chooseBackupDirectory',
     undefined,
   );
+});
+it('exposes Abilities only to a trusted bundled frame and requires a gesture for consent', async () => {
+  await import('../../src/desktop/workspace-preload.js');
+  const bridge = host.exposed.get('dotAbilities') as DesktopAbilities;
+  expect(bridge).toBeDefined();
+  vi.stubGlobal('navigator', { userActivation: { isActive: false } });
+  expect(await bridge.teach({ dotId: 'dot', reviewId: 'fixture' })).toEqual({
+    ok: false,
+    code: 'permission_denied',
+  });
+  expect(host.invoke).not.toHaveBeenCalled();
+  vi.resetModules();
+  host.exposed.clear();
+  vi.stubGlobal('location', new URL('https://example.com/'));
+  await import('../../src/desktop/workspace-preload.js');
+  expect(host.exposed.has('dotAbilities')).toBe(false);
+});
+it('refreshes the Ability catalog without activation while installation and assignment require a gesture', async () => {
+  await import('../../src/desktop/workspace-preload.js');
+  const bridge = host.exposed.get('dotAbilities') as DesktopAbilities;
+  vi.stubGlobal('navigator', { userActivation: { isActive: false } });
+  await bridge.catalog({});
+  expect(host.invoke).toHaveBeenCalledExactlyOnceWith(
+    'dot:abilities:catalog',
+    {},
+  );
+  host.invoke.mockClear();
+  const denied = { ok: false, code: 'permission_denied' };
+  expect(await bridge.install({ reviewId: 'fixture' })).toEqual(denied);
+  expect(await bridge.master({ digest: 'fixture', enabled: true })).toEqual(
+    denied,
+  );
+  expect(await bridge.applyAll({ digest: 'fixture' })).toEqual(denied);
+  expect(
+    await bridge.assign({ dotId: 'dot', digest: 'fixture', enabled: true }),
+  ).toEqual(denied);
+  expect(host.invoke).not.toHaveBeenCalled();
+});
+
+it('allows public discovery and fixed documentation reads without granting install or removal activation', async () => {
+  await import('../../src/desktop/workspace-preload.js');
+  const bridge = host.exposed.get('dotAbilities') as DesktopAbilities;
+  vi.stubGlobal('navigator', { userActivation: { isActive: false } });
+  await bridge.browse({});
+  expect(host.invoke).toHaveBeenCalledWith('dot:abilities:browse', {});
+  await bridge.documentation({ source: 'installed', digest: 'a'.repeat(64) });
+  expect(host.invoke).toHaveBeenCalledWith('dot:abilities:documentation', {
+    source: 'installed',
+    digest: 'a'.repeat(64),
+  });
+  host.invoke.mockClear();
+  expect(
+    await bridge.uninstall({ digest: 'a'.repeat(64), removeFromDots: true }),
+  ).toEqual({ ok: false, code: 'permission_denied' });
+  expect(host.invoke).not.toHaveBeenCalled();
 });
