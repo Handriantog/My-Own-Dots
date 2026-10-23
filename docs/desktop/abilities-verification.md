@@ -630,3 +630,33 @@ across 242 files against a dedicated PostgreSQL test database. Format, lint,
 typecheck, production/desktop builds and 31+17 speech checks pass. Independent
 review reported no remaining findings. Packaged owner acceptance and remote
 push/pull-request results are tracked separately in the draft PR.
+
+## Spotify permissions and selection continuation — October 23, 2026
+
+The owner confirmed the context-capacity error is resolved. Spotify search then
+returned `permission_denied` from the native Accessibility check. System Settings
+still displayed an enabled entry for an older development build, while the
+running app reported Accessibility unavailable. With owner authorization and
+Touch ID approval, the stale entry was replaced with the current app. Desktop
+health then reported access available, and a real typed request returned private
+playlist search results successfully.
+
+Selecting a result exposed a separate instruction bug: the model called search
+again with the issued selection reference and returned another selection card.
+The host already permits a selection to move between tools within the same
+Ability authority scope, and the Spotify worker's Play accepts the selected URI.
+The global instruction incorrectly required every selection to repeat its
+originating tool. It now distinguishes chosen search results, which feed the requested action,
+from list pagination or disambiguation inside an action, which resumes the same
+tool. Review caught and preserved the Web API Ability’s list pagination. Private provider content and authorization checks are unchanged.
+
+The live repeated-search trace is the failing behavior check; a text-matching
+unit test would not establish model routing. The context-budget fixture now
+checks that an explicit smaller limit rejects before invocation without assuming
+which short exchange crosses it. The longer instruction moved this boundary
+earlier; the first run passed 2,113 tests and failed only that brittle assertion
+(one existing signing-identity skip). The final full suite passed **2,114 tests, one existing signing-identity skip**,
+with format/lint/types/build/speech checks and relocated signed-app
+native/JavaScript/Python/Spotify-helper smoke. Independent review reported no
+remaining findings. Packaged live continuation results are recorded in the draft
+PR.

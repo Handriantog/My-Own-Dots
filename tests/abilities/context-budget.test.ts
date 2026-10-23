@@ -141,6 +141,7 @@ it.each([
         usage: {},
       };
     });
+    let capacityRejected = false;
     for (const content of [
       'Hello.',
       'Can you play a song from my playlist?',
@@ -164,7 +165,7 @@ it.each([
           })
           .pipe(toArray()),
       );
-      if (!allowed && content.startsWith('Please')) {
+      if (!allowed && events.some((event) => event.type === 'RUN_ERROR')) {
         expect(events).toContainEqual(
           expect.objectContaining({
             type: 'RUN_ERROR',
@@ -172,6 +173,7 @@ it.each([
           }),
         );
         expect(invocations).toEqual([]);
+        capacityRejected = true;
         break;
       }
       expect(events.filter((event) => event.type === 'RUN_ERROR')).toEqual([]);
@@ -179,6 +181,7 @@ it.each([
         events.some((event) => event.type === 'TEXT_MESSAGE_CONTENT'),
       ).toBe(true);
     }
+    expect(capacityRejected).toBe(!allowed);
     if (allowed) {
       expect(invocations).toHaveLength(1);
       expect(invocations[0]).toMatchObject({
