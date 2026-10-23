@@ -18,6 +18,14 @@ export type {
   AbilityErrorCode,
 } from './protocol.js';
 
+export type {
+  ActivityDefinition,
+  ActivityCommand,
+  ActivityStatus,
+  ActivityDriver,
+} from './activity.js';
+export type { AbilityIcon } from './icon.js';
+
 export interface InstallReview {
   id: string;
   descriptor: ReleaseDescriptor;
@@ -66,6 +74,7 @@ export interface InvocationContext {
   tool: string;
   threadId: string;
   channel?: 'text' | 'voice';
+  interactive?: boolean;
 }
 export interface InvocationRequest {
   context: InvocationContext;

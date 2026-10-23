@@ -1,5 +1,11 @@
 # Ability worker protocol — API 1
 
+Optional manifest activities, package-owned icons and interactive-only tools are
+additive API/format version 1 fields. Workers still initialize with API version 1.
+These capabilities require an updated host: older hosts reject the unfamiliar
+manifest fields rather than granting partial access. JSON Schema validates field
+shapes; the host also validates path geometry, keyframe continuity and grants.
+
 Use UTF-8, newline-delimited JSON-RPC 2.0 on stdin/stdout. Each frame is at most
 1 MiB including all content; stdout is protocol only. Diagnostics on stderr are
 bounded by the host. IDs are strings of 1–128 ASCII letters, digits, underscores,
@@ -85,6 +91,14 @@ provider responses are still HTTP responses; never expose their raw bodies to AI
 through an owner-only tool. Credentials are injected by the host, never returned.
 
 Other requests use the same envelope:
+
+- Companion activity: `{"kind":"companion-activity","ruleId":"motion","command":{"action":"start","activityId":"orbit"}}`.
+  Actions are `start`, `stop` and `status`. A successful reply is
+  `{"ok":true,"kind":"companion-activity","status":"running"}`; status is
+  `inactive`, `approaching`, `running` or `paused`. The named permission must
+  reference the manifest's bounded activity definition and grant its pointer and
+  keep-awake effects. Desktop activity tools require an explicit owner turn;
+  workers cannot supply trusted interactive authority or inline motion code.
 
 - App control: `{"kind":"app-control","ruleId":"playback","command":{"action":"pause"}}`.
   The command must match the named permission's allowed actions. Result is

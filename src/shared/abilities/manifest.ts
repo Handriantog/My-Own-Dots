@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import { abilityLimits, assertBoundedJson } from './limits.js';
 import { appActionSchema, spotifyApplication } from './app-control.js';
+import { identifier } from './identifier.js';
+import { activityDefinitionSchema } from './activity.js';
+import { abilityIconSchema } from './icon.js';
+export { identifier } from './identifier.js';
 
 export type JsonValue =
   null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
@@ -22,11 +26,6 @@ export type LimitedSchema =
       additionalProperties: false;
     };
 
-export const identifier = z
-  .string()
-  .min(1)
-  .max(64)
-  .regex(/^[a-z][a-z0-9_-]*$/);
 const field = z
   .string()
   .min(1)
@@ -180,6 +179,13 @@ export function validAppControlVisibility(manifest: {
 export const permissionSchema = z.discriminatedUnion('kind', [
   z.strictObject({
     ...permissionBase,
+    kind: z.literal('companion-activity'),
+    activities: z.array(identifier).min(1).max(8).refine(unique),
+    pointer: z.boolean(),
+    keepAwake: z.enum(['none', 'system', 'display']),
+  }),
+  z.strictObject({
+    ...permissionBase,
     kind: z.literal('app-control'),
     application: z.literal(spotifyApplication),
     actions: z.array(appActionSchema).min(1).max(14).refine(unique),
@@ -238,6 +244,8 @@ export const manifestSchema = z
     apiVersion: z.literal(1),
     id: identifier,
     name: z.string().min(1).max(100),
+    icon: abilityIconSchema.optional(),
+    activities: z.array(activityDefinitionSchema).min(1).max(8).optional(),
     description: text,
     publisher: z.string().min(1).max(100),
     source: sourceSchema,
@@ -275,6 +283,7 @@ export const manifestSchema = z
           input: objectSchema,
           output: schema,
           visibility: z.enum(['owner-only', 'model-visible']),
+          execution: z.literal('interactive').optional(),
           channels: z
             .array(z.enum(['text', 'voice']))
             .min(1)
@@ -295,7 +304,12 @@ export const manifestSchema = z
       });
     const bad = () =>
       ctx.addIssue({ code: 'custom', message: 'Invalid Ability references' });
-    for (const list of [manifest.helpers, manifest.tools, manifest.permissions])
+    for (const list of [
+      manifest.helpers,
+      manifest.tools,
+      manifest.permissions,
+      manifest.activities ?? [],
+    ])
       if (!unique(list.map((item) => item.id))) bad();
     if (
       manifest.notices &&
@@ -303,6 +317,26 @@ export const manifestSchema = z
     )
       bad();
     for (const permission of manifest.permissions) {
+      if (permission.kind === 'companion-activity') {
+        if (!manifest.tools.every((tool) => tool.execution === 'interactive'))
+          ctx.addIssue({
+            code: 'custom',
+            message: 'Companion activities require interactive tools',
+          });
+        for (const id of permission.activities) {
+          const activity = manifest.activities?.find(
+            (definition) => definition.id === id,
+          );
+          if (
+            !activity ||
+            (activity.pointer && !permission.pointer) ||
+            (activity.keepAwake === 'display' &&
+              permission.keepAwake !== 'display') ||
+            (activity.keepAwake === 'system' && permission.keepAwake === 'none')
+          )
+            bad();
+        }
+      }
       if (
         permission.kind === 'helper' &&
         !manifest.helpers.some((helper) => helper.id === permission.helperId)

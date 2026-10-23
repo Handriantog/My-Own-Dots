@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { abilityIconSchema } from '../../../shared/abilities/icon.js';
 import {
   fetchGitHub,
   type GitHubFetch,
@@ -16,6 +17,7 @@ const version = z.string().regex(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
 const entry = z
   .strictObject({
     id: libraryIdSchema,
+    icon: abilityIconSchema.optional(),
     name: z.string().min(1).max(200),
     path: z.string().max(200),
     status: z.enum(['planned', 'development', 'released']),
@@ -89,6 +91,7 @@ export class GitHubAbilityLibrary {
       sourceCommit: sha,
       entries: catalog.abilities.map((e) => ({
         id: e.id,
+        ...(e.icon ? { icon: e.icon } : {}),
         name: e.name,
         publisher: 'Handriantog',
         license: e.license,

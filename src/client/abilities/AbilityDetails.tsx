@@ -7,6 +7,7 @@ import type {
 import type { AbilityLibraryEntry } from '../../shared/abilities/library';
 import { AbilityMarkdown } from './AbilityMarkdown';
 import { permissionSummary, type AbilityReview } from './PermissionReview';
+import type { AbilityIcon as IconMetadata } from '../../shared/abilities/icon';
 import { unwrap } from './AbilityHostStatus';
 
 export type AbilitySelection =
@@ -21,13 +22,37 @@ export function abilitySummary(description: string): string {
     .trim()
     .slice(0, 180);
 }
-export function AbilityIcon({ large = false }: { large?: boolean }) {
+export function AbilityIcon({
+  icon,
+  large = false,
+}: {
+  icon?: IconMetadata;
+  large?: boolean;
+}) {
   return (
     <span
       className={`ability-icon${large ? ' ability-icon-large' : ''}`}
       aria-hidden="true"
+      style={
+        icon
+          ? { backgroundColor: icon.background, color: icon.foreground }
+          : undefined
+      }
     >
-      <Puzzle size={large ? 44 : 24} strokeWidth={1.5} />
+      {icon ? (
+        <svg
+          viewBox="0 0 24 24"
+          width={large ? 64 : 30}
+          height={large ? 64 : 30}
+          fill="currentColor"
+        >
+          {icon.paths.map((path, index) => (
+            <path key={index} d={path} />
+          ))}
+        </svg>
+      ) : (
+        <Puzzle size={large ? 44 : 24} strokeWidth={1.5} />
+      )}
     </span>
   );
 }
@@ -97,7 +122,7 @@ export function AbilityDetails({
         Back to Abilities
       </button>
       <header className="ability-detail-header">
-        <AbilityIcon large />
+        <AbilityIcon icon={manifest?.icon ?? entry?.icon} large />
         <div className="ability-detail-title">
           <h1>{name}</h1>
           <div className="ability-publisher">
