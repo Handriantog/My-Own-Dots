@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createApp } from '../src/server/app.js';
+import { DotAgent } from '../src/server/dot-agent.js';
 import { Platform } from '../src/server/platform.js';
 import { Runner } from '../src/server/runner.js';
 import { StorageClient } from '../src/server/storage/storage-client.js';
@@ -63,6 +64,7 @@ it.skipIf(!existsSync(python))(
         voiceName: 'marin',
         slackUsers: [],
         webSearchProvider: 'disabled',
+        workspaceId: randomUUID(),
       },
       { storage },
     );
@@ -100,6 +102,9 @@ it.skipIf(!existsSync(python))(
     cleanup.push(async () => unsubscribe());
     const requested = vi.spyOn(workspace.folders, 'request');
     const read = vi.spyOn(workspace.folders, 'readFile');
+    const parentContext = vi.spyOn(jobs, 'threadContext');
+    const pageScope = vi.spyOn(workspace.pages, 'forThread');
+    const abilityExposure = vi.spyOn(platform.abilities!, 'tools');
     const turn = (text: string) =>
       platform.nativeVoice!.turn({
         callId: call.id,
@@ -263,6 +268,78 @@ it.skipIf(!existsSync(python))(
         content: expect.stringContaining(secondContent),
       }),
     );
+
+    // A completed worker becomes an ordinary chat, without extending the old
+    // voice job's scope, changing its receipt, or treating typed input as voice.
+    expect(parentContext).toHaveBeenCalledWith(parent.id, dot.id);
+    expect(abilityExposure.mock.calls.length).toBeGreaterThan(0);
+    expect(
+      abilityExposure.mock.calls.every(([, mode]) => mode === 'voice'),
+    ).toBe(true);
+    const savedJob = await jobs.get(firstJob.id);
+    const savedParent = await platform.localConversations!.getSnapshot(
+      parent.id,
+    );
+    const savedWorker = await platform.localConversations!.getSnapshot(
+      firstJob.workerThreadId,
+    );
+    parentContext.mockClear();
+    pageScope.mockClear();
+    abilityExposure.mockClear();
+    await new DotAgent(
+      store,
+      workspace,
+      platform.config,
+      dot.id,
+      false,
+      undefined,
+      undefined,
+      jobs,
+    ).evidenceGuard(firstJob.workerThreadId);
+    expect(pageScope).toHaveBeenCalledWith(firstJob.workerThreadId);
+    expect(pageScope).not.toHaveBeenCalledWith(parent.id);
+
+    const followupRunId = randomUUID();
+    const followup = await app.request(
+      `/api/copilotkit/agent/${dot.id}/run`,
+      post({
+        threadId: firstJob.workerThreadId,
+        runId: followupRunId,
+        messages: [
+          ...savedWorker.messages,
+          { id: randomUUID(), role: 'user', content: 'Hello from this chat.' },
+        ],
+        state: savedWorker.state,
+        tools: delegatedApprovalTools,
+        context: [],
+        forwardedProps: {},
+      }),
+    );
+    expect(followup.status).toBe(200);
+    const followupEvents = await followup.text();
+    expect(followupEvents).not.toContain('RUN_ERROR');
+    expect(followupEvents).toContain('Offline provider completed');
+    const afterFollowup = await platform.localConversations!.getSnapshot(
+      firstJob.workerThreadId,
+    );
+    expect(afterFollowup.lastRun).toMatchObject({
+      runId: followupRunId,
+      status: 'finished',
+    });
+    expect(afterFollowup.messages).toContainEqual(
+      expect.objectContaining({
+        role: 'assistant',
+        content: expect.stringContaining('Offline provider completed'),
+      }),
+    );
+    expect(await jobs.get(firstJob.id)).toEqual(savedJob);
+    expect(await platform.localConversations!.getSnapshot(parent.id)).toEqual(
+      savedParent,
+    );
+    expect(parentContext).not.toHaveBeenCalled();
+    expect(pageScope).not.toHaveBeenCalledWith(parent.id);
+    expect(abilityExposure).toHaveBeenCalledWith(dot.id, 'text');
+    expect(abilityExposure).not.toHaveBeenCalledWith(dot.id, 'voice');
   },
   30000,
 );

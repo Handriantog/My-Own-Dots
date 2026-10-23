@@ -555,3 +555,40 @@ The rebuilt package’s first offline Spotify-helper validation hit its five-sec
 process deadline. The unchanged smoke command passed on rerun; no timeout or
 assertion was relaxed. Final UI reattachment through computer use is tracked
 separately from this automated result.
+
+## Completed voice-task chat recovery — October 23, 2026
+
+The reported immediate “current turn returned no response” occurred when typing
+into a completed **Voice task** conversation. Read-only inspection confirmed its
+completed delegation, with no new persisted run. The coordinator rejected every
+later request before recording a run, including a fresh owner message. A
+separate disposable completed-task fixture reproduced the same rejection through
+the full Chrome chat screen and packaged backend.
+
+Completed tasks now accept fresh user messages as ordinary conversation turns.
+Their original job, result and parent receipt remain unchanged. Empty replays,
+reused task run IDs, active-task interference and invented tool continuations
+remain rejected. A new follow-up can complete its own pending approval cards.
+The new turn uses its own conversation/page scope and text Ability permissions;
+it no longer inherits the completed job's parent voice context.
+
+Chat preserves specific current-turn SDK errors, including voice and tool
+follow-ups. Reconnect reports pending, success or failure, and never resubmits the
+message. Failed initial/reconnect requests keep sending disabled, including a
+bare backend RUN_ERROR before replay starts. Historical replay errors do not
+make a later connection or turn fail. Regression tests use the installed SDK;
+the coordinator and native-voice integration use disposable SQLite workspaces.
+
+The isolated live Codex probe authenticated successfully but failed before
+inference while synchronizing managed preferences. This session-level result
+is separate from the confirmed completed-task rejection; no login, managed
+preference or security setting was changed. Native app inspection continued to
+time out, so Chrome and packaged-backend verification are recorded separately
+from live acceptance in the owner's desktop window. The local relocated-package
+smoke also timed out in the unchanged offline Spotify helper on two attempts;
+its assertions and deadline were retained.
+
+Final local source checks: **2,110 passed, one existing signing-identity skip**
+across 241 test files with a dedicated PostgreSQL test database. Format, lint,
+typecheck, production build and the 31+17 speech-worker checks pass. Independent
+review found and corrected the bare connection-error case before this run.

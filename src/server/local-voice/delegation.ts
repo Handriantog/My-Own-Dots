@@ -128,13 +128,46 @@ export class VoiceDelegationCoordinator implements RunLifecycle {
     if (!job) return;
     if (job.dotId !== request.agentId)
       throw Error('Delegated task Dot mismatch.');
-    if (!['queued', 'approval'].includes(job.status))
+    if (!['queued', 'approval', 'completed'].includes(job.status))
       throw Error('Delegated task is already running or completed.');
     if (job.runId === request.input.runId)
       throw Error('Delegated task run already exists.');
     const snapshot = await this.conversations.getSnapshot(job.workerThreadId);
     const ids = new Set(snapshot.messages.map((m) => m.id));
     const additions = request.input.messages.filter((m) => !ids.has(m.id));
+    if (job.status === 'completed') {
+      // A new owner message starts an ordinary chat turn. The completed job
+      // keeps its result/receipt; an empty request must not replay its actions.
+      if (additions.length && additions.every((m) => m.role === 'user')) return;
+      const answered = new Set(
+        snapshot.messages.flatMap((m) =>
+          m.role === 'tool' ? [m.toolCallId] : [],
+        ),
+      );
+      const pending = new Set(
+        snapshot.messages.flatMap((m) =>
+          m.role === 'assistant'
+            ? (m.toolCalls ?? [])
+                .filter(
+                  (call) =>
+                    !answered.has(call.id) &&
+                    delegatedApprovalTools.some(
+                      (tool) => tool.name === call.function.name,
+                    ),
+                )
+                .map((call) => call.id)
+            : [],
+        ),
+      );
+      if (
+        snapshot.lastRun?.status === 'finished' &&
+        snapshot.lastRun.runId !== job.runId &&
+        additions.length &&
+        additions.every((m) => m.role === 'tool' && pending.has(m.toolCallId))
+      )
+        return;
+      throw Error('Send a new message to continue this completed task.');
+    }
     if (job.status === 'queued') {
       if (
         additions.length !== 1 ||

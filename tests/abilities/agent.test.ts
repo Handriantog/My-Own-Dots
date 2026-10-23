@@ -17,6 +17,7 @@ import {
 import { runtimePolicy } from '../../src/server/storage/runtime-policy.ts';
 import { parseManifest } from '../../src/shared/abilities/manifest.ts';
 import type { VerifiedPackage } from '../../src/shared/abilities/types.ts';
+import type { VoiceDelegation } from '../../src/shared/voice-delegation.ts';
 import manifestFixture from '../fixtures/abilities/manifest.json';
 const engine = vi.hoisted(() => ({ runAgent: vi.fn() }));
 vi.mock('myown-llm-integrator', () => engine);
@@ -120,6 +121,7 @@ function fixture(delegated = false, typedOnly = false) {
     manifest.id,
     manifest.tools[0].id,
   );
+  const runId = randomUUID();
   const agent = new DotAgent(
     store,
     workspace,
@@ -140,8 +142,34 @@ function fixture(delegated = false, typedOnly = false) {
     undefined,
     delegated
       ? ({
-          forThread: async () => ({ parentThreadId: 'parent' }),
-          threadContext: async () => undefined,
+          forThread: async (): Promise<VoiceDelegation> => ({
+            id: 'delegation',
+            ownerId: workspace.ownerId,
+            dotId: dot.id,
+            callId: 'call',
+            parentThreadId: 'parent',
+            workerThreadId: 'thread',
+            utteranceId: 'utterance',
+            sourceMessageId: 'source-message',
+            sourceText: 'Find a song.',
+            request: 'Find a song.',
+            status: 'running',
+            runId,
+            leaseGeneration: 1,
+            leaseToken: 'lease-token',
+            leaseUntil: Date.now() + 30_000,
+            createdAt: 0,
+            updatedAt: 0,
+            result: null,
+            error: null,
+            receiptMessageId: null,
+            deliveredAt: null,
+          }),
+          threadContext: async () => ({
+            available: false,
+            messages: [],
+            guard: { originDotId: dot.id, spaceIds: [], pageIds: [] },
+          }),
         } as never)
       : undefined,
     undefined,
@@ -149,7 +177,7 @@ function fixture(delegated = false, typedOnly = false) {
   );
   const input = {
     threadId: 'thread',
-    runId: randomUUID(),
+    runId,
     messages: [
       { id: randomUUID(), role: 'user' as const, content: 'Find a song.' },
     ],

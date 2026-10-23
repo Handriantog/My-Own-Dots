@@ -24,6 +24,7 @@ import type { OpenWebsite } from '../shared/desktop-browser.js';
 import { isScheduledTaskMessage } from '../shared/scheduled-message.js';
 import { voiceComputeScope } from '../shared/voice-compute.js';
 import { voiceReceiptMessagePrefix } from '../shared/voice-receipt.js';
+import { voiceDelegationActive } from '../shared/voice-delegation.js';
 import { composioSession } from './composio.js';
 import { composioTools } from './composio-tools.js';
 import { pageAccess, pageTools } from './page-tools.js';
@@ -69,7 +70,11 @@ const channelError = () => ({
 export class DotAgent extends AbstractAgent {
   private evidenceRecorder?: (guard: EvidenceGuard) => Promise<void>;
   async evidenceGuard(threadId: string): Promise<EvidenceGuard> {
-    const job = await this.delegations?.forThread(threadId);
+    const storedJob = await this.delegations?.forThread(threadId);
+    const job =
+      storedJob && voiceDelegationActive(storedJob.status)
+        ? storedJob
+        : undefined;
     if (job) await this.workspace.requireThread(job.parentThreadId, this.dotId);
     const page = await this.workspace.pages.forThread(
       job?.parentThreadId ?? threadId,
@@ -188,7 +193,16 @@ export class DotAgent extends AbstractAgent {
             input.threadId,
             dot.id,
           );
-          const delegation = await this.delegations?.forThread(input.threadId);
+          const storedDelegation = await this.delegations?.forThread(
+            input.threadId,
+          );
+          // The coordinator claims delegated work before starting the agent.
+          // Later owner turns in this thread must use their own text-chat scope.
+          const delegation =
+            storedDelegation?.status === 'running' &&
+            storedDelegation.runId === input.runId
+              ? storedDelegation
+              : undefined;
           if (delegation)
             await this.workspace.requireThread(
               delegation.parentThreadId,
