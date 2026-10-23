@@ -1,5 +1,7 @@
 export const memoryDefaults = Object.freeze({
-  inputTokenLimit: 24_000,
+  // The default desktop tool catalog plus one Ability already occupies ~23 KB.
+  // Keep room for conversation and tool results under the conservative byte estimate.
+  inputTokenLimit: 64_000,
   pinnedTokenLimit: 2_000,
   compactThreshold: 0.75,
   compactIdleMs: 120_000,

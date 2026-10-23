@@ -592,3 +592,41 @@ Final local source checks: **2,110 passed, one existing signing-identity skip**
 across 241 test files with a dedicated PostgreSQL test database. Format, lint,
 typecheck, production build and the 31+17 speech-worker checks pass. Independent
 review found and corrected the bare connection-error case before this run.
+
+## Spotify chat context capacity — October 23, 2026
+
+The owner confirmed that the rebuilt app answered new messages in the formerly
+blocked Voice task. A subsequent short Spotify request exposed a separate local
+context limit: the standard desktop tools, Spotify Local, instructions and
+response schema occupy about 23,334 UTF-8 bytes before conversation history.
+The 24,000-unit default consequently rejected a fourth short exchange before
+provider inference. The conversation was too short for safe prefix compaction;
+Reconnect cannot change its request size.
+
+The conservative default is now 64,000 units, shared by environment parsing and
+context builders. The example environment leaves overrides blank so fresh source
+setups inherit that default. Existing explicit limits, the 2,000-unit pinned
+limit, compaction, complete-request accounting and permission checks are retained.
+This is still a byte estimate, not a model tokenizer or reported usage. Arbitrarily
+large tool catalogs can still exhaust a finite budget.
+
+The regression reproduces the original failure with the real sealed Spotify Local
+manifest, three client approval tools, DotAgent, LocalAgentRunner, SQLite storage
+and MemoryMaintenance. With the fix, it dispatches a playlist invocation and
+finishes the tool-result follow-up. Provider and app-control transport are fixtures;
+no Spotify account action occurs. Source-template defaults pass the same flow,
+while an explicit smaller limit rejects it before invocation. Oversized default
+requests and Unicode/schema accounting remain covered. Review caught the stale
+example override before final verification.
+
+The first full suite exposed one threshold fixture tied to the former default;
+it now explicitly configures the limit its corpus exercises. Three unchanged
+process tests also timed out under concurrent build load: CLI startup cancellation,
+archive cancellation and compiled storage-worker startup. All four files passed
+on the isolated recheck, with no timeout or assertion relaxed.
+
+The final full suite passed **2,114 tests, one existing signing-identity skip**
+across 242 files against a dedicated PostgreSQL test database. Format, lint,
+typecheck, production/desktop builds and 31+17 speech checks pass. Independent
+review reported no remaining findings. Packaged owner acceptance and remote
+push/pull-request results are tracked separately in the draft PR.

@@ -170,6 +170,8 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       {
         localDatabaseUrl: process.env.LOCAL_TEST_DATABASE_URL,
         llmProvider: 'claude-code',
+        // The corpus below intentionally crosses this configured threshold.
+        memoryInputTokenLimit: 24_000,
       },
       {
         pg,
