@@ -894,3 +894,67 @@ real-driver wiring, the sealed Mouse Mover worker and pointerless activities.
 The focused suite passes 39 tests; the new frozen full suite passes 2,359 tests
 with the same one certificate-identity skip. Collection source and delivery
 archive bytes are unchanged.
+
+### Floor walking follow-up
+
+Mouse Mover 0.1.1 now opts into the generic `floor-walk` motion mode. The companion
+reaches the current cursor, carries it down over 2,400 ms, then walks along the
+usable display floor at up to 66 logical pixels/second with the normal shared
+gait and eased turns. Pose loops do not reset the route. Manual release and
+five-second idle resumption, explicit activation, display keep-awake and native
+presentation authority are unchanged. Existing authored paths remain compatible.
+Floor contacts stay grounded even when a custom downward carrying pose requires
+shorter arm reach; the authoring guide documents this bounds correction.
+
+The new clean collection source is `4d70173e8c3999ab392827bc923409cbb4212a56`.
+Mouse Mover's archive SHA-256 is
+`5b8edeb70de232ae355d703d61046123582535e6369f7c1cc057f26362a6a934`.
+The controller independently compared all nine allowlisted package files with
+that Git commit, verified the archive digest and confirmed `dirty:false` in its
+inventory. Spotify artifacts/icons remain unchanged. The old Mouse Mover fixture
+is retained separately for authored-path compatibility.
+
+Host source `f0df4cfe2a7332f0bc0f2e90c53fbb1a7816f71a` passes **2,387 tests with
+one existing certificate-identity skip** in 255 files against a dedicated tmpfs
+PostgreSQL database, never the owner's database. Format, lint, types, build and
+speech protocol suites (31 + 17) pass. macOS acceptance passes **613 tests plus
+28 native sandbox probes**. Collection validation passes 164 worker/protocol/
+packaging tests, three repository tests and all manifest checks. Existing reviewed
+dependencies and interpreter were reused; no dependency reinstall or new package
+was needed. Vite retains its existing large-chunk warning.
+
+The actual-rig floor preview samples 1,954 frames over 65.1 seconds, including
+descent, raised-foot walking, both directions, turns, manual pause, new-anchor
+resume and stop. It records 1,662 fake pointer moves, maximum rendered-palm error
+`1.6077746776921858e-13` logical pixels, zero pickup error/usable-area overflow,
+zero retained sleep assertions and no browser errors. The pointerless variant
+also passes with zero pointer moves, correcting the earlier developer-preview
+limitation. Controller-inspected images/video are in
+`artifacts/desktop/activity-floor-final/`; command logs and source provenance are
+under `artifacts/verification/floor-walk/`. The last generic reach correction does
+not change Mouse Mover's raised-arm geometry.
+
+Before this follow-up, the owner confirmed that Mouse Mover 0.1.0 worked after
+the existing Accessibility entry was refreshed to the running development app.
+Read-only live diagnostics observed actual cursor travel, physical-input pause
+and resumption after five seconds idle; the temporary localhost inspector was
+closed afterward. An earlier paused result card was a historical snapshot after
+the activity had stopped, not evidence of current live status. The cause of that
+earlier stop was not established. These live observations do not establish
+hardware sleep prevention, mixed-display behavior or microphone acceptance.
+
+The final ad-hoc signed app, strict deep signature check and relocated-app smoke
+pass, including native/Node/Python sealed workers and the offline Spotify helper.
+The ZIP SHA-256 is
+`7c0cabeae873b56975951357b5bace61612185f5ccc7303dc8c45a8135d1bf9b`.
+The initial pre-review-fix build hit the existing offline Spotify validation
+helper's five-second deadline; a read-only offline probe completed in 4.651 s.
+The final rebuilt app passed the unchanged smoke gate. No timeout or assertion
+was weakened. The optional `.icon` packager warning remains; `.icns` is included.
+Developer ID signing/notarization remain release work.
+
+Independent task/final review approved the floor-walk change after the grounded
+reach correction. One nonblocking edge remains: a pathological two-pixel-high
+work area can produce negative arm reach through extreme nonuniform compression.
+Normal display work areas and Mouse Mover's raised pose are unaffected. This is
+retained as a developer geometry limitation, not represented as tested support.
