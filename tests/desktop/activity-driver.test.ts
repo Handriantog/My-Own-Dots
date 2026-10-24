@@ -6,6 +6,8 @@ import {
 } from '../../src/desktop/host/activity-driver.js';
 import { CompanionSimulation } from '../../src/desktop/core/simulation.js';
 import { buildWorld } from '../../src/desktop/core/world.js';
+import { floor } from './activity-floor-fixture.js';
+import { palmPosition } from '../../src/desktop/core/rig-model.js';
 import { definition } from './activity-fixture.js';
 const display = {
   id: '1',
@@ -402,3 +404,40 @@ it.each([
     await f.driver.stop();
   },
 );
+
+it('floor walking drives facing and velocity, preserves voice, and resumes pickup at the new cursor', async () => {
+  const f = fixture();
+  await f.driver.start({ bindingId: 'b', dotId: 'dot' }, floor);
+  f.now = floor.approachMs + 5000;
+  const base = f.sim.frame();
+  base.pose.facing = -1;
+  base.pose.speech = 0.7;
+  const walking = f.driver.frame(base, f.env.now());
+  expect(walking.action).toBe('walk');
+  expect(walking.velocity.x).toBeGreaterThan(0);
+  expect(walking.pose.facing).toBeGreaterThan(0);
+  expect(walking.pose.speech).toBe(0.7);
+  expect(f.moves).toHaveLength(0);
+  await f.driver.presented(walking);
+  expect((f.moves[0] as unknown[])[1]).toEqual(
+    palmPosition(walking.root, walking.pose, 'right'),
+  );
+  const old = f.render();
+  f.input({ revision: 2, idleMs: 0, point: { x: 800, y: 200 } });
+  expect(f.awake).toBe(1);
+  await f.driver.presented(old);
+  expect(f.moves).toHaveLength(1);
+  f.now = 13000;
+  f.input({ idleMs: 5000 });
+  await f.driver.presented(f.render());
+  expect(f.moves).toHaveLength(1);
+  f.now = 13000 + floor.approachMs;
+  await f.driver.presented(f.render());
+  expect((f.moves[1] as unknown[])[1]).toEqual({ x: 800, y: 200 });
+  const stale = f.render();
+  f.now = 13000 + floor.approachMs + 251;
+  await f.driver.presented(stale);
+  expect(f.driver.active).toBe(false);
+  expect(f.awake).toBe(0);
+  expect(f.moves).toHaveLength(2);
+});

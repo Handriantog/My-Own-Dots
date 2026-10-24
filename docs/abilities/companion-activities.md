@@ -20,10 +20,10 @@ Add 1–8 `activities` to the manifest. The
 | Field        | Meaning                                                                                       |
 | ------------ | --------------------------------------------------------------------------------------------- |
 | `id`         | Package-local activity identifier                                                             |
-| `durationMs` | One traversal, 1,000–120,000 ms                                                               |
+| `durationMs` | One pose cycle (or total non-loop lifetime), 1,000–120,000 ms                                 |
 | `approachMs` | Smooth pickup/entry, 250–10,000 ms                                                            |
 | `loop`       | Repeat after reaching the final keyframe                                                      |
-| `motion`     | Travel width 0–1,200 and height 0–800 logical pixels                                          |
+| `motion`     | Authored `{width,height}` travel, or `{kind:"floor-walk",speed,descendMs}`                    |
 | `keyframes`  | 2–32 ordered frames: `at` from 0 to 1, normalized `x`/`y` from −1 to 1, and a complete `pose` |
 | `pointer`    | Optional `{ "hand": "left" or "right", "idleMs": 1000–60000 }`                                |
 | `keepAwake`  | Optional `system` or `display`; display also prevents system idle sleep                       |
@@ -34,6 +34,29 @@ A pose supplies arm angles (`leftArm`, `rightArm`, −3.2–3.2 radians), arm le
 face, speech, gaze and breathing. Reduced motion limits travel. The first frame
 must be at 0, the last at 1, and times must increase strictly. Looping endpoints
 must have identical position and pose.
+
+### Floor walking
+
+`motion: {"kind":"floor-walk","speed":66,"descendMs":2400}` carries the
+pickup point down to the usable display floor, then walks back and forth.
+Speed is 10–120 logical pixels per second; descent is an integer 500–10,000 ms.
+Both motion variants reject extra fields. Existing `{width,height}` paths keep
+their original behavior.
+
+The host owns the floor route, facing, lean, body offset, foot contacts and body
+squash/stretch in this mode. Keyframe `x`, `y`, `lean`, `bodyY`, `leftFootY` and
+`rightFootY` are validated but ignored. Arm angles and lengths remain authored;
+use two matching endpoints for a steady carrying pose. Foot contacts share the
+normal distance-driven walking gait and compensate the rendered rig transform.
+Turns ease to zero speed. Travel uses total elapsed time and never resets at a
+looping pose boundary; non-looping activities still end at `durationMs`.
+
+Pickup remains exact even over the Dock; descent eases into the selected work
+area. Route margins allow for the body and either carrying hand. Work areas
+smaller than the rig compress its body transform to keep roots and held points
+inside finite bounds. Pointerless activities use their initial root as the
+anchor. Reduced motion slows travel and reduces secondary body animation while
+preserving contact. Face, speech, gaze and breathing stay responsive.
 
 Reference the activity from an explicit permission:
 

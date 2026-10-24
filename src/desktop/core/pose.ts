@@ -46,6 +46,18 @@ function foot(phase: number): Point {
   const t = (phase - 0.6) / 0.4;
   return { x: -12 + 24 * t, y: -Math.sin(t * Math.PI) * 6 };
 }
+/** Distance-driven world-space contacts shared by normal and activity walking. */
+export function walkingGait(distance: number, facing: number) {
+  const phase = distance / 40;
+  const l = foot(phase),
+    r = foot(phase + 0.5);
+  return {
+    phase,
+    left: { x: -18 + l.x * facing, y: l.y },
+    right: { x: 18 + r.x * facing, y: r.y },
+    bounce: 0.012 * Math.cos(phase * Math.PI * 4),
+  };
+}
 export function samplePose(
   previous: RigPose,
   input: PoseInput,
@@ -60,9 +72,8 @@ export function samplePose(
     sitting = action === 'sit' || sleepy;
   const easing = 1 - Math.exp(-dt / 0.105);
   const landing = action === 'land' ? Math.exp(-age * 10) : 0;
-  const phase = input.distance / 40;
-  const l = foot(phase),
-    r = foot(phase + 0.5);
+  const gait = walkingGait(input.distance, facing);
+  const phase = gait.phase;
   const secondary = reducedMotion ? 0.15 : 1;
   const lean = held
     ? input.sway
@@ -106,9 +117,11 @@ export function samplePose(
               : action === 'headphones'
                 ? -2.15 - Math.sin(age * 4) * 0.08
                 : armSwing;
-  const targetFoot = (side: -1 | 1, f: Point): Point =>
+  const targetFoot = (side: -1 | 1): Point =>
     walking
-      ? { x: side * 18 + f.x * facing, y: f.y }
+      ? side === -1
+        ? gait.left
+        : gait.right
       : {
           x:
             side * (sitting ? 31 : 20) +
@@ -125,8 +138,8 @@ export function samplePose(
                     3
                 : 0,
         };
-  const lf = targetFoot(-1, l),
-    rf = targetFoot(1, r);
+  const lf = targetFoot(-1),
+    rf = targetFoot(1);
   const pat =
     action === 'pat' ? Math.sin(Math.min(1, age / 0.45) * Math.PI) : 0;
   const continuousFoot = (from: Point, to: Point): Point => {
@@ -140,7 +153,7 @@ export function samplePose(
         ? 0.15 * Math.sin((Math.max(0, age - 0.55) * Math.PI * 2) / 0.8)
         : 0.1)
     : 0;
-  const bounce = walking ? 0.012 * Math.cos(phase * Math.PI * 4) : 0;
+  const bounce = walking ? gait.bounce : 0;
   const look =
     input.look ??
     (action === 'look_around'

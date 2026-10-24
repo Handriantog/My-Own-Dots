@@ -1,12 +1,15 @@
 import type { ActivityDefinition } from '../../shared/abilities/activity.js';
-import type { Point, Rect, RigPose } from '../shared/contracts.js';
+import type { Action, Point, Rect, RigPose } from '../shared/contracts.js';
 import { initialPose } from './pose.js';
+import { sampleFloorWalk } from './activity-floor-walk.js';
 import { palmPosition } from './rig-model.js';
 
 export interface ActivitySample {
   root: Point;
   pose: RigPose;
   pointer?: Point;
+  action?: Action;
+  velocity?: Point;
 }
 const mix = (a: number, b: number, t: number) => a + (b - a) * t;
 const clamp = (n: number, lo: number, hi: number) =>
@@ -41,6 +44,20 @@ export function sampleActivity(
     pose[key] = mix(a.pose[key], b.pose[key], t);
   pose.leftFoot.y = mix(a.pose.leftFootY, b.pose.leftFootY, t);
   pose.rightFoot.y = mix(a.pose.rightFootY, b.pose.rightFootY, t);
+  if ('kind' in definition.motion)
+    return sampleFloorWalk(
+      definition.motion,
+      definition.pointer?.hand,
+      definition.loop
+        ? Math.max(0, elapsedMs)
+        : clamp(elapsedMs, 0, definition.durationMs),
+      anchor,
+      bounds,
+      workArea,
+      pose,
+      frames[0].pose,
+      reducedMotion,
+    );
   const motion = reducedMotion ? 0.15 : 1;
   const point = {
     x: clamp(

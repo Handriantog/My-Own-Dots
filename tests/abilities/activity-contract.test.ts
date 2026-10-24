@@ -306,3 +306,29 @@ describe('inert package artwork', () => {
     ).toMatchObject({ icon: { paths } });
   });
 });
+
+describe('floor walking contract', () => {
+  it.each([10, 66, 120])('accepts bounded floor speed %s', (speed) => {
+    expect(
+      activityDefinitionSchema.parse({
+        ...activity,
+        motion: { kind: 'floor-walk', speed, descendMs: 2400 },
+      }).motion,
+    ).toEqual({ kind: 'floor-walk', speed, descendMs: 2400 });
+  });
+  it.each([
+    { kind: 'floor-walk', speed: 9, descendMs: 2400 },
+    { kind: 'floor-walk', speed: 121, descendMs: 2400 },
+    { kind: 'floor-walk', speed: Infinity, descendMs: 2400 },
+    { kind: 'floor-walk', speed: 66, descendMs: 499 },
+    { kind: 'floor-walk', speed: 66, descendMs: 10001 },
+    { kind: 'floor-walk', speed: 66, descendMs: 2400.5 },
+    { kind: 'floor-walk', speed: 66, descendMs: 2400, width: 20 },
+    { kind: 'other', speed: 66, descendMs: 2400 },
+    { width: 20, height: 20, speed: 66 },
+  ])('rejects invalid motion %j', (motion) => {
+    expect(
+      activityDefinitionSchema.safeParse({ ...activity, motion }).success,
+    ).toBe(false);
+  });
+});

@@ -23,10 +23,17 @@ export const activityDefinitionSchema = z
     durationMs: z.number().int().min(1000).max(120000),
     approachMs: z.number().int().min(250).max(10000),
     loop: z.boolean(),
-    motion: z.strictObject({
-      width: z.number().min(0).max(1200),
-      height: z.number().min(0).max(800),
-    }),
+    motion: z.union([
+      z.strictObject({
+        width: z.number().min(0).max(1200),
+        height: z.number().min(0).max(800),
+      }),
+      z.strictObject({
+        kind: z.literal('floor-walk'),
+        speed: z.number().min(10).max(120),
+        descendMs: z.number().int().min(500).max(10000),
+      }),
+    ]),
     keyframes: z.array(keyframeSchema).min(2).max(32),
     pointer: z
       .strictObject({

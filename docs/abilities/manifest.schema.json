@@ -186,21 +186,46 @@
       "type": "boolean"
     },
     "__schema12": {
-      "type": "object",
-      "properties": {
-        "width": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 1200
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "width": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1200
+            },
+            "height": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 800
+            }
+          },
+          "required": ["width", "height"],
+          "additionalProperties": false
         },
-        "height": {
-          "type": "number",
-          "minimum": 0,
-          "maximum": 800
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "floor-walk"
+            },
+            "speed": {
+              "type": "number",
+              "minimum": 10,
+              "maximum": 120
+            },
+            "descendMs": {
+              "type": "integer",
+              "minimum": 500,
+              "maximum": 10000
+            }
+          },
+          "required": ["kind", "speed", "descendMs"],
+          "additionalProperties": false
         }
-      },
-      "required": ["width", "height"],
-      "additionalProperties": false
+      ]
     },
     "__schema13": {
       "minItems": 2,
