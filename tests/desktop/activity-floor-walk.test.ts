@@ -119,3 +119,120 @@ it('decelerates smoothly even when the available route is only one pixel wide', 
     previous = next;
   }
 });
+
+const reviewBounds = { x: 0, y: 0, width: 1000, height: 650 };
+const reviewArea = { x: 0, y: 25, width: 1000, height: 525 };
+it.each(['left', 'right'] as const)(
+  'keeps %s downward carries grounded by shortening only the blocked reach',
+  (hand) => {
+    const activity = structuredClone(floor);
+    activity.pointer!.hand = hand;
+    for (const frame of activity.keyframes) {
+      frame.pose.leftArm = frame.pose.rightArm = 0;
+      frame.pose.leftArmLength = frame.pose.rightArmLength = 70;
+    }
+    const f = sampleActivity(
+      activity,
+      6000,
+      { x: 500, y: 200 },
+      reviewBounds,
+      false,
+      reviewArea,
+    );
+    expect(f.root.y).toBeCloseTo(549, 9);
+    const soles = [f.pose.leftFoot, f.pose.rightFoot].map(
+      (p) => rigPointToWorld(p, f.root, f.pose).y,
+    );
+    expect(Math.max(...soles)).toBeCloseTo(549, 9);
+    expect(f.pointer!.y).toBeCloseTo(549, 9);
+    expect(palmPosition(f.root, f.pose, hand).y).toBeCloseTo(f.pointer!.y, 9);
+    const length = hand === 'left' ? 'leftArmLength' : 'rightArmLength';
+    const other = hand === 'left' ? 'rightArmLength' : 'leftArmLength';
+    expect(f.pose[length]).toBeLessThan(70);
+    expect(f.pose[length]).toBeGreaterThan(45);
+    expect(f.pose[other]).toBe(70);
+    expect(f.pose.leftArm).toBe(0);
+    expect(f.pose.rightArm).toBe(0);
+    // Any longer reach would put the palm below the floor: adjust only enough.
+    expect(
+      palmPosition(f.root, { ...f.pose, [length]: f.pose[length] + 0.01 }, hand)
+        .y,
+    ).toBeGreaterThan(549);
+    for (const frame of activity.keyframes)
+      frame.pose[hand === 'left' ? 'leftArm' : 'rightArm'] = -1.3;
+    const fitting = sampleActivity(
+      activity,
+      6000,
+      { x: 500, y: 200 },
+      reviewBounds,
+      false,
+      reviewArea,
+    );
+    expect(fitting.pose[length]).toBe(70);
+    expect(fitting.pose[other]).toBe(70);
+    expect(fitting.root.y).toBeCloseTo(549, 9);
+  },
+);
+it.each(['left', 'right'] as const)(
+  'keeps the floor and palm continuous as the %s arm crosses the floor limit',
+  (hand) => {
+    const activity = structuredClone(floor);
+    activity.pointer!.hand = hand;
+    const angle = hand === 'left' ? 'leftArm' : 'rightArm';
+    const length = hand === 'left' ? 'leftArmLength' : 'rightArmLength';
+    activity.keyframes = [0, 0.5, 1].map((at) => ({
+      ...activity.keyframes[0],
+      at,
+      pose: {
+        ...activity.keyframes[0].pose,
+        [angle]: at === 0.5 ? 0 : -1.3,
+        [length]: 70,
+      },
+    }));
+    const sample = (ms: number) =>
+      sampleActivity(
+        activity,
+        ms,
+        { x: 500, y: 200 },
+        reviewBounds,
+        false,
+        reviewArea,
+      );
+    expect(sample(0).pointer).toEqual({ x: 500, y: 200 });
+    let previous = sample(2400),
+      shortened = false,
+      unchanged = false;
+    for (let ms = 2416; ms <= 48000; ms += 16) {
+      const f = sample(ms);
+      expect(f.root.y).toBeCloseTo(549, 9);
+      expect(
+        Math.max(
+          ...[f.pose.leftFoot, f.pose.rightFoot].map(
+            (p) => rigPointToWorld(p, f.root, f.pose).y,
+          ),
+        ),
+      ).toBeCloseTo(549, 9);
+      expect(f.pointer!.y).toBeLessThanOrEqual(549.000000001);
+      expect(f.pointer!.y).toBeGreaterThanOrEqual(25);
+      const palm = palmPosition(f.root, f.pose, hand);
+      expect(palm.x).toBeCloseTo(f.pointer!.x, 9);
+      expect(palm.y).toBeCloseTo(f.pointer!.y, 9);
+      expect(Math.abs(f.pose[length] - previous.pose[length])).toBeLessThan(
+        0.5,
+      );
+      expect(
+        Math.hypot(
+          f.pointer!.x - previous.pointer!.x,
+          f.pointer!.y - previous.pointer!.y,
+        ),
+      ).toBeLessThan(2);
+      shortened ||= f.pose[length] < 69;
+      unchanged ||= f.pose[length] === 70;
+      previous = f;
+    }
+    expect({ shortened, unchanged }).toEqual({
+      shortened: true,
+      unchanged: true,
+    });
+  },
+);

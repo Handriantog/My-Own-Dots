@@ -63,7 +63,7 @@ export function sampleFloorWalk(
   >,
   reduced: boolean,
 ): ActivitySample {
-  // Compress only on physically smaller-than-rig work areas. Arms remain authored.
+  // Compress only on physically smaller-than-rig work areas.
   const sx = Math.min(1, Math.max(1, area.width - 1) / 240),
     sy = Math.min(1, Math.max(1, area.height - 1) / 180);
   const pose = {
@@ -110,6 +110,17 @@ export function sampleFloorWalk(
     { x: 0, y: 0 },
     pose,
   );
+  if (hand) {
+    const length = hand === 'left' ? 'leftArmLength' : 'rightArmLength';
+    const origin = { x: 0, y: 0 };
+    const endpoint = palmPosition(origin, pose, hand);
+    if (endpoint.y > 0) {
+      // For a fixed angle and rig transform the palm is linear in arm length.
+      // Fit the carried reach to the ground plane without moving body or feet.
+      const zero = palmPosition(origin, { ...pose, [length]: 0 }, hand);
+      pose[length] *= -zero.y / (endpoint.y - zero.y);
+    }
+  }
   const palm = hand ? palmPosition({ x: 0, y: 0 }, pose, hand) : { x: 0, y: 0 };
   const progress = clamp(elapsed / motion.descendMs, 0, 1),
     settle = progress * progress * (3 - 2 * progress);
@@ -121,7 +132,7 @@ export function sampleFloorWalk(
       bounds.x + bounds.width - 1,
     ),
     y: clamp(
-      mix(anchor.y, floor + Math.min(0, palm.y), settle),
+      mix(anchor.y, floor + palm.y, settle),
       bounds.y,
       bounds.y + bounds.height - 1,
     ),

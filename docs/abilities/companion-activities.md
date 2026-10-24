@@ -45,8 +45,12 @@ their original behavior.
 
 The host owns the floor route, facing, lean, body offset, foot contacts and body
 squash/stretch in this mode. Keyframe `x`, `y`, `lean`, `bodyY`, `leftFootY` and
-`rightFootY` are validated but ignored. Arm angles and lengths remain authored;
-use two matching endpoints for a steady carrying pose. Foot contacts share the
+`rightFootY` are validated but ignored. Arm angles and lengths remain authored,
+except that a carried arm whose palm would extend below the floor has its reach
+shortened just enough to fit. This
+bounds correction preserves its angle, the other arm and any reach that already
+fits; it never raises the body or soles or detaches the pointer from the palm.
+Use two matching endpoints for a steady carrying pose. Foot contacts share the
 normal distance-driven walking gait and compensate the rendered rig transform.
 Turns ease to zero speed. Travel uses total elapsed time and never resets at a
 looping pose boundary; non-looping activities still end at `durationMs`.
