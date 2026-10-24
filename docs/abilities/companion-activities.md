@@ -1,0 +1,135 @@
+# Companion activities
+
+An Ability can supply Dot's movement and body poses as bounded manifest data.
+It can optionally attach the real cursor to one hand and hold a scoped system
+or display sleep blocker. The package owns its animation and icon; the desktop
+owns interpolation, presentation, native input and authority. No Ability ID is
+hardcoded into the activity runtime.
+
+This is an additive API-1 capability requiring the updated desktop host. Older
+hosts reject the new manifest fields. Current native execution targets macOS
+Apple Silicon; fixture verification does not establish live cursor alignment,
+hardware sleep behavior or support for other platforms.
+
+## Declare access and animation
+
+Add 1–8 `activities` to the manifest. The
+[generated schema](manifest.schema.json) describes the exact fields; the
+[host validator](../../src/shared/abilities/activity.ts) also enforces continuity.
+
+| Field        | Meaning                                                                                       |
+| ------------ | --------------------------------------------------------------------------------------------- |
+| `id`         | Package-local activity identifier                                                             |
+| `durationMs` | One pose cycle (or total non-loop lifetime), 1,000–120,000 ms                                 |
+| `approachMs` | Smooth pickup/entry, 250–10,000 ms                                                            |
+| `loop`       | Repeat after reaching the final keyframe                                                      |
+| `motion`     | Authored `{width,height}` travel, or `{kind:"floor-walk",speed,descendMs}`                    |
+| `keyframes`  | 2–32 ordered frames: `at` from 0 to 1, normalized `x`/`y` from −1 to 1, and a complete `pose` |
+| `pointer`    | Optional `{ "hand": "left" or "right", "idleMs": 1000–60000 }`                                |
+| `keepAwake`  | Optional `system` or `display`; display also prevents system idle sleep                       |
+
+A pose supplies arm angles (`leftArm`, `rightArm`, −3.2–3.2 radians), arm lengths
+(`leftArmLength`, `rightArmLength`, 20–70 logical pixels), `lean` (−0.35–0.35),
+`bodyY` (−10–10), and `leftFootY`/`rightFootY` (−12–12). Dot retains its normal
+face, speech, gaze and breathing. Reduced motion limits travel. The first frame
+must be at 0, the last at 1, and times must increase strictly. Looping endpoints
+must have identical position and pose.
+
+### Floor walking
+
+`motion: {"kind":"floor-walk","speed":66,"descendMs":2400}` carries the
+pickup point down to the usable display floor, then walks back and forth.
+Speed is 10–120 logical pixels per second; descent is an integer 500–10,000 ms.
+Both motion variants reject extra fields. Existing `{width,height}` paths keep
+their original behavior.
+
+The host owns the floor route, facing, lean, body offset, foot contacts and body
+squash/stretch in this mode. Keyframe `x`, `y`, `lean`, `bodyY`, `leftFootY` and
+`rightFootY` are validated but ignored. Arm angles and lengths remain authored,
+except that a carried arm whose palm would extend below the floor has its reach
+shortened just enough to fit. This
+bounds correction preserves its angle, the other arm and any reach that already
+fits; it never raises the body or soles or detaches the pointer from the palm.
+Use two matching endpoints for a steady carrying pose. Foot contacts share the
+normal distance-driven walking gait and compensate the rendered rig transform.
+Turns ease to zero speed. Travel uses total elapsed time and never resets at a
+looping pose boundary; non-looping activities still end at `durationMs`.
+
+Pickup remains exact even over the Dock; descent eases into the selected work
+area. Route margins allow for the body and either carrying hand. Work areas
+smaller than the rig compress its body transform to keep roots and held points
+inside finite bounds. Pointerless activities use their initial root as the
+anchor. Reduced motion slows travel and reduces secondary body animation while
+preserving contact. Face, speech, gaze and breathing stay responsive.
+
+Reference the activity from an explicit permission:
+
+```json
+{
+  "id": "carry",
+  "kind": "companion-activity",
+  "purpose": "Carry the cursor and keep the screen awake when asked.",
+  "activities": ["cursor-carry"],
+  "pointer": true,
+  "keepAwake": "display"
+}
+```
+
+The permission must cover every referenced definition's effects. All tools in
+the package must declare `execution: "interactive"`; `channels` can allow text,
+voice or both. Descriptions should say when the owner must explicitly request
+start or stop. Installation and enabling only grant access; they do not activate it.
+
+## Start, inspect and stop
+
+Use short worker calls with the normal [protocol](protocol.md) envelope:
+
+```json
+{
+  "kind": "companion-activity",
+  "ruleId": "carry",
+  "command": { "action": "start", "activityId": "cursor-carry" }
+}
+```
+
+Use `status` or `stop` for the other actions. Replies contain only `ok`, `kind`
+and one status: `inactive`, `approaching`, `running` or `paused`. Failures use the
+standard fixed error envelope. Missing Accessibility returns `setup_needed`; a
+hidden, unavailable or unselected desktop Dot returns `host_unavailable`, including
+when the native driver and Ability host are separately bundled. Workers cannot supply cursor coordinates, inline
+code or alternate animation definitions. Keep the successful tool output within
+its declared schema; invalid output rolls back a new activation.
+
+There is one active desktop activity. The requesting Dot must be selected on
+the desktop, and competing bindings receive `busy`. A start remains provisional
+until its worker succeeds with current authority. Once committed, it outlives
+that short invocation; a later status call does not acquire its ownership.
+Cancellation during activation or result settlement releases the new session.
+Repeated start/stop requests are safe and do not create additional sleep blockers.
+
+The session binds the workspace, desktop connection, Dot, package digest and
+grant revision. Renewal checks both the workspace installation and per-Dot grant.
+Disable, uninstall, disconnect, workspace replacement and Quit stop it. Hiding
+or replacing the desktop Dot, locking/suspending, losing the renderer/helper or
+changing displays also releases it. There is no automatic replay after reconnect.
+
+## Cursor behavior
+
+Pointer activities require macOS Accessibility permission for the desktop app.
+Dot approaches the existing cursor and attaches it to the rendered palm. Native
+movement is bounded to the display and checks fresh physical input immediately
+before moving. It never emits clicks or key presses. At an extreme display edge,
+part of Dot can briefly clip while its hand reaches the cursor. Pickup preserves
+the exact pointer position anywhere on the full display; subsequent travel eases
+into the usable work area, clear of the Dock and menu bar. Native safety checks
+still use full display bounds.
+
+Physical mouse movement, scrolling or a held button releases the cursor. Dot
+resumes with a new approach after the package's `idleMs`; Mouse Mover uses 5,000 ms.
+The sleep blocker remains active during that temporary pause. Stop releases the
+blocker and retires pending movement before reporting completion. It does not
+rewind the cursor or change the owner's persistent power settings.
+
+The separate [Ability collection](https://github.com/Handriantog/My-Own-Dot-Abilities)
+owns Mouse Mover's worker, path, carrying pose and icons. Future packages using
+this contract can be installed without another host-specific animation change.

@@ -1,0 +1,56 @@
+{
+  "id": "orbit",
+  "durationMs": 10000,
+  "approachMs": 1000,
+  "loop": true,
+  "motion": { "width": 400, "height": 200 },
+  "keyframes": [
+    {
+      "at": 0,
+      "x": 0,
+      "y": 0,
+      "pose": {
+        "leftArm": 0,
+        "rightArm": 0,
+        "leftArmLength": 40,
+        "rightArmLength": 40,
+        "lean": 0,
+        "bodyY": 0,
+        "leftFootY": 0,
+        "rightFootY": 0
+      }
+    },
+    {
+      "at": 0.5,
+      "x": 1,
+      "y": -1,
+      "pose": {
+        "leftArm": 1,
+        "rightArm": -1,
+        "leftArmLength": 45,
+        "rightArmLength": 45,
+        "lean": 0.1,
+        "bodyY": 2,
+        "leftFootY": -2,
+        "rightFootY": 2
+      }
+    },
+    {
+      "at": 1,
+      "x": 0,
+      "y": 0,
+      "pose": {
+        "leftArm": 0,
+        "rightArm": 0,
+        "leftArmLength": 40,
+        "rightArmLength": 40,
+        "lean": 0,
+        "bodyY": 0,
+        "leftFootY": 0,
+        "rightFootY": 0
+      }
+    }
+  ],
+  "pointer": { "hand": "right", "idleMs": 5000 },
+  "keepAwake": "display"
+}

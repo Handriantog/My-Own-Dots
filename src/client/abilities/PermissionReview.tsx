@@ -14,6 +14,18 @@ import {
 export type AbilityReview = DesktopAbilityOutput<'review'>;
 export function permissionSummary(permission: AbilityPermission): string {
   switch (permission.kind) {
+    case 'companion-activity':
+      return [
+        `Desktop activities: ${permission.activities.join(', ')}.`,
+        permission.pointer ? 'May move the pointer.' : '',
+        permission.keepAwake === 'display'
+          ? 'Keep the display and system awake.'
+          : permission.keepAwake === 'system'
+            ? 'Keep the system awake.'
+            : '',
+      ]
+        .filter(Boolean)
+        .join(' ');
     case 'app-control': {
       const access = [
         permission.actions.some((action) => !uiAppActions.has(action))

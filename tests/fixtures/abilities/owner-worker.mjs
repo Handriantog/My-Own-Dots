@@ -39,6 +39,34 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
     setInterval(() => {}, 1000);
     return;
   }
+  if (op.startsWith('activity-')) {
+    const action =
+      op === 'activity-stop'
+        ? 'stop'
+        : op === 'activity-status'
+          ? 'status'
+          : 'start';
+    const reply = await capability({
+      kind: 'companion-activity',
+      ruleId: 'motion',
+      command: { action, activityId: 'orbit' },
+    });
+    if (op === 'activity-hold') return;
+    send(
+      message.id,
+      op === 'activity-invalid'
+        ? { status: 'invalid' }
+        : !reply.ok
+          ? { status: 'error', code: reply.code }
+          : op === 'activity-fail'
+            ? { status: 'error', code: 'cancelled' }
+            : {
+                status: 'success',
+                owner: { kind: 'text', text: reply.status },
+              },
+    );
+    return;
+  }
   const owner = { kind: 'text', text: 'OWNER_ONLY_SENTINEL' };
   if (op === 'raw-error') {
     process.stdout.write(

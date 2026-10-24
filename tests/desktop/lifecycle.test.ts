@@ -1,3 +1,8 @@
+import type {
+  ActivityEnvironment,
+  DesktopActivityDriver,
+} from '../../src/desktop/host/activity-driver.js';
+import { definition } from './activity-fixture.js';
 import type { EventEmitter } from 'node:events';
 import type { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -6,6 +11,9 @@ import { snapshot } from './fixtures.js';
 import type { PresentationFrame } from '../../src/desktop/shared/contracts.js';
 
 const host = vi.hoisted(() => ({
+  appHidden: false,
+  activityDriver: null as DesktopActivityDriver | null,
+  activityEnvironment: null as ActivityEnvironment | null,
   connection: undefined as { url: string; owned: boolean } | undefined,
   customize: undefined as ((id?: string) => Promise<void>) | undefined,
   select: undefined as ((id: string) => Promise<void>) | undefined,
@@ -30,6 +38,22 @@ const host = vi.hoisted(() => ({
     details: Record<string, unknown>;
   }>,
 }));
+vi.mock('../../src/desktop/host/activity-driver.js', async (original) => {
+  const real =
+    await original<
+      typeof import('../../src/desktop/host/activity-driver.js')
+    >();
+  return {
+    ...real,
+    DesktopActivityDriver: class extends real.DesktopActivityDriver {
+      constructor(env: ActivityEnvironment) {
+        super(env);
+        host.activityDriver = this;
+        host.activityEnvironment = env;
+      }
+    },
+  };
+});
 vi.mock('../../src/desktop/host/diagnostics.js', () => ({
   DesktopDiagnostics: class {
     captureException() {}
@@ -161,7 +185,7 @@ vi.mock('electron', async () => {
       setName: vi.fn(),
       setPath: vi.fn(),
       getPath: () => '/unused',
-      isHidden: () => false,
+      isHidden: () => host.appHidden,
       requestSingleInstanceLock: () => true,
       whenReady: async () => {},
       dock: { show: vi.fn(), hide: vi.fn() },
@@ -179,6 +203,7 @@ vi.mock('electron', async () => {
     nativeImage: { createFromPath: () => ({ resize: () => ({}) }) },
     net: {},
     powerMonitor: host.power,
+    powerSaveBlocker: { start: vi.fn(() => 1), stop: vi.fn(() => true) },
     protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
     screen: Object.assign(new EventEmitter(), {
       getAllDisplays: () => [display],
@@ -229,6 +254,9 @@ beforeEach(async () => {
   // This suite models a macOS Electron host, including on Linux CI runners.
   Object.defineProperty(process, 'platform', { value: 'darwin' });
   vi.resetModules();
+  host.appHidden = false;
+  host.activityDriver = null;
+  host.activityEnvironment = null;
   host.connection = undefined;
   host.fetcher = undefined;
   vi.stubGlobal('fetch', (...args: Parameters<typeof fetch>) => {
@@ -725,3 +753,89 @@ it('scopes settings windows and tray customization to one desktop Dot', async ()
     ws.close();
   }
 });
+
+it('stops desktop activity when macOS hides the application', async () => {
+  const child = host.children.at(-1) as EventEmitter & { stdout: PassThrough };
+  child.stdout.emit(
+    'data',
+    Buffer.from(
+      JSON.stringify(snapshot([], { observedAtMs: performance.now() })) + '\n',
+    ),
+  );
+  host.activityEnvironment!.selectedDot = () => 'fixture';
+  await host.activityDriver!.start(
+    { bindingId: 'fixture', dotId: 'fixture' },
+    { ...definition, pointer: undefined },
+  );
+  expect(host.activityDriver!.status('fixture')).toBe('approaching');
+  const { powerSaveBlocker } = await import('electron');
+  host.appHidden = true;
+  expect(host.activityEnvironment!.available()).toBe(false);
+  await vi.advanceTimersByTimeAsync(20);
+  expect(host.activityDriver!.status('fixture')).toBe('inactive');
+  expect(powerSaveBlocker.stop).toHaveBeenCalledWith(1);
+});
+
+it.each(['pause', 'stop'] as const)(
+  'discards a queued activity pose on %s while native ack is delayed',
+  async (release) => {
+    const child = host.children.at(-1) as EventEmitter & {
+      stdout: PassThrough;
+    };
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        JSON.stringify(snapshot([], { observedAtMs: performance.now() })) +
+          '\n',
+      ),
+    );
+    let seq = 2;
+    const refresh = setInterval(
+      () =>
+        child.stdout.emit(
+          'data',
+          Buffer.from(
+            JSON.stringify(
+              snapshot([], { seq: seq++, observedAtMs: performance.now() }),
+            ) + '\n',
+          ),
+        ),
+      100,
+    );
+    const env = host.activityEnvironment!,
+      driver = host.activityDriver!;
+    env.selectedDot = () => 'fixture';
+    env.accessibility = () => true;
+    const physical = {
+      point: { x: 650, y: 400 },
+      down: false,
+      revision: 1,
+      sampledAtMs: 1000,
+      idleMs: 10000,
+    };
+    let finishMove!: (value: boolean) => void;
+    env.pointer = {
+      begin: async () => physical,
+      move: () =>
+        new Promise((resolve) => {
+          finishMove = resolve;
+        }),
+      end: () => {},
+    };
+    await driver.start({ bindingId: 'fixture', dotId: 'fixture' }, definition);
+    await vi.advanceTimersByTimeAsync(550);
+    expect(driver.status('fixture')).toBe('running');
+    const painted = host.frame!;
+    await vi.advanceTimersByTimeAsync(75);
+    expect(host.frame).toBe(painted); // future poses are queued behind native ack
+    if (release === 'pause')
+      driver.physical({ ...physical, revision: 2, down: true, idleMs: 0 });
+    else await driver.stop();
+    host.autoAck = false;
+    finishMove(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(host.frame).toBe(painted); // no obsolete future activity pose dispatched
+    await driver.stop();
+    clearInterval(refresh);
+  },
+);

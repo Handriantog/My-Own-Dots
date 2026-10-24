@@ -801,3 +801,160 @@ production/desktop builds and speech protocol checks (31 + 17 tests) pass. macOS
 Ability acceptance passes 431 integration tests plus both 14-probe sandbox profiles.
 Packaged smoke, installed-app inspection and current-commit remote results are
 recorded in PR #12. The prior real microphone-call acceptance remains separate.
+
+## Companion activities and Mouse Mover (October 24, 2026)
+
+The host executes bounded package-defined body poses and paths, optionally attaching
+the pointer to a declared hand and holding a scoped system/display sleep blocker.
+The separate collection owns Mouse Mover's worker, carrying pose, path, five-second
+idle choice and safe vector icons. The host contains no Mouse Mover ID dispatch.
+Installation and enablement do not start activity; an interactive owner text/voice
+turn is required. Provisional activation, committed ownership, native generation
+retirement, manual-input yield and lifecycle revocation have fixture coverage.
+
+The production integration uses a real sealed collection archive, built public
+`ability-runtime.cjs`, confined JavaScript worker, SQLite service and HTTP desktop
+bridges. Native pointer and sleep effects are fake. It verifies disabled install,
+non-starting enablement, voice tool admission, text start/status/stop, paused private
+status, consecutive stop, background denial and master-revoke cleanup. A regression
+first reproduced `invalid_response` for missing Accessibility and an unavailable or
+unselected Dot. Fixed typed driver codes are normalized only at the trusted driver
+boundary, so independently bundled classes preserve `setup_needed` and
+`host_unavailable` without relaxing worker-error validation.
+
+All three final archives from clean collection commit
+`d2b874679978456e61ce2304a89d277533e0bbad` pass production extraction/sealing. Exact
+descriptor/archive hashes and frozen source provenance are recorded in
+[the fixture provenance](../../tests/fixtures/abilities/mouse-mover/PROVENANCE.md).
+A generic second animation fixture also covers a different path and left hand.
+
+The actual PlushRig preview uses Mouse Mover's 1,600 ms approach, 5,000 ms idle
+threshold, authored pose and declared right hand. The refreshed preview includes
+a simulated menu bar and bottom Dock, with work area `x=0, y=25, width=1000, height=525`. It recorded 1,033 frames and 450 fake
+pointer moves, with maximum rendered-palm error `1.6077746776921858e-13` logical
+pixels, zero initial pickup error and zero usable-area overflow across 210 settled
+frames. There are no browser errors or retained sleep blockers. Pickup is captured
+after 1,700 ms and settled travel/resume after 4,100/14,700 ms. Production
+AbilityManager, Details,
+PermissionReview and theme CSS were inspected in 56 headless Chromium captures at
+1,120px/360px in both themes using exact package manifests, catalog and packaged
+READMEs with a synthetic bridge. Installed/catalog icons, long permissions, README
+and review footers are visible without horizontal overflow. Controller independently
+inspected the package rig and representative UI captures. The resulting README
+polish moves authoring details below the owner instructions; setup explains desktop
+selection and macOS Accessibility.
+
+Frozen local implementation validation: **2,359 tests pass, one existing
+certificate-identity test skips**, across 254 files, using only the dedicated
+`dots_mouse_mover_test` PostgreSQL database. Format, lint, TypeScript, production
+build and both speech protocol suites (31 + 17) pass. macOS acceptance passes
+587 integration tests and both 14-probe sandbox profiles. All eight production
+installer/worker tests pass against the final delivered package bytes, including
+the new usable-area regression. The collection passes 164 worker/protocol/packaging tests,
+three icon-validation tests, all three manifest checks and repository validation;
+38 affected Mouse Mover tests also pass after README polish. Vite reports its
+existing bundle-size warning.
+
+Reproduce visual fixtures with `node scripts/abilities-ui-preview.mjs` and
+`node scripts/desktop-activity-preview.mjs <path-to-ability.json> [activity-id]`.
+Local captures and video are in `artifacts/desktop/abilities/` and
+`artifacts/desktop/activity/`; command logs are in `artifacts/verification/task5/`.
+The preview timeline follows the selected package's approach and idle durations.
+
+No owner workspace, live cursor, account, microphone or audio devices were used.
+Physical pointer alignment, OS consent attribution, real multi-monitor behavior,
+hardware sleep/monitor behavior and final-app owner acceptance remain unverified.
+No install into the owner's app, public release, merge or remote CI claim is made
+by these local checks.
+
+`DOTS_CODESIGN_IDENTITY=- npm run desktop:package` and the relocated-app
+`npm run abilities:package:smoke` pass. Native, JavaScript and Python confined
+workers and the offline Spotify helper validate against the signed app; strict
+deep signature verification passes. The package uses ad-hoc signing without
+Keychain access. The packager warns about a missing optional `.icon` format;
+the generated `.icns` is included unchanged. Developer ID/notarization remain
+release work. The final ZIP SHA-256 is
+`87c7abb58407a1795217681d5ae83d02fd7b1ff786d9b5661f9db4619f500988`.
+The app and ZIP are under this worktree's `release/`; they were not opened in
+the owner's workspace.
+
+### Final review: usable-area travel
+
+Review reproduced sustained movement in Dock-reserved space because the driver
+passed only full display bounds to the sampler. The correction passes both full
+bounds and the display work area. Initial pickup stays at the exact physical
+cursor; subsequent movement eases the rig and pointer into usable space. Native
+full-display bounds and rendered-hand alignment remain unchanged. No Ability IDs
+or package-specific constants were added.
+
+New regressions first failed for the actual package at a bottom Dock, side Docks
+and a display with negative coordinates, then passed after the fix. They cover
+exact initial contact, gentle entry, settled travel over two authored cycles,
+real-driver wiring, the sealed Mouse Mover worker and pointerless activities.
+The focused suite passes 39 tests; the new frozen full suite passes 2,359 tests
+with the same one certificate-identity skip. Collection source and delivery
+archive bytes are unchanged.
+
+### Floor walking follow-up
+
+Mouse Mover 0.1.1 now opts into the generic `floor-walk` motion mode. The companion
+reaches the current cursor, carries it down over 2,400 ms, then walks along the
+usable display floor at up to 66 logical pixels/second with the normal shared
+gait and eased turns. Pose loops do not reset the route. Manual release and
+five-second idle resumption, explicit activation, display keep-awake and native
+presentation authority are unchanged. Existing authored paths remain compatible.
+Floor contacts stay grounded even when a custom downward carrying pose requires
+shorter arm reach; the authoring guide documents this bounds correction.
+
+The new clean collection source is `4d70173e8c3999ab392827bc923409cbb4212a56`.
+Mouse Mover's archive SHA-256 is
+`5b8edeb70de232ae355d703d61046123582535e6369f7c1cc057f26362a6a934`.
+The controller independently compared all nine allowlisted package files with
+that Git commit, verified the archive digest and confirmed `dirty:false` in its
+inventory. Spotify artifacts/icons remain unchanged. The old Mouse Mover fixture
+is retained separately for authored-path compatibility.
+
+Host source `f0df4cfe2a7332f0bc0f2e90c53fbb1a7816f71a` passes **2,387 tests with
+one existing certificate-identity skip** in 255 files against a dedicated tmpfs
+PostgreSQL database, never the owner's database. Format, lint, types, build and
+speech protocol suites (31 + 17) pass. macOS acceptance passes **613 tests plus
+28 native sandbox probes**. Collection validation passes 164 worker/protocol/
+packaging tests, three repository tests and all manifest checks. Existing reviewed
+dependencies and interpreter were reused; no dependency reinstall or new package
+was needed. Vite retains its existing large-chunk warning.
+
+The actual-rig floor preview samples 1,954 frames over 65.1 seconds, including
+descent, raised-foot walking, both directions, turns, manual pause, new-anchor
+resume and stop. It records 1,662 fake pointer moves, maximum rendered-palm error
+`1.6077746776921858e-13` logical pixels, zero pickup error/usable-area overflow,
+zero retained sleep assertions and no browser errors. The pointerless variant
+also passes with zero pointer moves, correcting the earlier developer-preview
+limitation. Controller-inspected images/video are in
+`artifacts/desktop/activity-floor-final/`; command logs and source provenance are
+under `artifacts/verification/floor-walk/`. The last generic reach correction does
+not change Mouse Mover's raised-arm geometry.
+
+Before this follow-up, the owner confirmed that Mouse Mover 0.1.0 worked after
+the existing Accessibility entry was refreshed to the running development app.
+Read-only live diagnostics observed actual cursor travel, physical-input pause
+and resumption after five seconds idle; the temporary localhost inspector was
+closed afterward. An earlier paused result card was a historical snapshot after
+the activity had stopped, not evidence of current live status. The cause of that
+earlier stop was not established. These live observations do not establish
+hardware sleep prevention, mixed-display behavior or microphone acceptance.
+
+The final ad-hoc signed app, strict deep signature check and relocated-app smoke
+pass, including native/Node/Python sealed workers and the offline Spotify helper.
+The ZIP SHA-256 is
+`7c0cabeae873b56975951357b5bace61612185f5ccc7303dc8c45a8135d1bf9b`.
+The initial pre-review-fix build hit the existing offline Spotify validation
+helper's five-second deadline; a read-only offline probe completed in 4.651 s.
+The final rebuilt app passed the unchanged smoke gate. No timeout or assertion
+was weakened. The optional `.icon` packager warning remains; `.icns` is included.
+Developer ID signing/notarization remain release work.
+
+Independent task/final review approved the floor-walk change after the grounded
+reach correction. One nonblocking edge remains: a pathological two-pixel-high
+work area can produce negative arm reach through extreme nonuniform compression.
+Normal display work areas and Mouse Mover's raised pose are unaffected. This is
+retained as a developer geometry limitation, not represented as tested support.

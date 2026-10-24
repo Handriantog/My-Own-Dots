@@ -26,7 +26,12 @@ afterEach(() => {
   for (const fn of cleanups.splice(0).reverse()) fn();
   vi.restoreAllMocks();
 });
-function fixture(delegated = false, typedOnly = false) {
+function fixture(
+  delegated = false,
+  typedOnly = false,
+  interactive = false,
+  channel = false,
+) {
   const store = new Store(':memory:'),
     workspace = new WorkspaceStore(':memory:', 'owner');
   cleanups.push(() => {
@@ -42,6 +47,7 @@ function fixture(delegated = false, typedOnly = false) {
       tools: manifestFixture.tools.map((tool) => ({
         ...tool,
         ...(typedOnly ? { channels: ['text'] } : {}),
+        ...(interactive ? { execution: 'interactive' } : {}),
       })),
     }),
     digest = 'a'.repeat(64);
@@ -137,7 +143,7 @@ function fixture(delegated = false, typedOnly = false) {
       webSearchProvider: 'disabled',
     },
     dot.id,
-    false,
+    channel,
     undefined,
     undefined,
     delegated
@@ -179,7 +185,11 @@ function fixture(delegated = false, typedOnly = false) {
     threadId: 'thread',
     runId,
     messages: [
-      { id: randomUUID(), role: 'user' as const, content: 'Find a song.' },
+      {
+        id: String(randomUUID()),
+        role: 'user' as const,
+        content: 'Find a song.',
+      },
     ],
     context: [],
     state: {},
@@ -501,5 +511,54 @@ it.each(['direct', 'delegated'])(
     expect(prompts.length).toBeGreaterThan(0);
     expect(JSON.stringify(prompts)).not.toContain(f.name);
     expect(f.invoke).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  'text',
+  'direct-voice',
+  'delegated-voice',
+  'schedule',
+  'receipt',
+  'forged-voice',
+  'slack',
+  'background',
+])(
+  'mints interactive Ability admission only for a real owner turn: %s',
+  async (kind) => {
+    const f = fixture(
+      kind === 'delegated-voice',
+      false,
+      true,
+      kind === 'slack',
+    );
+    if (kind === 'schedule')
+      f.input.messages[0].id = 'opendots:scheduled_task:fixture';
+    if (kind === 'receipt')
+      f.input.messages[0].id = 'opendots:voice_receipt:fixture';
+    if (kind === 'forged-voice')
+      f.input.messages[0].id =
+        'opendots:voice_compute:' + 'a'.repeat(64) + ':' + randomUUID();
+    if (kind === 'background') f.input.messages = [];
+    if (kind === 'direct-voice') {
+      setVoiceTurn(f.workspace, {
+        callId: 'call',
+        dotId: f.dot.id,
+        threadId: f.input.threadId,
+        messageId: f.input.messages[0].id,
+        text: f.input.messages[0].content,
+      });
+      cleanups.push(() => clearVoiceTurn(f.workspace, 'call'));
+    }
+    const prompts: unknown[] = [];
+    engine.runAgent.mockImplementation(async (request) => {
+      prompts.push(request.prompt);
+      return { result: { text: 'Done.', toolCalls: [] }, usage: {} };
+    });
+    await lastValueFrom(f.agent.run(f.input).pipe(toArray()));
+    expect(prompts.length).toBeGreaterThan(0);
+    expect(JSON.stringify(prompts).includes(f.name)).toBe(
+      ['text', 'direct-voice', 'delegated-voice'].includes(kind),
+    );
   },
 );

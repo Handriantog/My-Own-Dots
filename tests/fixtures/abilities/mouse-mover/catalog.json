@@ -1,0 +1,54 @@
+{
+  "catalogVersion": 1,
+  "abilities": [
+    {
+      "id": "spotify",
+      "name": "Spotify",
+      "path": "abilities/spotify",
+      "status": "development",
+      "version": null,
+      "license": "MIT",
+      "icon": {
+        "background": "#1DB954",
+        "foreground": "#10231A",
+        "paths": [
+          "M4 7 C9 4 16 4 21 7 L20 9 C15 6 9 6 5 9 Z",
+          "M5 11 C10 8 16 9 20 11 L19 13 C15 11 10 10 6 13 Z",
+          "M7 15 C11 13 15 14 18 16 L17 18 C14 16 11 15 8 17 Z"
+        ]
+      }
+    },
+    {
+      "id": "spotify-local",
+      "name": "Spotify Local",
+      "path": "abilities/spotify-local",
+      "status": "development",
+      "version": null,
+      "license": "MIT",
+      "icon": {
+        "background": "#1DB954",
+        "foreground": "#10231A",
+        "paths": [
+          "M4 7 C9 4 16 4 21 7 L20 9 C15 6 9 6 5 9 Z",
+          "M5 11 C10 8 16 9 20 11 L19 13 C15 11 10 10 6 13 Z",
+          "M7 15 C11 13 15 14 18 16 L17 18 C14 16 11 15 8 17 Z"
+        ]
+      }
+    },
+    {
+      "id": "mouse-mover",
+      "name": "Mouse Mover",
+      "path": "abilities/mouse-mover",
+      "status": "development",
+      "version": null,
+      "license": "MIT",
+      "icon": {
+        "background": "#245C78",
+        "foreground": "#FFFFFF",
+        "paths": [
+          "M7 2 L18 13 L13 14 L16 20 L13 22 L10 16 L6 20 Z"
+        ]
+      }
+    }
+  ]
+}

@@ -14,6 +14,16 @@ bridge.setAuthority(async () => ({
 }));
 const app = new Hono();
 let pairs = 0;
+let master = true;
+let lastInvocation;
+app.post('/cancel-invocation', async (c) => {
+  await bridge.cancel(lastInvocation);
+  return c.json({ ok: true });
+});
+app.post('/master-off', (c) => {
+  master = false;
+  return c.json({ ok: true });
+});
 app.use('/ability-host/v1/pair', async (_c, next) => {
   pairs++;
   await next();
@@ -48,7 +58,19 @@ app.get('/api/abilities/catalog', (c) =>
 );
 app.get('/api/abilities/:id', (c) => c.json(config.binding));
 app.get('/api/dots/:id/abilities', (c) =>
-  c.json({ bindings: [config.binding] }),
+  c.json({
+    bindings: [config.binding],
+    installed: [
+      {
+        digest: config.binding.digest,
+        manifest: config.binding.manifest,
+        enabled: master,
+        restored: false,
+        settings: {},
+        enabledDots: 1,
+      },
+    ],
+  }),
 );
 app.get('/alive', (c) =>
   c.json({
@@ -63,7 +85,8 @@ app.post('/disconnect', async (c) => {
   return c.json({ ok: true });
 });
 app.post('/invoke', async (c) => {
-  const { op } = await c.req.json();
+  const { op, interactive } = await c.req.json();
+  lastInvocation = randomUUID();
   try {
     return c.json(
       await bridge.invoke(
@@ -75,9 +98,10 @@ app.post('/invoke', async (c) => {
             dotId: config.binding.dotId,
             digest: config.binding.digest,
             grantRevision: config.binding.revision,
-            invocationId: randomUUID(),
+            invocationId: lastInvocation,
             threadId: 'thread',
             tool: 'run',
+            ...(interactive === true ? { interactive: true } : {}),
           },
           arguments: { op },
           settings: config.binding.settings,

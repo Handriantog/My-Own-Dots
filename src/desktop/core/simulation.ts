@@ -44,9 +44,11 @@ export class CompanionSimulation {
     reducedMotion: boolean;
     frozen?: boolean;
     voice?: CompanionVoiceState;
+    activity?: boolean;
   } = { paused: false, reducedMotion: false };
   private lastTime: number | null = null;
   private accumulator = 0;
+  private activityRelease = 0;
   private suspended = false;
   private events: InteractionEvent[] = [];
   private eventId = 0;
@@ -142,6 +144,25 @@ export class CompanionSimulation {
   frame(): SimulationFrame {
     return structuredClone(this.state);
   }
+  /** Continue normal physics from the last presented activity pose. */
+  adoptActivity(frame: SimulationFrame): void {
+    this.state = structuredClone(frame);
+    this.activityRelease = 0.25;
+    this.state.grip = null;
+    this.state.climb = null;
+    this.state.velocity = { x: 0, y: 0 };
+    this.state.support = supportAt(
+      this.world,
+      frame.root.x,
+      frame.root.y,
+      frame.displayId,
+    );
+    this.intention = null;
+    this.climbStroke = null;
+    this.pullFrom = this.pullTo = this.pullTarget = null;
+    this.supportMotion = { x: 0, y: 0 };
+    this.action(this.state.support ? 'idle' : 'fall');
+  }
   drainEvents(): InteractionEvent[] {
     const result = this.events;
     this.events = [];
@@ -152,10 +173,11 @@ export class CompanionSimulation {
     reducedMotion: boolean;
     frozen?: boolean;
     voice?: CompanionVoiceState;
+    activity?: boolean;
   }): void {
     const endingVoice = this.options.voice && !options.voice;
     this.options = options;
-    if (options.voice) {
+    if (options.voice || options.activity) {
       this.intention = null;
       this.state.velocity = { x: 0, y: 0 };
       this.supportMotion = { x: 0, y: 0 };
@@ -493,11 +515,19 @@ export class CompanionSimulation {
     this.intention = null;
     if (!this.state.grip) this.action('fall', 'slip');
   }
+  private easeActivityRelease(previousBodyY: number, dt: number): void {
+    if (this.activityRelease <= 0) return;
+    const blend = Math.min(1, dt / this.activityRelease);
+    this.state.pose.bodyY =
+      previousBodyY + (this.state.pose.bodyY - previousBodyY) * blend;
+    this.activityRelease = Math.max(0, this.activityRelease - dt);
+  }
   private step(dt: number): void {
     const s = this.state;
+    const previousBodyY = s.pose.bodyY;
     s.actionAge += dt;
     s.hearts = s.hearts.filter((heart) => (heart.age += dt) < 1.8);
-    if (this.options.voice) {
+    if (this.options.voice || this.options.activity) {
       s.pose = samplePose(
         s.pose,
         {
@@ -513,6 +543,7 @@ export class CompanionSimulation {
         },
         dt,
       );
+      this.easeActivityRelease(previousBodyY, dt);
       return;
     }
     if (s.action === 'pet' && s.atMs >= this.lovedUntil) this.action('idle');
@@ -554,6 +585,7 @@ export class CompanionSimulation {
       },
       dt,
     );
+    this.easeActivityRelease(previousBodyY, dt);
     applyClimbContact(s, previousPose, dt);
     if (s.grip) this.updateHeldRoot();
   }

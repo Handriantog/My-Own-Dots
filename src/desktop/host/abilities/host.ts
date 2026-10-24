@@ -1,3 +1,5 @@
+import { AbilityActivities } from './activities.js';
+import type { ActivityDriver } from '../../../shared/abilities/activity.js';
 import { createHash } from 'node:crypto';
 import { mkdir, realpath, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -63,6 +65,11 @@ type Options = {
   authorize(context: InvocationContext): Promise<Binding>;
   open(url: string): Promise<void>;
   appControl?: AppControlTransport;
+  activityDriver?(): ActivityDriver | undefined;
+  renewActivity?(
+    context: InvocationContext,
+    signal: AbortSignal,
+  ): Promise<Binding>;
   http?: Pick<AbilityHttp, 'request'>;
   /** In-process acceptance transport; never read from a manifest, IPC or settings. */
   transport?: AbilityHttpsTransport;
@@ -70,6 +77,7 @@ type Options = {
 };
 export class AbilityHost implements DesktopAbilityHandlers {
   readonly accounts: AbilityOAuth;
+  private readonly activities: AbilityActivities;
   private readonly appControl: AbilityAppControl;
   private readonly results = new OwnerResultStore();
   private readonly supervisor: AbilitySupervisor;
@@ -84,6 +92,19 @@ export class AbilityHost implements DesktopAbilityHandlers {
   private maintenance = 0;
   private stopping?: Promise<void>;
   constructor(private readonly options: Options) {
+    this.activities = new AbilityActivities({
+      driver: () => options.activityDriver?.(),
+      authorize: (context) => this.authorize(context),
+      renew: async (context, signal) => {
+        if (!options.renewActivity)
+          throw new AbilityFailure('permission_denied');
+        const binding = await options.renewActivity(context, signal);
+        signal.throwIfAborted();
+        if (!this.live(context, binding))
+          throw new AbilityFailure('permission_denied');
+        return binding;
+      },
+    });
     this.appControl = new AbilityAppControl({
       authorize: (context) => this.authorize(context),
       dispatch:
@@ -182,6 +203,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
       binding.manifest.tools.some(
         (tool) =>
           tool.id === context.tool &&
+          (tool.execution !== 'interactive' || context.interactive === true) &&
           (!tool.channels || tool.channels.includes(context.channel ?? 'text')),
       )
     );
@@ -209,6 +231,12 @@ export class AbilityHost implements DesktopAbilityHandlers {
       const request = capabilitySchema.parse(input);
       const binding = await this.authorize(context);
       signal.throwIfAborted();
+      if (request.kind === 'companion-activity')
+        return await this.activities.request(
+          context,
+          request,
+          this.active.get(context.invocationId)!.controller.signal,
+        );
       if (request.kind === 'app-control')
         return await this.appControl.request(context, request, signal);
       if (request.kind === 'https')
@@ -250,6 +278,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
   ): Promise<InvocationOutcome> {
     let id: string | undefined;
     let dispatched = false;
+    let success = false;
     let authorityTimer: ReturnType<typeof setInterval> | undefined;
     const controller = new AbortController(),
       abort = () => controller.abort();
@@ -313,11 +342,14 @@ export class AbilityHost implements DesktopAbilityHandlers {
       const result = workerResultSchema.parse(raw);
       if (tool.visibility === 'model-visible' && result.status === 'success') {
         validateValue(tool.output, result.value);
-        return parseOutcome({
+        const outcome = parseOutcome({
           status: 'success',
           visibility: 'model-visible',
           value: result.value,
         });
+        await this.authorize(context);
+        success = true;
+        return outcome;
       }
       // Construct a new envelope. No worker text, value, URL, identity or provider error is spread into it.
       const resultRef = result.owner
@@ -327,11 +359,14 @@ export class AbilityHost implements DesktopAbilityHandlers {
         if (!resultRef) throw new AbilityFailure('invalid_response');
         return { status: 'selection_needed', resultRef };
       }
-      return parseOutcome({
+      const outcome = parseOutcome({
         status: result.status,
         ...(result.status === 'error' ? { code: result.code } : {}),
         ...(resultRef ? { resultRef } : {}),
       });
+      await this.authorize(context);
+      success = result.status === 'success';
+      return outcome;
     } catch (error) {
       return dispatched || controller.signal.aborted
         ? { status: 'uncertain' }
@@ -339,7 +374,16 @@ export class AbilityHost implements DesktopAbilityHandlers {
     } finally {
       if (authorityTimer) clearInterval(authorityTimer);
       signal.removeEventListener('abort', abort);
-      if (id) this.active.delete(id);
+      if (id) {
+        try {
+          await this.activities.finish(
+            id,
+            success && !controller.signal.aborted,
+          );
+        } finally {
+          this.active.delete(id);
+        }
+      }
     }
   }
   async recentResults(dotId: string, threadId: string): Promise<string[]> {
@@ -373,6 +417,10 @@ export class AbilityHost implements DesktopAbilityHandlers {
       throw new AbilityFailure('permission_denied');
     return this.results.select(dotId, handle, itemId);
   }
+  async cancel(invocationId: string): Promise<void> {
+    this.active.get(invocationId)?.controller.abort();
+    await this.activities.cancel(invocationId);
+  }
   async revoke(bindingId: string, revision: number): Promise<void> {
     this.revoked.set(
       bindingId,
@@ -382,6 +430,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
       if (entry.command.binding.id === bindingId) entry.controller.abort();
     this.results.clearBinding(bindingId);
     await Promise.all([
+      this.activities.stop(bindingId),
       this.supervisor.stopBinding(bindingId),
       this.accounts.cancelBinding(bindingId),
     ]);
@@ -391,6 +440,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
       if (entry.command.binding.id === bindingId) entry.controller.abort();
     this.results.clearBinding(bindingId);
     await Promise.all([
+      this.activities.stop(bindingId),
       this.supervisor.stopBinding(bindingId),
       this.accounts.disconnect(bindingId),
     ]);
@@ -416,6 +466,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
       )
     )
       throw new AbilityFailure('busy');
+    await this.activities.uninstall(digest);
     const root = await DirectoryAnchor.capture(
       join(this.options.packageRoot, 'packages'),
     );
@@ -430,7 +481,10 @@ export class AbilityHost implements DesktopAbilityHandlers {
       ids.add(entry.command.binding.id);
       entry.controller.abort();
     }
-    await Promise.all([...ids].map((id) => this.supervisor.stopBinding(id)));
+    await Promise.all([
+      this.activities.stop(),
+      ...[...ids].map((id) => this.supervisor.stopBinding(id)),
+    ]);
   }
   async resume(): Promise<void> {
     this.maintenance = Math.max(0, this.maintenance - 1);
@@ -441,6 +495,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
     this.results.clear();
     for (const entry of this.active.values()) entry.controller.abort();
     this.stopping = Promise.all([
+      this.activities.stop(),
       this.supervisor.stopAll(),
       this.accounts.stop(),
     ]).then(() => {});

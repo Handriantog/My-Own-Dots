@@ -1,16 +1,187 @@
+import { z } from 'zod';
+import type {
+  ActivityPointerTransport,
+  PhysicalPointer,
+} from './activity-driver.js';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { ObservationStream } from '../core/observations.js';
 import type { GeometrySnapshot, Point } from '../shared/contracts.js';
 
 export type HelperProcess = ChildProcessWithoutNullStreams;
+const physicalSchema = z.strictObject({
+  point: z.strictObject({
+    x: z.number().finite().min(-100000).max(100000),
+    y: z.number().finite().min(-100000).max(100000),
+  }),
+  down: z.boolean(),
+  revision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
+  sampledAtMs: z.number().finite().nonnegative(),
+  idleMs: z.number().finite().nonnegative(),
+});
 interface Callbacks {
+  physical?(sample: PhysicalPointer): void;
   scene(snapshot: GeometrySnapshot): void;
   status(message: string): void;
   pointer(input: { point: Point; down: boolean }): void;
 }
 type Factory = (executable: string, args: string[]) => HelperProcess;
-export class HelperSupervisor {
+export class HelperSupervisor implements ActivityPointerTransport {
+  private activityGeneration: number | null = null;
+  private requestId = 0;
+  private retirement?: { generation: number; promise: Promise<void> };
+  private pending: {
+    id: number;
+    generation: number;
+    session: string;
+    resolve: (value: Record<string, unknown>) => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
+  async begin(generation: number): Promise<PhysicalPointer> {
+    this.activityGeneration = generation;
+    const value = await this.requestActivity('begin', generation);
+    const sample = physicalSchema.safeParse(value.physical);
+    if (value.ok !== true || !sample.success) {
+      this.end(generation);
+      throw Error('Native pointer setup unavailable.');
+    }
+    return sample.data;
+  }
+  async move(
+    generation: number,
+    point: Point,
+    sample: PhysicalPointer,
+  ): Promise<boolean> {
+    if (this.activityGeneration !== generation)
+      throw Error('Pointer session inactive.');
+    if (
+      !physicalSchema.safeParse(sample).success ||
+      !Number.isFinite(point.x + point.y) ||
+      Math.abs(point.x) > 100000 ||
+      Math.abs(point.y) > 100000
+    )
+      throw Error('Invalid pointer target.');
+    const value = await this.requestActivity('move', generation, {
+      x: point.x,
+      y: point.y,
+      revision: sample.revision,
+      sampledAtMs: sample.sampledAtMs,
+    });
+    return value.ok === true;
+  }
+  end(generation: number): Promise<void> {
+    if (this.retirement && generation <= this.retirement.generation)
+      return this.retirement.promise;
+    if (this.activityGeneration === generation) this.activityGeneration = null;
+    if (this.pending?.generation === generation)
+      this.rejectPending('Activity stopped.');
+    // Stop is complete only after the native retirement ack, or confirmed process exit.
+    const child = this.child,
+      exited = this.exited;
+    const waitForExit = () =>
+      new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () =>
+            reject(Error('Native pointer retirement could not be confirmed.')),
+          1000,
+        );
+        void exited.then(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+      });
+    const retirement = !child
+      ? waitForExit()
+      : this.requestActivity('end', generation)
+          .then((reply) => {
+            if (reply.ok !== true)
+              throw Error('Native pointer retirement failed.');
+          })
+          .catch(async () => {
+            child.kill('SIGKILL');
+            this.failed(child);
+            await waitForExit();
+          });
+    // Lifecycle notifications intentionally do not await; callers still receive rejection.
+    void retirement.catch(() => {});
+    this.retirement = { generation, promise: retirement };
+    return retirement;
+  }
+  private requestActivity(
+    op: 'begin' | 'move' | 'end',
+    generation: number,
+    fields: Record<string, number> = {},
+  ): Promise<Record<string, unknown>> {
+    if (this.pending)
+      return Promise.reject(Error('Native pointer request pending.'));
+    const session = this.current(performance.now())?.helperSession;
+    if (!session || !this.child?.stdin.writable)
+      return Promise.reject(Error('Native pointer helper lost.'));
+    const id = ++this.requestId,
+      child = this.child;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.rejectPending('Native pointer timeout.');
+        child.kill('SIGKILL');
+        this.failed(child);
+      }, 250);
+      this.pending = { id, generation, session, resolve, reject, timer };
+      child.stdin.write(
+        JSON.stringify({
+          kind: 'activity',
+          op,
+          generation,
+          requestId: id,
+          helperSession: session,
+          ...fields,
+        }) + '\n',
+      );
+    });
+  }
+  private rejectPending(message: string): void {
+    const pending = this.pending;
+    this.pending = null;
+    if (pending) {
+      clearTimeout(pending.timer);
+      pending.reject(Error(message));
+    }
+  }
+  private activityMessage(value: unknown): boolean {
+    if (
+      !value ||
+      typeof value !== 'object' ||
+      !('kind' in value) ||
+      (value.kind !== 'activity-ack' && value.kind !== 'activity-input')
+    )
+      return false;
+    const message = value as Record<string, unknown>;
+    if (
+      message.helperSession !== this.current(performance.now())?.helperSession
+    )
+      return true;
+    if (message.kind === 'activity-input') {
+      const sample = physicalSchema.safeParse(message.physical);
+      if (message.generation === this.activityGeneration && sample.success)
+        this.callbacks.physical?.(sample.data);
+    } else {
+      const pending = this.pending;
+      if (
+        pending &&
+        message.requestId === pending.id &&
+        message.generation === pending.generation &&
+        message.helperSession === pending.session &&
+        typeof message.ok === 'boolean'
+      ) {
+        this.pending = null;
+        clearTimeout(pending.timer);
+        pending.resolve(message);
+      }
+    }
+    return true;
+  }
+
   private child: HelperProcess | null = null;
+  private exited: Promise<void> = Promise.resolve();
   private observations = new ObservationStream();
   private retry: ReturnType<typeof setTimeout> | null = null;
   private attempts = 0;
@@ -42,13 +213,15 @@ export class HelperSupervisor {
     if (this.child?.stdin.writable) this.child.stdin.write(`${command}\n`);
   }
   stop(): void {
+    this.activityGeneration = null;
+    this.rejectPending('Native pointer helper lost.');
     this.stopped = true;
     if (this.retry) clearTimeout(this.retry);
     this.retry = null;
     const child = this.child;
     this.child = null;
     this.observations.resetSession();
-    child?.kill();
+    child?.kill('SIGKILL');
   }
   private launch(): void {
     if (this.stopped) return;
@@ -64,6 +237,12 @@ export class HelperSupervisor {
       return;
     }
     this.child = child;
+    this.exited = new Promise<void>((resolve) => {
+      child.once('exit', () => resolve());
+      child.once('error', () => {
+        if (!child.pid) resolve();
+      });
+    });
     let buffer = '';
     this.command(this.mode);
     child.stdin.on('error', () => {});
@@ -72,7 +251,7 @@ export class HelperSupervisor {
       if (this.child !== child || this.stopped) return;
       buffer += chunk.toString('utf8');
       if (buffer.length > 1_048_576) {
-        child.kill();
+        child.kill('SIGKILL');
         this.failed(child);
         return;
       }
@@ -86,6 +265,7 @@ export class HelperSupervisor {
         } catch {
           continue;
         }
+        if (this.activityMessage(value)) continue;
         if (
           typeof value === 'object' &&
           value &&
@@ -117,6 +297,8 @@ export class HelperSupervisor {
   private failed(child: HelperProcess | null): void {
     if (this.stopped || (child && this.child !== child)) return;
     this.child = null;
+    this.activityGeneration = null;
+    this.rejectPending('Native pointer helper lost.');
     this.observations.resetSession();
     if (this.attempts >= 5) {
       this.callbacks.status(

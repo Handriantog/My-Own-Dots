@@ -1,8 +1,10 @@
 import { z } from 'zod';
+import { abilityIconSchema } from './icon.js';
 export const libraryIdSchema = z.string().regex(/^[a-z][a-z0-9-]{0,99}$/);
 export const sourceCommitSchema = z.string().regex(/^[a-f0-9]{40}$/);
 export const libraryEntrySchema = z.strictObject({
   id: libraryIdSchema,
+  icon: abilityIconSchema.optional(),
   name: z.string().min(1).max(200),
   publisher: z.string().min(1).max(200),
   license: z.string().min(1).max(100),

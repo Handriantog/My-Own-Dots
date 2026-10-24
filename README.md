@@ -75,9 +75,14 @@ private state. Disable stops owned work; quitting the desktop stops all workers.
 files.
 
 The first host supports confined JavaScript, optional local Python and native
-arm64 executables, with scoped HTTPS, browser OAuth, declared helpers, and
-[Spotify-only local app control](docs/abilities/spotify-local.md). General desktop
-manipulation and printing are future work. Current execution evidence is macOS 26
+arm64 executables, with scoped HTTPS, browser OAuth, declared helpers,
+[Spotify-only local app control](docs/abilities/spotify-local.md), and
+[package-defined companion activities](docs/abilities/companion-activities.md).
+An activity can animate Dot, carry the cursor down for a walk along the usable
+display floor and keep the computer awake after an explicit chat or voice request. Manual mouse use releases the
+cursor temporarily. Packages own their poses, movement and icons; Dot provides
+the reusable runtime and permission checks. General desktop automation and
+printing remain future work. Current execution evidence is macOS 26
 Apple Silicon; no Ability release has been published. See [authoring](docs/abilities/authoring.md) and
 [verification](docs/desktop/abilities-verification.md).
 

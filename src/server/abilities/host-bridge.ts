@@ -38,6 +38,7 @@ export interface AbilityHostPort {
     request: InvocationRequest,
     signal: AbortSignal,
   ): Promise<InvocationOutcome>;
+  cancel?(invocationId: string): Promise<void>;
   revoke(bindingId: string, revision: number): Promise<void>;
   disconnect(bindingId: string): Promise<void>;
   eraseState(bindingId: string): Promise<void>;
@@ -205,6 +206,9 @@ export class AbilityHostBridge implements AbilityHostPort {
     const outcome = parseOutcome(result);
     if ('visibility' in outcome) validateValue(tool.output, outcome.value);
     return outcome;
+  }
+  async cancel(invocationId: string): Promise<void> {
+    await this.call({ type: 'cancel', invocationId }, undefined, 6000);
   }
   async revoke(bindingId: string, revision: number): Promise<void> {
     await this.call({ type: 'revoke', bindingId, revision }, undefined, 6000);

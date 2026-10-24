@@ -134,3 +134,37 @@ it('resolves the collection revision without downloading potentially large commi
   ).toBe(sha);
   expect(fetch.mock.calls[0][0]).toMatch(/\/git\/ref\/heads\/main$/);
 });
+
+it('propagates publisher icon metadata from the pinned catalog', async () => {
+  const icon = {
+    background: '#112233',
+    foreground: '#ffffff',
+    paths: ['M2 2H22V22H2Z'],
+  };
+  const { library } = fixture({
+    ...index,
+    abilities: [{ ...index.abilities[0], icon }],
+  });
+  expect(
+    (await library.browse(false, new AbortController().signal)).entries[0],
+  ).toMatchObject({ icon });
+});
+
+it('rejects unsafe catalog artwork before exposing an entry', async () => {
+  const { library } = fixture({
+    ...index,
+    abilities: [
+      {
+        ...index.abilities[0],
+        icon: {
+          background: '#112233',
+          foreground: '#ffffff',
+          paths: ['<script>'],
+        },
+      },
+    ],
+  });
+  await expect(
+    library.browse(false, new AbortController().signal),
+  ).rejects.toThrow();
+});

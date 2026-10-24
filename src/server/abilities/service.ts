@@ -28,6 +28,8 @@ export type AbilityInvocation = {
   arguments: Record<string, JsonValue>;
   selectionRef?: string;
   channel?: 'text' | 'voice';
+  /** Minted by the owner-turn path, never from tool arguments. */
+  interactive?: boolean;
 };
 export class AbilityService {
   private maintenance = false;
@@ -469,7 +471,11 @@ export class AbilityService {
   async list(dotId: string) {
     return this.workspace.abilities.list(dotId);
   }
-  async tools(dotId: string, channel: 'text' | 'voice' = 'text') {
+  async tools(
+    dotId: string,
+    channel: 'text' | 'voice' = 'text',
+    interactive = false,
+  ) {
     if (!this.host.session()) return [];
     await this.cleanup();
     const enabled = new Set(
@@ -484,7 +490,11 @@ export class AbilityService {
       )
       .flatMap((binding) =>
         binding.manifest.tools
-          .filter((tool) => !tool.channels || tool.channels.includes(channel))
+          .filter(
+            (tool) =>
+              (!tool.channels || tool.channels.includes(channel)) &&
+              (tool.execution !== 'interactive' || interactive),
+          )
           .map((tool) => ({
             bindingId: binding.id,
             source: binding.manifest.source,
@@ -517,6 +527,8 @@ export class AbilityService {
         !binding.manifest.tools.some(
           (tool) =>
             tool.id === context.tool &&
+            (tool.execution !== 'interactive' ||
+              context.interactive === true) &&
             (!tool.channels ||
               tool.channels.includes(context.channel ?? 'text')),
         )
@@ -550,6 +562,7 @@ export class AbilityService {
         );
         if (
           !tool ||
+          (tool.execution === 'interactive' && input.interactive !== true) ||
           (tool.channels && !tool.channels.includes(input.channel ?? 'text'))
         )
           throw new AbilityFailure('permission_denied');
@@ -565,10 +578,19 @@ export class AbilityService {
           tool: input.tool,
           threadId: input.threadId,
           ...(input.channel ? { channel: input.channel } : {}),
+          ...(input.interactive === true ? { interactive: true } : {}),
         });
         if (!(await this.workspace.abilities.claimInvocation(context)))
           throw new AbilityFailure('permission_denied');
         const controller = new AbortController();
+        // Host invocation may already have returned while receipt storage awaits.
+        // Cancellation still owns only the activity created by this invocation.
+        const cancelActivity = () => {
+          void this.host.cancel?.(context.invocationId).catch(() => {});
+        };
+        controller.signal.addEventListener('abort', cancelActivity, {
+          once: true,
+        });
         const abort = () => controller.abort();
         signal.addEventListener('abort', abort, { once: true });
         if (signal.aborted) controller.abort();
@@ -590,7 +612,10 @@ export class AbilityService {
         return {
           pending,
           context,
-          cleanup: () => signal.removeEventListener('abort', abort),
+          cleanup: () => {
+            signal.removeEventListener('abort', abort);
+            controller.signal.removeEventListener('abort', cancelActivity);
+          },
         };
       });
       try {
@@ -604,7 +629,22 @@ export class AbilityService {
           input.invocationId,
           outcome,
         );
+        if (
+          this.active.get(input.invocationId)?.controller.signal.aborted ||
+          this.host.session()?.id !== admitted.context.sessionId
+        ) {
+          outcome = { status: 'uncertain' };
+          await this.workspace.abilities.settleInvocation(
+            input.invocationId,
+            outcome,
+          );
+        }
+        if (outcome.status !== 'success')
+          await this.host.cancel?.(input.invocationId);
         return outcome;
+      } catch (error) {
+        await this.host.cancel?.(input.invocationId);
+        throw error;
       } finally {
         admitted.cleanup();
         this.active.delete(input.invocationId);

@@ -20,6 +20,7 @@ export function validPointerInput(value: unknown): value is PointerInput {
 }
 export class PresentationMailbox {
   private inFlight: PresentationFrame | null = null;
+  private acknowledging = false;
   private pending: PresentationFrame | null = null;
   offer(frame: PresentationFrame): PresentationFrame | null {
     if (!this.inFlight) {
@@ -37,8 +38,14 @@ export class PresentationMailbox {
     };
     return null;
   }
+  beginAck(sequence: number): PresentationFrame | null {
+    if (this.inFlight?.sequence !== sequence || this.acknowledging) return null;
+    this.acknowledging = true;
+    return this.inFlight;
+  }
   ack(sequence: number): PresentationFrame | null {
     if (!this.inFlight || sequence !== this.inFlight.sequence) return null;
+    this.acknowledging = false;
     this.inFlight = this.pending;
     this.pending = null;
     return this.inFlight;
@@ -49,7 +56,11 @@ export class PresentationMailbox {
   stalled(nowMs: number): boolean {
     return !!this.inFlight && nowMs - this.inFlight.sentAtMs > 500;
   }
+  discardPending(): void {
+    this.pending = null;
+  }
   reset(): void {
+    this.acknowledging = false;
     this.inFlight = null;
     this.pending = null;
   }

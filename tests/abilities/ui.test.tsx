@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AbilityManager } from '../../src/client/abilities/AbilityManager.tsx';
+import { AbilityDetails } from '../../src/client/abilities/AbilityDetails.tsx';
 import { AbilitiesSection } from '../../src/client/abilities/AbilitiesSection.tsx';
 import {
   PermissionReview,
@@ -849,3 +850,143 @@ it.each(['GitHub', 'local'])(
     });
   },
 );
+
+it('renders package-owned icons for unrelated installed and catalog entries, with fallback', async () => {
+  const api = bridge();
+  const firstIcon = {
+    background: '#123456',
+    foreground: '#fedcba',
+    paths: ['M2 2H22V22H2Z'],
+  };
+  const secondIcon = {
+    background: '#654321',
+    foreground: '#abcdef',
+    paths: ['M12 2L22 22H2Z'],
+  };
+  const first = {
+    ...installed,
+    manifest: {
+      ...manifest,
+      id: 'unrelated-one',
+      name: 'First',
+      icon: firstIcon,
+    },
+  };
+  const second = {
+    ...availableEntry,
+    id: 'unrelated-two',
+    name: 'Second',
+    icon: secondIcon,
+  };
+  api.catalog.mockResolvedValue({
+    ok: true,
+    value: { available: true, installations: [first] },
+  });
+  api.browse.mockResolvedValue({
+    ok: true,
+    value: { sourceCommit: 'b'.repeat(40), entries: [second, availableEntry] },
+  });
+  await manager();
+  const paths = (scope = root.root) =>
+    scope.findAllByType('path').map((path) => path.props.d);
+  expect(
+    paths(root.root.findByProps({ 'aria-label': 'Open First' })),
+  ).toContain(firstIcon.paths[0]);
+  expect(
+    paths(root.root.findByProps({ 'aria-label': 'Open Second' })),
+  ).toContain(secondIcon.paths[0]);
+  expect(
+    root.root
+      .findByProps({ 'aria-label': 'Open Drawing' })
+      .findAllByType('svg'),
+  ).toHaveLength(1);
+  await openAbility('First');
+  expect(paths(root.root.findByType('article'))).toContain(firstIcon.paths[0]);
+  await openAbility('Second');
+  expect(paths(root.root.findByType('article'))).toContain(secondIcon.paths[0]);
+  const iconNode = root.root
+    .findByType('article')
+    .findAllByType('span')
+    .find(
+      (node) => node.props.style?.backgroundColor === secondIcon.background,
+    );
+  expect(iconNode?.props.style.color).toBe(secondIcon.foreground);
+  api.reviewInstall.mockResolvedValue({
+    ok: true,
+    value: {
+      ...review,
+      descriptor: { ...review.descriptor, manifest: first.manifest },
+    },
+  });
+  await act(async () => button('Add Ability').props.onClick());
+  await act(async () =>
+    root.root
+      .findByProps({ 'aria-label': 'GitHub release descriptor' })
+      .props.onChange({ target: { value: review.descriptorUrl } }),
+  );
+  await act(async () => button('Review').props.onClick());
+  expect(paths(root.root.findByType('article'))).toContain(firstIcon.paths[0]);
+});
+
+it('describes actual pointer and keep-awake grants rather than publisher claims', () => {
+  const permission = {
+    id: 'motion',
+    purpose: 'Only play',
+    kind: 'companion-activity' as const,
+    activities: ['orbit'],
+    pointer: true,
+    keepAwake: 'display' as const,
+  };
+  const summary = permissionSummary(permission);
+  expect(summary).toContain('pointer');
+  expect(summary).toContain('display');
+  expect(summary).toContain('system');
+  expect(
+    permissionSummary({ ...permission, pointer: false, keepAwake: 'none' }),
+  ).not.toMatch(/move the pointer|keep.*awake/i);
+  const html = renderToStaticMarkup(
+    <PermissionReview
+      dotName="Mochi"
+      review={{
+        ...review,
+        descriptor: {
+          ...review.descriptor,
+          manifest: { ...manifest, permissions: [permission] },
+        },
+      }}
+      onTeach={async () => {}}
+      onCancel={() => {}}
+    />,
+  );
+  expect(html).toContain(summary);
+});
+
+it('keeps fallback artwork in details and preview independent of another same-ID publisher', () => {
+  const sameId = {
+    ...manifest,
+    id: 'drawing',
+    publisher: 'Unrelated publisher',
+  };
+  const selections = [
+    { kind: 'installed' as const, ability: { ...installed, manifest: sameId } },
+    {
+      kind: 'preview' as const,
+      review: {
+        ...review,
+        descriptor: { ...review.descriptor, manifest: sameId },
+      },
+    },
+    {
+      kind: 'library' as const,
+      entry: availableEntry,
+      sourceCommit: 'b'.repeat(40),
+    },
+  ];
+  for (const selection of selections) {
+    const html = renderToStaticMarkup(
+      <AbilityDetails selection={selection} actions={null} onBack={() => {}} />,
+    );
+    expect(html).toContain('lucide-puzzle');
+    expect(html).not.toContain('background-color:');
+  }
+});

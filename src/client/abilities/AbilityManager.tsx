@@ -323,7 +323,7 @@ export function AbilityManager() {
                 disabled={!!busy}
                 onClick={() => select(`installed:${ability.digest}`)}
               >
-                <AbilityIcon />
+                <AbilityIcon icon={ability.manifest.icon} />
                 <span className="ability-row-copy">
                   <strong>{ability.manifest.name}</strong>
                   <span className="ability-row-summary">
@@ -368,7 +368,7 @@ export function AbilityManager() {
                 disabled={!!busy}
                 onClick={() => select(`library:${ability.id}`)}
               >
-                <AbilityIcon />
+                <AbilityIcon icon={ability.icon} />
                 <span className="ability-row-copy">
                   <strong>{ability.name}</strong>
                   <span className="ability-row-summary">

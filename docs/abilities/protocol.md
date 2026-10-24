@@ -1,5 +1,11 @@
 # Ability worker protocol — API 1
 
+Optional manifest activities, package-owned icons and interactive-only tools are
+additive API/format version 1 fields. Workers still initialize with API version 1.
+These capabilities require an updated host: older hosts reject the unfamiliar
+manifest fields rather than granting partial access. JSON Schema validates field
+shapes; the host also validates path geometry, keyframe continuity and grants.
+
 Use UTF-8, newline-delimited JSON-RPC 2.0 on stdin/stdout. Each frame is at most
 1 MiB including all content; stdout is protocol only. Diagnostics on stderr are
 bounded by the host. IDs are strings of 1–128 ASCII letters, digits, underscores,
@@ -86,6 +92,19 @@ through an owner-only tool. Credentials are injected by the host, never returned
 
 Other requests use the same envelope:
 
+- Companion activity: `{"kind":"companion-activity","ruleId":"motion","command":{"action":"start","activityId":"orbit"}}`.
+  Actions are `start`, `stop` and `status`. A successful reply is
+  `{"ok":true,"kind":"companion-activity","status":"running"}`; status is
+  `inactive`, `approaching`, `running` or `paused`. The named permission must
+  reference the manifest's bounded activity definition and grant its pointer and
+  keep-awake effects. Desktop activity tools require an explicit owner turn;
+  workers cannot supply trusted interactive authority or inline motion code.
+  A start is provisional until the worker returns a valid successful result and
+  authority is checked again. A successful activity then survives worker exit;
+  failed or canceled activation releases it. Later status calls do not take
+  ownership of an existing session. Stop waits for native pointer retirement.
+  See [companion activities](companion-activities.md) for lifetime and limits.
+
 - App control: `{"kind":"app-control","ruleId":"playback","command":{"action":"pause"}}`.
   The command must match the named permission's allowed actions. Result is
   `{"ok":true,"kind":"app-control","status":"success"}` or `status:"uncertain"`,
@@ -159,7 +178,9 @@ Shutdown notification: `{"jsonrpc":"2.0","method":"shutdown","params":{}}`.
 Neither needs an acknowledgment. Authority is revoked before delivery; cooperating
 with shutdown does not grant extra time or capabilities. After two seconds the
 host kills and reaps remaining workers. Desktop death, disconnect, disable, and
-workspace replacement also revoke authority. Closing/hiding a window does not.
+workspace replacement also revoke authority. Closing/hiding a workspace window
+does not end ordinary workers. Companion activities additionally stop when the
+desktop Dot is hidden or replaced, on lock/suspend, and on renderer/helper loss.
 Native watchdog leases expire after three seconds without an authorized renewal;
 they still work when the desktop event loop is frozen. Expiry starts the same
 two-second TERM/KILL cleanup. The native watchdog also caps execution at sixty

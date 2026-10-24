@@ -19,7 +19,11 @@ for (const profile of ['0', '1'])
     DOTS_ABILITY_APPLICATION_PROFILE: profile,
   });
 const desktop = readdirSync(new URL('../../tests/desktop/', import.meta.url))
-  .filter((name) => name.startsWith('abilities-') && name.endsWith('.test.ts'))
+  .filter(
+    (name) =>
+      (name.startsWith('abilities-') || name.startsWith('activity-')) &&
+      name.endsWith('.test.ts'),
+  )
   .map((name) => 'tests/desktop/' + name);
 run(
   process.execPath,

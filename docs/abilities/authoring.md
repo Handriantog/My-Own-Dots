@@ -101,12 +101,25 @@ inert; images display alternative text without loading remote resources. Use
 absolute links for external documentation. Metadata and README content never
 approve permissions or execute an Ability.
 
+An optional `icon` in the manifest and collection entry supplies the same safe
+vector artwork in list, detail and installation views. Use a 24 × 24 coordinate
+space, six-digit `background`/`foreground` hex colors and 1–12 SVG `paths`, each
+at most 2,048 characters. Paths are filled with the foreground color. Raw SVG,
+markup, attributes and remote images are not accepted; omit the icon to use the
+generic fallback. Keep catalog and packaged artwork consistent. Icon changes
+alone do not expand permissions.
+
 ## Permissions
 
 Each permission has a unique `id`, `kind`, and plain-text `purpose`. The UI shows
 the actual structured access as well as the explanation. Private binding state
 is implicit. Only these explicit capability kinds are accepted:
 
+- `companion-activity`: named manifest `activities`, an explicit `pointer`
+  boolean and `keepAwake` level (`none`, `system`, or `display`). Activities
+  declare bounded poses and movement; workers request start/stop/status by ID.
+  Every tool in such a package must declare `execution: "interactive"`. See
+  [companion activities](companion-activities.md) for animation, lifetime and OS access.
 - `app-control`: `application: "com.spotify.client"` and an explicit, nonempty
   `actions` list from the [Spotify command schema](../../src/shared/abilities/app-control.ts).
   The host owns the fixed adapter; workers cannot supply raw automation. See
@@ -129,7 +142,8 @@ resource origins must match the corresponding HTTP rule. Network resolution and
 actual socket destinations are checked by the host; declaring a hostname does
 not allow private-address access. No wildcard origins, arbitrary headers, proxies,
 redirected credentials, arbitrary desktop Accessibility, printing, or system services
-are supported. Spotify-only app control is the bounded exception described above.
+are supported. Spotify-only app control and declared companion activities are
+the bounded desktop capabilities described above.
 
 ## Schemas and updates
 
@@ -145,7 +159,8 @@ regex, recursion, executable expressions, coercion, or unknown keywords are acce
 The exported JSON Schema supports editor validation; host semantic checks also
 enforce unique IDs, cross-references, bounds, path bindings, and recursion limits.
 It cannot replace `parseManifest`. Changing origins, scopes, helpers, runtime,
-settings, publisher/source, or owner-only visibility requires review. Each update
+settings, publisher/source, owner-only visibility, activity definitions or tool
+execution restrictions requires review. Each update
 still binds new code to the exact artifact digest, even if permissions are equal.
 
 See [the worker protocol](protocol.md) for messages, limits, private result flow,
@@ -190,6 +205,12 @@ and enforces the restriction again at invocation/host authority boundaries. A
 worker or model cannot change the invocation channel. Use this for provider
 restrictions. The Spotify Web API package is text-only. Spotify Local declares
 both channels; technical admission is not a claim of provider policy approval.
+
+`execution: "interactive"` additionally requires an explicit owner request in
+chat or a legitimate voice turn. Scheduled work, Slack and background turns
+cannot invoke these tools. This origin is host-owned and cannot be supplied by
+the model or worker. Tools without the field retain their existing admission
+rules. Installing, enabling, reconnecting or restarting never starts an activity.
 
 Spotify app-control permissions require every tool in the Ability to be
 `owner-only`. The host rejects mixed visibility during review and execution,

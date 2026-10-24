@@ -3,3 +3,6 @@ dist
 package-lock.json
 RESEARCH.md
 docs/superpowers
+
+# Preserve exact publisher descriptor/catalog bytes and provenance hashes.
+tests/fixtures/abilities/mouse-mover/*.json

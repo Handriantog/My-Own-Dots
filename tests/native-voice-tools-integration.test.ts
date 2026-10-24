@@ -338,8 +338,8 @@ it.skipIf(!existsSync(python))(
     );
     expect(parentContext).not.toHaveBeenCalled();
     expect(pageScope).not.toHaveBeenCalledWith(parent.id);
-    expect(abilityExposure).toHaveBeenCalledWith(dot.id, 'text');
-    expect(abilityExposure).not.toHaveBeenCalledWith(dot.id, 'voice');
+    expect(abilityExposure).toHaveBeenCalledWith(dot.id, 'text', true);
+    expect(abilityExposure).not.toHaveBeenCalledWith(dot.id, 'voice', true);
   },
   30000,
 );

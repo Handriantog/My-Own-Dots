@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { identifier, isHttpsUrl, type JsonValue } from './manifest.js';
 import { abilityLimits, assertBoundedJson } from './limits.js';
 import { appCommandSchema } from './app-control.js';
+import { activityCommandSchema, activityStatusSchema } from './activity.js';
 
 const requestId = z
   .string()
@@ -83,6 +84,11 @@ export const ownerResultSchema = z.discriminatedUnion('kind', [
 export type OwnerResult = z.infer<typeof ownerResultSchema>;
 export const capabilitySchema = z.discriminatedUnion('kind', [
   z.strictObject({
+    kind: z.literal('companion-activity'),
+    ruleId: identifier,
+    command: activityCommandSchema,
+  }),
+  z.strictObject({
     kind: z.literal('app-control'),
     ruleId: identifier,
     command: appCommandSchema,
@@ -110,6 +116,11 @@ export const capabilitySchema = z.discriminatedUnion('kind', [
 ]);
 export type CapabilityRequest = z.infer<typeof capabilitySchema>;
 export const capabilityReplySchema = z.union([
+  z.strictObject({
+    ok: z.literal(true),
+    kind: z.literal('companion-activity'),
+    status: activityStatusSchema,
+  }),
   z.strictObject({
     ok: z.literal(true),
     kind: z.literal('app-control'),

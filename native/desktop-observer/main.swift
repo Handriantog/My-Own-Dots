@@ -2,6 +2,100 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 
+struct NativePointerSample {
+    let point: CGPoint
+    let down: Bool
+    let revision: Double
+    let sampledAtMs: Double
+    let idleMs: Double
+    var json: [String: Any] { ["point":["x":point.x,"y":point.y],"down":down,"revision":revision,"sampledAtMs":sampledAtMs,"idleMs":idleMs] }
+}
+
+// All side effects are injected; offline probes use fake input, bounds and warp.
+final class ActivityPointerSession {
+    let session: String
+    let sample: () -> NativePointerSample
+    let allowed: () -> Bool
+    let bounds: () -> [CGRect]
+    let warp: (CGPoint) -> Bool
+    private(set) var active: Int?
+    private var retired = 0
+    private var pendingMove: String?
+    init(session: String, sample: @escaping () -> NativePointerSample, allowed: @escaping () -> Bool, bounds: @escaping () -> [CGRect], warp: @escaping (CGPoint) -> Bool) {
+        self.session=session; self.sample=sample; self.allowed=allowed; self.bounds=bounds; self.warp=warp
+    }
+    func invalidate() { if let active = active { retired=max(retired,active) }; active=nil }
+    private func number(_ value: Any?) -> Double? {
+        guard let n=value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), n.doubleValue.isFinite else { return nil }
+        return n.doubleValue
+    }
+    // Receiving a command never executes movement. Retirement can cancel work
+    // buffered earlier in the same input batch before the next execution tick.
+    func submit(_ text: String) -> [[String: Any]] {
+        guard text.utf8.count <= 2048, let data=text.data(using:.utf8),
+              let value=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any] else { return [] }
+        if value["op"] as? String == "move" {
+            let previous=pendingMove
+            pendingMove=text
+            return previous.flatMap { command($0, allowWarp:false) }.map { [$0] } ?? []
+        }
+        guard let reply=command(text) else { return [] }
+        if value["op"] as? String == "end", reply["ok"] as? Bool == true,
+           let pending=pendingMove {
+            // Leave a replacement generation queued; retiring an older start
+            // must not cancel newer activity.
+            let pendingData=pending.data(using:.utf8)!
+            let queued=(try? JSONSerialization.jsonObject(with:pendingData)) as? [String:Any]
+            if let generation=number(queued?["generation"]), generation <= Double(retired) {
+                pendingMove=nil
+                return (command(pending, allowWarp:false).map { [$0] } ?? []) + [reply]
+            }
+        }
+        return [reply]
+    }
+    func flush() -> [[String: Any]] {
+        guard let pending=pendingMove else { return [] }
+        pendingMove=nil
+        return command(pending).map { [$0] } ?? []
+    }
+    func command(_ text: String, allowWarp: Bool = true) -> [String: Any]? {
+        guard text.utf8.count<=2048, let data=text.data(using:.utf8),
+              let value=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any],
+              value["kind"] as? String == "activity", value["helperSession"] as? String == session,
+              let op=value["op"] as? String, ["begin","move","end"].contains(op),
+              let gen=number(value["generation"]), gen>=1, gen<=9007199254740991, gen.rounded()==gen,
+              let request=number(value["requestId"]), request>=1, request<=9007199254740991, request.rounded()==request else { return nil }
+        let keys: Set<String> = ["kind","helperSession","op","generation","requestId"]
+        guard Set(value.keys)==(op=="move" ? keys.union(["x","y","revision","sampledAtMs"]) : keys) else { return nil }
+        let generation=Int(gen)
+        var reply: [String:Any] = ["kind":"activity-ack","helperSession":session,"generation":generation,"requestId":request,"ok":false]
+        if op=="end" {
+            retired=max(retired,generation)
+            if let current=active, current<=generation { active=nil }
+            reply["ok"]=true; return reply
+        }
+        guard allowed() else { invalidate(); return reply }
+        if op=="begin" {
+            guard generation>retired, active == nil || generation>active! else { return reply }
+            if let current=active { retired=max(retired,current) }
+            active=generation; reply["ok"]=true; reply["physical"]=sample().json; return reply
+        }
+        guard active==generation, generation>retired,
+              let x=number(value["x"]), let y=number(value["y"]), abs(x)<100000, abs(y)<100000,
+              let revision=number(value["revision"]), revision>=0, revision.rounded()==revision,
+              let sampledAt=number(value["sampledAtMs"]), sampledAt>=0 else { return reply }
+        let target=CGPoint(x:x,y:y)
+        guard bounds().contains(where: { target.x >= $0.minX && target.y >= $0.minY && target.x < $0.maxX && target.y < $0.maxY }) else { return reply }
+        // Re-read physical HID state immediately before warping, never trust a JS-only check.
+        let physical=sample()
+        guard !physical.down, physical.revision==revision,
+              physical.sampledAtMs>=sampledAt, physical.sampledAtMs-sampledAt<=200 else { return reply }
+        guard allowWarp else { return reply }
+        reply["ok"]=warp(target)
+        return reply
+    }
+}
+
 // Geometry-only adapter. Never reads AX titles, text, screenshots, or document data.
 final class DesktopObserver {
     let session = UUID().uuidString
@@ -19,6 +113,20 @@ final class DesktopObserver {
     var lastTrusted = false
     var nextObserverRefresh = 0.0
     var inputBuffer = Data()
+    lazy var activityPointer = ActivityPointerSession(session: session, sample: { [unowned self] in self.physicalPointer() }, allowed: { AXIsProcessTrusted() }, bounds: {
+        NSScreen.screens.compactMap { screen in
+            guard let id=screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+            return CGDisplayBounds(CGDirectDisplayID(id.uint32Value))
+        }
+    }, warp: { CGWarpMouseCursorPosition($0) == .success })
+    let physicalEvents: [CGEventType] = [.mouseMoved,.leftMouseDown,.leftMouseUp,.rightMouseDown,.rightMouseUp,.otherMouseDown,.otherMouseUp,.leftMouseDragged,.rightMouseDragged,.otherMouseDragged,.scrollWheel]
+    func physicalPointer() -> NativePointerSample {
+        // Warps generate no events. HID counters distinguish manual input from our own motion.
+        let revision=physicalEvents.reduce(0.0) { $0 + Double(CGEventSource.counterForEventType(.hidSystemState, eventType:$1)) }
+        let idle=physicalEvents.map { CGEventSource.secondsSinceLastEventType(.hidSystemState,eventType:$0)*1000 }.min() ?? 0
+        let down=(0..<32).contains { CGEventSource.buttonState(.combinedSessionState,button:CGMouseButton(rawValue:UInt32($0))!) }
+        return NativePointerSample(point: CGEvent(source:nil)?.location ?? .zero,down:down,revision:revision,sampledAtMs:clock,idleMs:idle.isFinite ? max(0,idle) : 0)
+    }
     let excluded: Set<pid_t>
     var clock: Double { ProcessInfo.processInfo.systemUptime * 1000 }
     var cadence: Double { requestedActive || clock < activeUntil ? 100 : 500 }
@@ -99,7 +207,7 @@ final class DesktopObserver {
         return Array(surfaces.prefix(32))
     }
     func invalidate() { dirty = true; activeUntil = clock + 2000 }
-    func sceneChanged() { revision += 1; invalidate(); snapshot(valid: false) }
+    func sceneChanged() { activityPointer.invalidate(); revision += 1; invalidate(); snapshot(valid: false) }
     func refreshObservers() {
         let trusted = AXIsProcessTrusted()
         if trusted != lastTrusted { revision += 1; dirty = true; lastTrusted = trusted }
@@ -183,11 +291,15 @@ final class DesktopObserver {
         lastObservation = now; dirty = !valid
     }
     func pointer() {
+        if let generation=activityPointer.active {
+            emit(["kind":"activity-input","helperSession":session,"generation":generation,"physical":physicalPointer().json])
+        }
         guard capture, let position = CGEvent(source: nil)?.location else { return }
         emit(["kind": "pointer", "helperSession": session, "point": ["x": position.x, "y": position.y],
               "down": CGEventSource.buttonState(.combinedSessionState, button: .left), "observedAtMs": clock])
     }
     func command(_ value: String) {
+        if value.first == "{" { for reply in activityPointer.submit(value) { emit(reply) }; return }
         switch value {
         case "active": requestedActive = true
         case "idle": requestedActive = false
@@ -222,6 +334,7 @@ final class DesktopObserver {
             guard let self = self else { return }
             let now = self.clock
             self.pointer()
+            for reply in self.activityPointer.flush() { self.emit(reply) }
             if now >= self.nextObserverRefresh { self.refreshObservers(); self.nextObserverRefresh = now + 2000 }
             if (self.dirty && now - self.lastObservation >= 34) || now - self.lastObservation >= self.cadence { self.dirty = false; self.snapshot() }
         }

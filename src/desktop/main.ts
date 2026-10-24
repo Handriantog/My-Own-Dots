@@ -7,6 +7,7 @@ import {
   Notification,
   nativeImage,
   powerMonitor,
+  powerSaveBlocker,
   protocol,
   screen,
   shell,
@@ -41,6 +42,7 @@ import { hitTestRig } from './core/rig-model.js';
 import { buildWorld } from './core/world.js';
 import { avatarHeight } from './shared/accessories.js';
 import { HelperSupervisor } from './host/helper.js';
+import { DesktopActivityDriver } from './host/activity-driver.js';
 import { DesktopDiagnostics } from './host/diagnostics.js';
 import { CompanionChatWindow } from './host/chat-window.js';
 import { FolderApprovalWindow } from './host/folder-approval-window.js';
@@ -168,6 +170,9 @@ async function start(): Promise<void> {
   const store = new PreferenceStore(app.getPath('userData'));
   let preferences = await store.load();
   let switchingDesktop = false;
+  // Workspace/Ability admission can inject a delayed closure over this driver.
+  // It becomes available only after helper, simulation and overlay setup.
+  const activity = { driver: undefined as DesktopActivityDriver | undefined };
   const workspace = new WorkspaceWindow(
     __dirname,
     app.getPath('userData'),
@@ -189,6 +194,7 @@ async function start(): Promise<void> {
       }
     },
     diagnostics,
+    () => activity.driver,
   );
   protocol.handle(
     'dots',
@@ -262,6 +268,7 @@ async function start(): Promise<void> {
     (state) => {
       const selected = state?.dots.find((dot) => dot.id === state.dotId);
       if (activeDesktopDotId !== (state?.dotId ?? null)) {
+        activity.driver?.stop();
         chat.stopVoice('desktop-dot-changed');
         activeDesktopDotId = state?.dotId ?? null;
       }
@@ -328,11 +335,13 @@ async function start(): Promise<void> {
         syncVisibility();
       },
       status: (message) => {
+        activity.driver?.stop();
         setStatus(message);
         cancelCapture();
         refreshWorld(null);
         syncVisibility();
       },
+      physical: (sample) => activity.driver?.physical(sample),
       pointer: (input) => {
         if (!capturing) return;
         handlePointer({
@@ -343,6 +352,49 @@ async function start(): Promise<void> {
       },
     },
   );
+  activity.driver = new DesktopActivityDriver({
+    now: () => performance.now(),
+    selectedDot: () => desktopDots.current?.dotId ?? undefined,
+    available: () =>
+      visible &&
+      rendererReady &&
+      !animatingVisibility &&
+      !quitting &&
+      !osSuspended &&
+      !userHidden &&
+      !app.isHidden() &&
+      !capturing &&
+      !menuOpen &&
+      !folderApprovals.isOpen &&
+      !!helper.current(performance.now())?.sceneValid,
+    accessibility: () =>
+      helper.current(performance.now())?.accessibility === true &&
+      systemPreferences.isTrustedAccessibilityClient(false),
+    display: (point) =>
+      currentDisplays.find(
+        (d) =>
+          point.x >= d.bounds.x &&
+          point.x < d.bounds.x + d.bounds.width &&
+          point.y >= d.bounds.y &&
+          point.y < d.bounds.y + d.bounds.height,
+      ) ?? currentDisplays[0],
+    frame: () => simulation.frame(),
+    reducedMotion: () =>
+      preferences.reducedMotion ||
+      systemPreferences.getAnimationSettings().prefersReducedMotion,
+    handoff: (frame) => simulation.adoptActivity(frame),
+    changed: () => {
+      // A phase/authority change makes every queued activity pose obsolete.
+      mailbox.discardPending();
+      if (activity.driver?.animating && overlay && !overlay.isDestroyed()) {
+        overlay.setIgnoreMouseEvents(true, { forward: true });
+        ignored = true;
+      }
+      updateOptions();
+    },
+    sleep: powerSaveBlocker,
+    pointer: helper,
+  });
   function setStatus(next: string): void {
     if (status !== next) {
       status = next;
@@ -365,6 +417,7 @@ async function start(): Promise<void> {
       paused: preferences.paused || menuOpen || folderApprovals.isOpen,
       frozen: menuOpen || folderApprovals.isOpen || animatingVisibility,
       voice: voiceState,
+      activity: activity.driver?.animating,
       reducedMotion:
         preferences.reducedMotion ||
         systemPreferences.getAnimationSettings().prefersReducedMotion,
@@ -551,6 +604,8 @@ async function start(): Promise<void> {
       helper.current(now)?.sceneValid !== false &&
       !assetError;
     const next = !!available && !userHidden;
+    if (!next || !helper.current(now) || app.isHidden())
+      activity.driver?.stop();
     folderApprovals.sync(next);
     if (userHidden || osSuspended) chat.hide();
     if ((!rendererReady || assetError) && chat.windowlessVoice)
@@ -768,7 +823,9 @@ async function start(): Promise<void> {
     tray.setContextMenu(Menu.buildFromTemplate(items));
   }
   function presentation(show = visible): PresentationFrame {
-    const state = simulation.frame();
+    const state =
+      activity.driver?.frame(simulation.frame(), performance.now()) ??
+      simulation.frame();
     const cursor = screen.getCursorScreenPoint();
     const display =
       currentDisplays.find((d) => d.id === state.displayId) ??
@@ -816,6 +873,7 @@ async function start(): Promise<void> {
     );
   }
   function recoverRenderer(reason = 'manual'): void {
+    activity.driver?.stop();
     // A renderer can report both unresponsive and gone for the same failure.
     if (retryTimer) return;
     if (chat.windowlessVoice) chat.stopVoice('companion-unavailable');
@@ -985,7 +1043,7 @@ async function start(): Promise<void> {
     syncVisibility();
     deliver(mailbox.offer(presentation()));
   });
-  ipcMain.on('dot:ack', (event, seq: unknown) => {
+  ipcMain.on('dot:ack', async (event, seq: unknown) => {
     if (
       trusted(event) &&
       typeof seq === 'number' &&
@@ -1003,6 +1061,11 @@ async function start(): Promise<void> {
         // Bound consecutive failures, not independent stalls over app lifetime.
         if (now - healthySince >= 5000) restarts = 0;
       }
+      const painted = mailbox.beginAck(seq);
+      if (!painted) return;
+      if (activity.driver?.active)
+        await activity.driver.presented(painted.simulation);
+      // A native acknowledgement completes before dispatching the next rig pose.
       deliver(mailbox.ack(seq));
     }
   });
@@ -1010,6 +1073,7 @@ async function start(): Promise<void> {
     if (
       !trusted(event) ||
       !visible ||
+      activity.driver?.animating ||
       animatingVisibility ||
       !validPointerInput(input)
     )
@@ -1151,7 +1215,7 @@ async function start(): Promise<void> {
       recoverRenderer('frame-timeout');
       return;
     }
-    if (visible && !animatingVisibility) {
+    if (visible && !animatingVisibility && !activity.driver?.animating) {
       const cursor = screen.getCursorScreenPoint();
       companionMenu.pointer(cursor);
       handlePointer({
@@ -1169,6 +1233,7 @@ async function start(): Promise<void> {
     if (
       visible &&
       resting &&
+      !activity.driver?.animating &&
       !capturing &&
       !animatingVisibility &&
       now - lastPresented < 1000 / 30 - 2
@@ -1177,7 +1242,10 @@ async function start(): Promise<void> {
     lastPresented = now;
     const frame = presentation();
     const shouldIgnore =
-      !visible || animatingVisibility || (!capturing && !frame.hovered);
+      !visible ||
+      !!activity.driver?.animating ||
+      animatingVisibility ||
+      (!capturing && !frame.hovered);
     if (ignored !== shouldIgnore) {
       overlay.setIgnoreMouseEvents(shouldIgnore, { forward: true });
       ignored = shouldIgnore;
@@ -1197,6 +1265,7 @@ async function start(): Promise<void> {
     if (++tickCount % 120 === 0) updateOptions();
   }, 1000 / 60);
   function refreshDisplays(): void {
+    activity.driver?.stop();
     currentDisplays = displays();
     displayRevision++;
     if (!currentDisplays.length) {
@@ -1265,6 +1334,7 @@ async function start(): Promise<void> {
     if (quitting) return;
     event.preventDefault();
     quitting = true;
+    activity.driver?.stop();
     folderApprovals.destroy();
     const workspaceShutdown = workspace.destroy();
     talkShortcut.destroy();

@@ -7,7 +7,7 @@ import { once } from 'node:events';
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
-import { Client, Pool } from 'pg';
+import { Client } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { storageWorkspace } from '../fixtures/storage-workspace.js';
 import { LegacySnapshotSource } from '../../src/server/storage/legacy-snapshot.js';
@@ -15,6 +15,7 @@ import { writeArchive } from '../../src/server/storage/archive.js';
 import { RestoreService } from '../../src/server/storage/restore.js';
 import { MemoryJobs } from '../../src/server/memory-jobs.js';
 import {
+  restorePool,
   restorePostgres,
   restoredDatabaseName,
   restoredDatabaseUrl,
@@ -28,6 +29,14 @@ const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
 });
+function inspectionPool(url: string) {
+  const pool = restorePool(url);
+  // Reuse the disconnect barrier, but keep inspection failures visible to Vitest.
+  pool.on('error', (error) => {
+    throw error;
+  });
+  return pool;
+}
 async function fixture(includeCompaction = false) {
   const f = await storageWorkspace();
   cleanups.push(f.dispose);
@@ -103,11 +112,35 @@ async function fixture(includeCompaction = false) {
 describe.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
   'workspace restore',
   () => {
+    it('surfaces unexpected inspection pool errors', async () => {
+      const pool = inspectionPool(process.env.LOCAL_TEST_DATABASE_URL!);
+      const error = new Error('Unexpected inspection connection failure');
+      try {
+        expect(() => pool.emit('error', error)).toThrow(error);
+      } finally {
+        await pool.end();
+      }
+    });
+    it('disconnects inspection clients before fixture database cleanup', async () => {
+      const pool = inspectionPool(process.env.LOCAL_TEST_DATABASE_URL!);
+      let disconnected = false;
+      pool.once('connect', (client) =>
+        client.once('end', () => {
+          disconnected = true;
+        }),
+      );
+      try {
+        await pool.query('SELECT 1');
+      } finally {
+        await pool.end();
+      }
+      expect(disconnected).toBe(true);
+    });
     it('backs up and restores compaction fingerprints alongside Dream source references', async () => {
       const f = await fixture(true);
       await f.service.prepareRestore(f.input);
       const env = parseEnv(await readFile(join(f.destination, '.env'), 'utf8'));
-      const restored = new Pool({ connectionString: env.LOCAL_DATABASE_URL });
+      const restored = inspectionPool(env.LOCAL_DATABASE_URL!);
       try {
         const result = await restored.query(
           'SELECT kind,state,thread_id,source_ids FROM memory_jobs WHERE owner_id=$1 AND id=$2',
@@ -138,9 +171,9 @@ describe.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       const operationId = randomUUID();
       const name = restoredDatabaseName(operationId);
       await f.pg.query(`CREATE DATABASE "${name}"`);
-      const target = new Pool({
-        connectionString: restoredDatabaseUrl(f.postgresUrl, operationId),
-      });
+      const target = inspectionPool(
+        restoredDatabaseUrl(f.postgresUrl, operationId),
+      );
       try {
         await target.query(
           "CREATE TABLE sentinel(value text); INSERT INTO sentinel VALUES('unrelated')",
@@ -197,7 +230,7 @@ describe.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
       const f = await fixture();
       const preview = await f.service.prepareRestore(f.input);
       const env = parseEnv(await readFile(join(f.destination, '.env'), 'utf8'));
-      const pool = new Pool({ connectionString: env.LOCAL_DATABASE_URL });
+      const pool = inspectionPool(env.LOCAL_DATABASE_URL!);
       try {
         await pool.query(
           "UPDATE local_ai_threads SET name='changed after preview'",
@@ -490,7 +523,7 @@ describe.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
           'utf8',
         ),
       ).toContain('recover-only-secret');
-      const pg = new Pool({ connectionString: env.LOCAL_DATABASE_URL });
+      const pg = inspectionPool(env.LOCAL_DATABASE_URL!);
       try {
         expect(
           (await pg.query('SELECT messages FROM local_ai_threads')).rows[0]
@@ -764,7 +797,7 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
     const f = await fixture();
     const preview = await f.service.prepareRestore(f.input);
     const env = parseEnv(await readFile(join(f.destination, '.env'), 'utf8'));
-    const target = new Pool({ connectionString: env.LOCAL_DATABASE_URL });
+    const target = inspectionPool(env.LOCAL_DATABASE_URL!);
     try {
       await target.query(
         "CREATE TABLE user_content(value text); INSERT INTO user_content VALUES('keep')",
@@ -784,7 +817,7 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
     );
     expect(warnings[0]).toContain(f.destination);
     expect(warnings[0]).not.toContain(env.LOCAL_DATABASE_URL);
-    const check = new Pool({ connectionString: env.LOCAL_DATABASE_URL });
+    const check = inspectionPool(env.LOCAL_DATABASE_URL!);
     try {
       expect(
         (await check.query('SELECT value FROM user_content')).rows[0].value,

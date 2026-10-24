@@ -30,6 +30,7 @@ export const invocationContextSchema = z.strictObject({
   tool: id,
   threadId: id,
   channel: z.enum(['text', 'voice']).optional(),
+  interactive: z.boolean().optional(),
 });
 export const bindingSchema = z.strictObject({
   id: z.uuid(),
