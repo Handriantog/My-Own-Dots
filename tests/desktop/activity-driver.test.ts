@@ -441,3 +441,18 @@ it('floor walking drives facing and velocity, preserves voice, and resumes picku
   expect(f.awake).toBe(0);
   expect(f.moves).toHaveLength(2);
 });
+
+it.each([definition, floor])(
+  'keeps ordinary simulation actions and velocity out of approach frames',
+  async (activity) => {
+    const f = fixture();
+    await f.driver.start({ bindingId: 'b', dotId: 'dot' }, activity);
+    const base = f.sim.frame();
+    base.action = 'walk';
+    base.velocity = { x: 50, y: 0 };
+    const approaching = f.driver.frame(base, 0);
+    expect(approaching.action).toBe('idle');
+    expect(approaching.velocity).toEqual({ x: 0, y: 0 });
+    await f.driver.stop();
+  },
+);

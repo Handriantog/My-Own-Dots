@@ -251,8 +251,10 @@ export class DesktopActivityDriver implements ActivityDriver {
         facing: target.action ? sample.pose.facing : base.pose.facing,
       },
       atMs: now,
-      action: sample.action ?? 'idle',
-      velocity: sample.velocity ?? { x: 0, y: 0 },
+      action: approaching ? 'idle' : (target.action ?? 'idle'),
+      velocity: approaching
+        ? { x: 0, y: 0 }
+        : (target.velocity ?? { x: 0, y: 0 }),
       grip: null,
       climb: null,
       support: null,

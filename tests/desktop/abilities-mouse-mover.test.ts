@@ -32,10 +32,10 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
     beforeAll(async () => {
       // Missing fixture is a failure, never a fallback to a live account or network.
       descriptorBytes = await readFile(
-        'tests/fixtures/abilities/mouse-mover/mouse-mover-0.1.0.json',
+        'tests/fixtures/abilities/mouse-mover/mouse-mover-0.1.1.json',
       );
       bytes = await readFile(
-        'tests/fixtures/abilities/mouse-mover/mouse-mover-0.1.0.dot-ability.tar.gz',
+        'tests/fixtures/abilities/mouse-mover/mouse-mover-0.1.1.dot-ability.tar.gz',
       );
       root = await realpath(
         await mkdtemp(join(tmpdir(), 'activity-production-')),
@@ -83,7 +83,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         descriptorUrl:
           'https://github.com/handriantog/my-own-dot-abilities/releases/download/' +
           encodeURIComponent(descriptor.releaseTag) +
-          '/mouse-mover-0.1.0.json',
+          '/mouse-mover-0.1.1.json',
         archiveUrl:
           'https://api.github.com/repos/handriantog/my-own-dot-abilities/releases/assets/1',
       };
@@ -280,7 +280,12 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       expect(await f.invoke('start')).toMatchObject({ status: 'success' });
       expect((await f.render(1600)).point).toEqual({ x: 500, y: 780 });
       const settled = await f.render(5600);
-      expect(settled.frame.root.y).toBeLessThanOrEqual(680);
+      expect(settled.frame.root.y).toBeCloseTo(699, 8);
+      expect(settled.frame.action).toBe('walk');
+      expect(settled.frame.velocity.x).toBeGreaterThan(0);
+      const returning = await f.render(20000);
+      expect(returning.frame.velocity.x).toBeLessThan(0);
+      expect(returning.frame.root.y).toBeCloseTo(699, 8);
       expect(settled.point.y).toBeLessThan(700);
       expect(await f.invoke('stop')).toMatchObject({ status: 'success' });
       expect(f.effects()).toMatchObject({ awake: 0, ends: 1 });
@@ -355,7 +360,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       expect(await f.invoke('start')).toMatchObject({ status: 'error' });
     });
     it.each([
-      ['mouse-mover', '0.1.0'],
+      ['mouse-mover', '0.1.1'],
       ['spotify', '0.1.1'],
       ['spotify-local', '0.1.1'],
     ])(
@@ -394,6 +399,11 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         expect(pkg.manifest.id).toBe(id);
         expect(pkg.digest).toBe(descriptor.asset.sha256);
         expect(pkg.manifest.icon).toBeDefined();
+        const inventory = JSON.parse(
+          await readFile(join(pkg.root, 'package-inventory.json'), 'utf8'),
+        );
+        expect(inventory.dirty).toBe(false);
+        expect(inventory.sourceCommit).toBe(descriptor.sourceCommit);
         expect(
           await readFile(join(pkg.root, 'ability.json'), 'utf8'),
         ).toContain(id);
