@@ -1,4 +1,6 @@
 import type { FolderRepository } from './storage/runtime-repositories.js';
+import type { EvidenceGuard } from '../shared/memory.js';
+import { FolderAccessError } from './folder-access.js';
 import { defineTool } from '@copilotkit/runtime/v2';
 import { z } from 'zod';
 import {
@@ -15,10 +17,25 @@ export function folderTools(
   signal: AbortSignal,
   queueApproval?: (requestId: string) => void,
   executionThreadId = threadId,
+  recordEvidence?: (guard: EvidenceGuard) => Promise<void>,
 ) {
   const verify = async () => {
     signal.throwIfAborted();
     await check();
+  };
+  const recordFile = async (grantId: string) => {
+    if (!recordEvidence) return;
+    await recordEvidence({
+      originDotId: dotId,
+      spaceIds: [],
+      pageIds: [],
+      folderGrantIds: [grantId],
+    });
+    if (!(await folders.list(dotId)).some((grant) => grant.id === grantId))
+      throw new FolderAccessError(
+        'Folder permission was revoked before returning its result.',
+        403,
+      );
   };
   const file = z
     .object({ grantId: z.string().uuid(), path: z.string().min(1).max(1024) })
@@ -27,7 +44,7 @@ export function folderTools(
     defineTool({
       name: 'request_local_folder_access',
       description:
-        'Request owner permission for a local folder when the user asks you to work with it. Put the exact owner-provided folder name or path in folderHint; use an empty hint if none was given, without filler or invented paths. This creates a request only. The owner reviews the suggested folder (or chooses one) and approves its access. Never claim access until approval succeeds; do not request again after a decline unless the owner asks.',
+        'Request owner permission for a local folder when the user asks you to work with it and existing approved access is insufficient. First check list_local_folders and inspect a relevant approved parent for actual child names. Put the exact owner-provided folder name or path in folderHint; use an empty hint if none was given, without filler or invented paths. This creates a request only. The owner reviews the suggested folder (or chooses one) and approves its access. Never claim access until approval succeeds; do not request again after a decline unless the owner asks.',
       parameters: folderRequestSchema,
       execute: async (input) => {
         await verify();
@@ -51,11 +68,13 @@ export function folderTools(
     defineTool({
       name: 'list_local_folders',
       description:
-        'List this Dot’s currently approved local folders and access levels. Use the returned grant IDs for file tools. This grants no new access.',
+        'List this Dot’s approved local folders whose stored identities are currently verified, with their access levels. Reuse a relevant approved parent and use list_local_folder to discover actual child names before requesting more access; do not guess paths from speech. Use the returned grant IDs for file tools. A verification error is a prerequisite failure, not proof that approval is missing. This grants no new access.',
       parameters: z.object({}).strict(),
       execute: async () => {
         await verify();
-        return (await folders.list(dotId)).map(({ id, name, access }) => ({
+        const available = await folders.available(dotId);
+        await verify();
+        return available.map(({ id, name, access }) => ({
           id,
           name,
           access,
@@ -75,6 +94,7 @@ export function folderTools(
           path,
           signal,
         );
+        await recordFile(grantId);
         await verify();
         return result;
       },
@@ -87,6 +107,7 @@ export function folderTools(
       execute: async ({ grantId, path }) => {
         await verify();
         const result = await folders.readFile(dotId, grantId, path, signal);
+        await recordFile(grantId);
         await verify();
         return result;
       },
@@ -110,6 +131,7 @@ export function folderTools(
           { content, expectedHash },
           signal,
         );
+        await recordFile(grantId);
         await verify();
         return result;
       },

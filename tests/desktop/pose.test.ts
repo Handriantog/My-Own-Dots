@@ -5,8 +5,92 @@ import {
   rigPointToWorld,
   worldPointToRig,
 } from '../../src/desktop/core/pose.js';
+import { palmPosition } from '../../src/desktop/core/rig-model.js';
+import type { CompanionVoiceState } from '../../src/desktop/shared/voice-contract.js';
+
+function voiceFrames(voice: CompanionVoiceState, reducedMotion = false) {
+  let pose = initialPose();
+  return Array.from({ length: 360 }, (_, n) => {
+    pose = samplePose(
+      pose,
+      {
+        action: 'idle',
+        age: n / 60,
+        speed: 0,
+        distance: 0,
+        facing: 1,
+        time: n / 60,
+        sway: 0,
+        reducedMotion,
+        voice,
+      },
+      1 / 60,
+    );
+    return pose;
+  });
+}
 
 describe('continuous rig pose', () => {
+  it('adjusts both headphones during connection, distinct from listening and thinking', () => {
+    const frames = voiceFrames('connecting');
+    for (const pose of frames.slice(120)) {
+      for (const hand of ['left', 'right'] as const) {
+        const palm = palmPosition({ x: 0, y: 0 }, pose, hand);
+        expect(palm.y).toBeLessThan(-55); // Both paws reach above the shoulders.
+        expect(palm.y).toBeGreaterThan(-90); // Stay near the ears, below the crown.
+        expect(Math.abs(palm.x)).toBeGreaterThan(35); // Keep the face clear.
+        expect(Math.abs(palm.x)).toBeLessThan(50); // Stay inside the headphone cups at display edges.
+      }
+      expect(pose.speech).toBe(0);
+    }
+    for (const phase of ['listening', 'thinking'] as const) {
+      const other = voiceFrames(phase).at(-1)!;
+      expect(palmPosition({ x: 0, y: 0 }, other, 'right').y).toBeGreaterThan(
+        -45,
+      );
+    }
+    const hands = frames
+      .slice(120)
+      .map((p) => palmPosition({ x: 0, y: 0 }, p, 'right'));
+    expect(
+      Math.max(
+        ...hands.map((p) => Math.hypot(p.x - hands[0].x, p.y - hands[0].y)),
+      ),
+    ).toBeGreaterThan(1);
+    for (let n = 1; n < hands.length; n++)
+      expect(
+        Math.hypot(hands[n].x - hands[n - 1].x, hands[n].y - hands[n - 1].y),
+      ).toBeLessThan(1);
+  });
+  it('holds the connection gesture still with reduced motion and releases it after the call', () => {
+    const frames = voiceFrames('connecting', true);
+    const hands = frames
+      .slice(120)
+      .map((p) => palmPosition({ x: 0, y: 0 }, p, 'right'));
+    expect(hands[0].y).toBeLessThan(-55);
+    expect(
+      Math.max(...hands.map((p) => p.y)) - Math.min(...hands.map((p) => p.y)),
+    ).toBeLessThan(0.01);
+    let pose = frames.at(-1)!;
+    for (let n = 0; n < 120; n++)
+      pose = samplePose(
+        pose,
+        {
+          action: 'idle',
+          age: 1,
+          speed: 0,
+          distance: 0,
+          facing: 1,
+          time: 1,
+          sway: 0,
+          reducedMotion: true,
+          voice: null,
+        },
+        1 / 60,
+      );
+    for (const hand of ['left', 'right'] as const)
+      expect(palmPosition({ x: 0, y: 0 }, pose, hand).y).toBeGreaterThan(-45);
+  });
   it('speaks with small, smooth mouth movements and rests back in a smile', () => {
     let pose = initialPose();
     const openings: number[] = [];

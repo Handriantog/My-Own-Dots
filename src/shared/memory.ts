@@ -13,6 +13,7 @@ export const evidenceGuardSchema = z
     pageIds: z.array(memoryIdSchema).max(1000),
     memoryItemIds: z.array(memoryIdSchema).max(1000).optional(),
     memorySourceKeys: z.array(memoryIdSchema).max(2000).optional(),
+    folderGrantIds: z.array(z.uuid()).max(1000).optional(),
   })
   .strict();
 export const sourceRefSchema = z

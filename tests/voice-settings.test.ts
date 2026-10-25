@@ -92,3 +92,39 @@ it('only accepts installed English presets and the four supported personalities'
   ])
     expect(voiceSettingsSchema.safeParse(invalid).success).toBe(false);
 });
+
+it('keeps the High voice separate and preserves it through legacy updates and restarts', () => {
+  const database = new DatabaseSync(':memory:');
+  let workspace = new WorkspaceStore(':memory:', 'owner', database);
+  try {
+    const dot = workspace.dots()[0];
+    workspace.setVoiceSettings(dot.id, {
+      voiceId: 'bm_george',
+      personality: 'calm',
+      quality: 'high',
+      highVoiceId: 'ryan',
+    });
+    workspace.setVoiceSettings(dot.id, {
+      voiceId: 'bf_emma',
+      personality: 'natural',
+    });
+    workspace.close();
+    workspace = new WorkspaceStore(':memory:', 'owner', database);
+    expect(workspace.voiceSettings(dot.id)).toEqual({
+      voiceId: 'bf_emma',
+      personality: 'natural',
+      quality: 'high',
+      highVoiceId: 'ryan',
+    });
+    expect(() =>
+      workspace.setVoiceSettings(dot.id, {
+        voiceId: 'af_heart',
+        personality: 'natural',
+        highVoiceId: '../../model',
+      }),
+    ).toThrow();
+  } finally {
+    workspace.close();
+    database.close();
+  }
+});

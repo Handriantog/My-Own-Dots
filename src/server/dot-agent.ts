@@ -1,3 +1,4 @@
+import { persistedTaskProgress } from './local-voice/task-progress.js';
 import { abilityTools, abilityInstructions } from './abilities/tools.js';
 import {
   runtimeDiagnosticsTool,
@@ -47,6 +48,7 @@ import { chat, maxIterations } from '@tanstack/ai';
 import { openaiCompatibleText } from '@tanstack/ai-openai/compatible';
 import { subscriptionText } from './subscription-adapter.js';
 import type { SubscriptionPayload } from './subscription-prompt.js';
+import { codexCoordinator } from './codex-runtime.js';
 import { CodexAgent, codexTools } from './codex-agent.js';
 import { learnedSkillTools, tanstackTools } from './tanstack-tools.js';
 import { Observable } from 'rxjs';
@@ -118,6 +120,96 @@ export class DotAgent extends AbstractAgent {
   ) {
     super({ agentId: dotId });
   }
+  async acquireExecution(input: RunAgentInput, signal: AbortSignal) {
+    if (this.config.agentEngine !== 'codex') return;
+    const coordinator = codexCoordinator(this.workspace);
+    if (this.executionAdmission === input.runId) {
+      const active = coordinator.status(this.dotId);
+      if (
+        active.activeRunId !== input.runId ||
+        active.activeThreadId !== input.threadId
+      )
+        throw new Error('Task execution admission changed.');
+      return;
+    }
+    const release = await coordinator.acquire(
+      this.dotId,
+      input.runId,
+      signal,
+      input.threadId,
+    );
+    const previous = this.executionAdmission;
+    this.executionAdmission = input.runId;
+    return async () => {
+      this.executionAdmission = previous;
+      await release();
+    };
+  }
+  /** Called only after FIFO admission: snapshot the default, or restore this decision's own target. */
+  private async prepareExecutionProject(
+    input: RunAgentInput,
+    parentThreadId?: string,
+  ) {
+    const decisions = [];
+    for (const message of [...input.messages].reverse()) {
+      if (message.role !== 'tool') break;
+      decisions.unshift(message);
+    }
+    const reviews = input.messages.flatMap((message) =>
+      message.role === 'assistant' ? (message.toolCalls ?? []) : [],
+    );
+    for (const message of decisions) {
+      const review = reviews.find(
+        (call) =>
+          call.id === message.toolCallId &&
+          call.function.name === folderApprovalTool.name,
+      );
+      if (!review) continue;
+      const args: unknown = JSON.parse(review.function.arguments);
+      if (
+        !args ||
+        typeof args !== 'object' ||
+        !('requestId' in args) ||
+        typeof args.requestId !== 'string'
+      )
+        continue;
+      // Resolve the host's saved decision, never the grant ID supplied in a client result.
+      const { decision } = await this.workspace.folders.getRequest(
+        input.threadId,
+        args.requestId,
+      );
+      if (
+        decision?.approved &&
+        decision.access === 'execute' &&
+        decision.grantId
+      ) {
+        await this.workspace.folders.bindExecution(
+          this.dotId,
+          input.threadId,
+          decision.grantId,
+        );
+        return;
+      }
+    }
+    if (!parentThreadId) return;
+    try {
+      if (
+        await this.workspace.folders.executionScope(this.dotId, input.threadId)
+      )
+        return;
+    } catch {
+      return;
+    } // Keep an invalid saved target visible to Codex's permission recovery.
+    const inherited = await this.workspace.folders
+      .executionScope(this.dotId, parentThreadId)
+      .catch(() => undefined);
+    if (inherited)
+      await this.workspace.folders.bindExecution(
+        this.dotId,
+        input.threadId,
+        inherited.grantId,
+      );
+  }
   executionIdentity() {
     return this.config.agentEngine === 'codex'
       ? 'codex:0.163.0:execution-v1'
@@ -130,6 +222,7 @@ export class DotAgent extends AbstractAgent {
     if (this.inner instanceof CodexAgent)
       this.inner.onPersistedEvent(input, event);
     persistedVoiceEvent(this.workspace, this.dotId, input, event);
+    persistedTaskProgress(this.workspace, input, event);
   }
   onRunSettled(input: RunAgentInput, failed: boolean) {
     settledVoiceRun(this.workspace, this.dotId, input, failed);
@@ -447,7 +540,12 @@ export class DotAgent extends AbstractAgent {
                 check,
                 controller.signal,
                 (requestId) => pendingFolderApprovals.add(requestId),
-                delegation?.parentThreadId ?? input.threadId,
+                this.config.agentEngine === 'codex'
+                  ? input.threadId
+                  : (delegation?.parentThreadId ?? input.threadId),
+                async (guard) => {
+                  await this.evidenceRecorder?.(guard);
+                },
               ),
             );
           const connected = await connectionTools(
@@ -469,6 +567,7 @@ export class DotAgent extends AbstractAgent {
             ? await this.delegations!.threadContext(
                 delegation.parentThreadId,
                 dot.id,
+                { throughMessageId: delegation.sourceMessageId },
               )
             : undefined;
           const memories =
@@ -677,8 +776,7 @@ export class DotAgent extends AbstractAgent {
                 throw new Error(
                   'Codex execution requires local SQLite conversations and the Codex subscription provider.',
                 );
-              const projectThreadId =
-                delegation?.parentThreadId ?? input.threadId;
+              const projectThreadId = input.threadId;
               let projectSwitch = false;
               const projectTools = folderApprovals
                 ? [
@@ -717,6 +815,8 @@ export class DotAgent extends AbstractAgent {
               const executionInstructions = [
                 prompt,
                 runtimeDiagnosticInstructions,
+                'Before substantial work or tool use, give one brief, natural sentence describing the specific next step for this request. After an approval, acknowledge the actual selected target and say what you will do there before acting. Use commentary so the owner hears you while work proceeds. Do not say merely "approved", "received", or "working on it", and do not claim success before evidence. Answer casual conversation and quick questions directly without a task acknowledgment. Pending approval records are waiting tasks, not completed work or permission. Continue unrelated requests normally; when a request depends on a pending approval, briefly remind the owner which existing approval it needs instead of creating another request. Do not nag about approvals during unrelated conversation.',
+                'Use the authorized task records to maintain continuity across intervening casual conversation. An ambiguous progress question after recent work refers to that work unless the owner indicates otherwise: identify the task and report its recorded status and result. A tool-activity marker means a call returned, not that its intended effect succeeded. Completed work stays completed; answer follow-ups from its recorded outcome and inspect current state only when needed, without repeating actions. A saved chat receipt does not establish that a spoken notification played or was heard. Report uncertainty about delivery honestly.',
                 'This conversation uses the Codex execution engine. Native project commands and edits are available only after the owner approves Read, edit and run commands (execute access). Legacy read or readwrite grants never allow commands. Use list_local_folders; if a matching execute grant exists, use_local_project selects it without asking for permission again. Otherwise request_local_folder_access with access execute and the exact project hint supplied by the owner. Inspect runtime failures before requesting source access. Never assume the app data directory or a parent folder is the source project. Native command network access is disabled; explain missing runtime dependencies precisely. The native filesystem sandbox applies to built-in project commands and edits. Dot host tools enforce their own explicit folder grants: a readwrite or execute grant returned by list_local_folders authorizes write_local_file even when no native execution project is selected. Use read_local_file and write_local_file for approved simple file edits; do not report a read-only blocker merely because native commands are unavailable. Never retry uncertain effects automatically. When the owner approves a folder review, the returned selected folder is the authoritative target for that request, including when its name differs from the original hint; continue there without another confirmation. A finished model turn is not proof that an action succeeded: report host observations, exit codes and test results.',
                 ...(browserTools.length ? [websiteInstructions] : []),
                 ...(grantedAbilities.length ? [abilityInstructions] : []),
@@ -747,6 +847,11 @@ export class DotAgent extends AbstractAgent {
                 model: this.config.subscriptionModel,
                 timeoutMs: turnTimeLimitMs,
                 prepare: async (current, signal) => {
+                  await this.prepareExecutionProject(
+                    current,
+                    delegation?.parentThreadId,
+                  );
+                  signal.throwIfAborted();
                   const converted = convertInputToTanStackAI({
                     ...current,
                     messages: current.messages.filter(
@@ -764,31 +869,102 @@ export class DotAgent extends AbstractAgent {
                   if (this.delegations) {
                     const parentId =
                       delegation?.parentThreadId ?? current.threadId;
-                    const threads = [
-                      ...(delegation ? [parentId] : []),
-                      ...(
-                        await this.delegations.list({
-                          parentThreadId: parentId,
-                        })
+                    const throughMessageId =
+                      delegation?.sourceMessageId ??
+                      current.messages.findLast(
+                        (message) => message.role === 'user',
+                      )?.id;
+                    const jobs = (
+                      await this.delegations.list(
+                        { parentThreadId: parentId },
+                        throughMessageId,
                       )
-                        .filter(
-                          (job) =>
-                            job.workerThreadId !== current.threadId &&
-                            !['queued', 'running'].includes(job.status),
-                        )
-                        .slice(-3)
-                        .map((job) => job.workerThreadId),
-                    ];
-                    for (const threadId of threads) {
+                    ).filter(
+                      (job) =>
+                        job.workerThreadId !== current.threadId &&
+                        !['queued', 'running'].includes(job.status),
+                    );
+                    type Context = Awaited<
+                      ReturnType<typeof this.delegations.threadContext>
+                    >;
+                    const selected: {
+                      threadId: string;
+                      status: string;
+                      context: Context;
+                    }[] = [];
+                    if (delegation) {
                       const context = await this.delegations.threadContext(
-                        threadId,
+                        parentId,
                         dot.id,
+                        { throughMessageId },
+                      );
+                      if (context.available)
+                        selected.push({
+                          threadId: parentId,
+                          status: 'conversation',
+                          context,
+                        });
+                    }
+                    for (const job of jobs
+                      .filter((job) => job.status === 'approval')
+                      .slice(-16)) {
+                      const context = await this.delegations.threadContext(
+                        job.workerThreadId,
+                        dot.id,
+                        { retainTaskRequest: true },
+                      );
+                      if (context.available)
+                        selected.push({
+                          threadId: job.workerThreadId,
+                          status: job.status,
+                          context,
+                        });
+                    }
+                    // Give observed work its own budget. No-tool chatter cannot
+                    // evict a task just because several short turns followed it.
+                    const recent: typeof selected = [];
+                    let work = 0;
+                    let conversation = 0;
+                    // Bound worker RPC/scan cost as well as the provider payload.
+                    // Older work remains in canonical history, outside this window.
+                    for (const job of jobs
+                      .filter((job) => job.status !== 'approval')
+                      .slice(-64)
+                      .reverse()) {
+                      const context = await this.delegations.threadContext(
+                        job.workerThreadId,
+                        dot.id,
+                        { retainTaskRequest: true },
                       );
                       if (!context.available) continue;
+                      if (
+                        context.hasToolActivity ? work >= 4 : conversation >= 3
+                      )
+                        continue;
+                      if (context.hasToolActivity) work++;
+                      else conversation++;
+                      recent.push({
+                        threadId: job.workerThreadId,
+                        status: job.status,
+                        context,
+                      });
+                      if (work >= 4 && conversation >= 3) break;
+                    }
+                    selected.push(...recent.reverse());
+                    for (const { threadId, status, context } of selected) {
                       for (const id of context.guard.pageIds)
                         sourcePages.set(id, context.guard.spaceIds);
                       await this.evidenceRecorder?.(context.guard);
-                      supporting.push({ threadId, messages: context.messages });
+                      supporting.push({
+                        threadId,
+                        status,
+                        hasToolActivity: context.hasToolActivity,
+                        request: context.request,
+                        result: context.messages.findLast(
+                          (message) => message.role === 'assistant',
+                        )?.content,
+                        messages: context.messages,
+                      });
                     }
                   }
                   let payload: SubscriptionPayload = {
@@ -881,6 +1057,7 @@ export class DotAgent extends AbstractAgent {
                     systemPrompts: [
                       prompt,
                       runtimeDiagnosticInstructions,
+                      'Before substantial work or tool use, give one brief, natural sentence describing the specific next step for this request. After an approval, acknowledge the actual selected target and say what you will do there before acting. Use commentary so the owner hears you while work proceeds. Do not say merely "approved", "received", or "working on it", and do not claim success before evidence. Answer casual conversation and quick questions directly without a task acknowledgment. Pending approval records are waiting tasks, not completed work or permission. Continue unrelated requests normally; when a request depends on a pending approval, briefly remind the owner which existing approval it needs instead of creating another request. Do not nag about approvals during unrelated conversation.',
                       ...(browserTools.length ? [websiteInstructions] : []),
                       ...(grantedAbilities.length ? [abilityInstructions] : []),
                       ...(parentContext

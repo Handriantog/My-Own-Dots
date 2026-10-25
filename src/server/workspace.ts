@@ -260,6 +260,7 @@ export class WorkspaceStore {
     if (!this.dot(dotId)) throw new Error('Dot not found.');
     const update = voiceSettingsUpdateSchema.parse(input);
     const settings = voiceSettingsSchema.parse({
+      ...this.voiceSettings(dotId),
       ...update,
       quality: update.quality ?? this.voiceSettings(dotId).quality,
     });

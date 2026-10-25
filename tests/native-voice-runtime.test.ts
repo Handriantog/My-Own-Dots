@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, expect, it, vi } from 'vitest';
 import { EventType, type BaseEvent } from '@ag-ui/client';
-import { Subject, of, lastValueFrom, toArray } from 'rxjs';
+import { Observable, Subject, of, lastValueFrom, toArray } from 'rxjs';
 import { StorageClient } from '../src/server/storage/storage-client.js';
 import { Platform } from '../src/server/platform.js';
 import { CodexAgent } from '../src/server/codex-agent.js';
@@ -17,6 +17,7 @@ import {
   voiceTaskControl,
 } from '../src/server/local-voice/native-runtime.js';
 import { evidenceHash } from '../src/server/conversation-memory.js';
+import { folderTools } from '../src/server/folder-tools.js';
 import type { NativeVoiceSession } from '../src/server/local-voice/native-contract.js';
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -672,6 +673,7 @@ it('provides bounded authorized routing history and rejects a different call sco
   ).rejects.toThrow(/scope/);
   vi.spyOn(runtime.coordinator.jobs, 'threadContext').mockResolvedValue({
     available: false,
+    hasToolActivity: false,
     messages: [
       { id: 'hidden', role: 'assistant', content: 'Revoked private detail' },
     ],
@@ -713,6 +715,7 @@ it('keeps long authorized history inside both routing and spoken-reply context b
   const runtime = f.platform.nativeVoice!;
   vi.spyOn(runtime.coordinator.jobs, 'threadContext').mockResolvedValue({
     available: true,
+    hasToolActivity: false,
     messages: Array.from({ length: 12 }, (_, i) => ({
       id: `history-${i}`,
       role: 'user' as const,
@@ -774,6 +777,7 @@ it('answers task status from current host state, reopening approval and withhold
   ]);
   vi.spyOn(jobs, 'threadContext').mockResolvedValue({
     available: false,
+    hasToolActivity: false,
     messages: [],
     guard: { originDotId: f.dot.id, pageIds: [], spaceIds: [] },
   });
@@ -1045,3 +1049,446 @@ it('speaks short plain-text result blocks while leaving programming code in chat
       .spoken,
   ).toContain('Code is in the task conversation');
 });
+
+it('answers a new voice request while an earlier folder approval remains undecided', async () => {
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  f.platform.config.llmProvider = 'codex';
+  let requestId = '';
+  let calls = 0;
+  vi.spyOn(DotAgent.prototype, 'run').mockImplementation(
+    (input) =>
+      new Observable((subscriber) => {
+        void (async () => {
+          calls++;
+          subscriber.next({
+            type: EventType.RUN_STARTED,
+            threadId: input.threadId,
+            runId: input.runId,
+          });
+          if (calls === 1) {
+            const request = await f.platform.workspace.folders.request(
+              f.dot.id,
+              input.threadId,
+              {
+                reason: 'Inspect the project',
+                folderHint: 'MyOwnStack',
+                access: 'read',
+              },
+            );
+            requestId = request.id;
+            subscriber.next({
+              type: EventType.TOOL_CALL_START,
+              toolCallId: 'pending-folder',
+              toolCallName: 'review_local_folder_access',
+            });
+            subscriber.next({
+              type: EventType.TOOL_CALL_ARGS,
+              toolCallId: 'pending-folder',
+              delta: JSON.stringify({ requestId }),
+            });
+            subscriber.next({
+              type: EventType.TOOL_CALL_END,
+              toolCallId: 'pending-folder',
+            });
+          } else {
+            subscriber.next({
+              type: EventType.TEXT_MESSAGE_START,
+              messageId: 'greeting',
+              role: 'assistant',
+            });
+            subscriber.next({
+              type: EventType.TEXT_MESSAGE_CONTENT,
+              messageId: 'greeting',
+              delta: 'I’m here. What would you like to talk about?',
+            });
+            subscriber.next({
+              type: EventType.TEXT_MESSAGE_END,
+              messageId: 'greeting',
+            });
+          }
+          subscriber.next({
+            type: EventType.RUN_FINISHED,
+            threadId: input.threadId,
+            runId: input.runId,
+          });
+          subscriber.complete();
+        })().catch((error) => subscriber.error(error));
+      }),
+  );
+  await f.platform.nativeVoice!.turn({
+    ...f.turn,
+    understanding: { route: 'chat', text: 'Open MyOwnStack' },
+  });
+  await vi.waitFor(
+    async () =>
+      expect(
+        (await f.platform.nativeVoice!.list(f.thread.id))[0],
+      ).toMatchObject({
+        status: 'approval',
+        receiptMessageId: expect.any(String),
+      }),
+    { timeout: 4000 },
+  );
+  const first = (await f.platform.nativeVoice!.list(f.thread.id))[0];
+  await f.platform.nativeVoice!.turn({
+    ...f.turn,
+    messageId: randomUUID(),
+    understanding: { route: 'chat', text: 'How are you?' },
+  });
+  await vi.waitFor(() => expect(calls).toBe(2), { timeout: 2500 });
+  await vi.waitFor(async () =>
+    expect((await f.platform.nativeVoice!.list(f.thread.id))[1]).toMatchObject({
+      status: 'completed',
+    }),
+  );
+  expect(
+    await f.storage.repositories.voiceDelegations.get(first.id),
+  ).toMatchObject({ status: 'approval' });
+  expect(
+    await f.platform.workspace.folders.getRequest(
+      first.workerThreadId,
+      requestId,
+    ),
+  ).toMatchObject({ request: { status: 'pending' } });
+  const execution = codexCoordinator(f.platform.workspace);
+  const release = await execution.acquire(
+    f.dot.id,
+    'unrelated-active',
+    new AbortController().signal,
+    'unrelated-thread',
+  );
+  const resumed = lastValueFrom(
+    f.platform['localRunner']!.run({
+      threadId: first.workerThreadId,
+      agent: new DotAgent(
+        f.platform.store,
+        f.platform.workspace,
+        f.platform.config,
+        f.dot.id,
+        false,
+        undefined,
+        undefined,
+        f.storage.repositories.voiceDelegations,
+      ),
+      input: {
+        threadId: first.workerThreadId,
+        runId: 'waiting-resume',
+        messages: [
+          {
+            id: 'decision',
+            role: 'tool',
+            toolCallId: 'pending-folder',
+            content: '{"approved":false}',
+          },
+        ],
+        tools: [
+          (await import('../src/shared/folder-access.js')).folderApprovalTool,
+        ],
+        state: {},
+        context: [],
+        forwardedProps: {},
+      },
+    }).pipe(toArray()),
+  );
+  try {
+    await vi.waitFor(() => expect(execution.status(f.dot.id).queued).toBe(1));
+    await f.platform.nativeVoice!.cancel(first.id);
+    await vi.waitFor(() => expect(execution.status(f.dot.id).queued).toBe(0));
+    expect(calls).toBe(2);
+    expect(
+      await f.platform['localRunner']!.isRunning({
+        threadId: first.workerThreadId,
+      }),
+    ).toBe(false);
+    expect(execution.status(f.dot.id).activeRunId).toBe('unrelated-active');
+  } finally {
+    await release();
+    await resumed;
+  }
+});
+
+it('delivers saved contextual progress before completion and rejects it after forgetting', async () => {
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  f.platform.config.llmProvider = 'codex';
+  const events = new Subject<BaseEvent>();
+  let active: Parameters<DotAgent['run']>[0] | undefined;
+  vi.spyOn(DotAgent.prototype, 'run').mockImplementation((input) => {
+    active = input;
+    return events;
+  });
+  const progress = vi.fn();
+  const detach = f.platform.nativeVoice!.listenProgress(progress);
+  cleanup.push(async () => detach());
+  await f.platform.nativeVoice!.turn({
+    ...f.turn,
+    understanding: { route: 'delegate', text: 'Inspect the project launcher' },
+  });
+  await vi.waitFor(() => expect(active).toBeDefined());
+  const input = active!;
+  events.next({
+    type: EventType.RUN_STARTED,
+    threadId: input.threadId,
+    runId: input.runId,
+  });
+  events.next({
+    type: EventType.TEXT_MESSAGE_START,
+    messageId: 'next-step',
+    role: 'assistant',
+  });
+  events.next({
+    type: EventType.TEXT_MESSAGE_CONTENT,
+    messageId: 'next-step',
+    delta: 'I’ll inspect the launcher and check its Python configuration.',
+  });
+  events.next({ type: EventType.TEXT_MESSAGE_END, messageId: 'next-step' });
+  events.next({
+    type: EventType.CUSTOM,
+    name: 'dot.task-progress',
+    value: { messageId: 'next-step' },
+  });
+  await vi.waitFor(() => expect(progress).toHaveBeenCalledOnce());
+  const update = progress.mock.calls[0][0];
+  expect(update.text).toBe(
+    'I’ll inspect the launcher and check its Python configuration.',
+  );
+  expect(await update.authorize()).toBe(true);
+  expect((await f.platform.nativeVoice!.list(f.thread.id))[0].status).toBe(
+    'running',
+  );
+  events.next({
+    type: EventType.TEXT_MESSAGE_START,
+    messageId: 'result',
+    role: 'assistant',
+  });
+  events.next({
+    type: EventType.TEXT_MESSAGE_CONTENT,
+    messageId: 'result',
+    delta: 'The launcher uses the correct runtime.',
+  });
+  events.next({ type: EventType.TEXT_MESSAGE_END, messageId: 'result' });
+  events.next({
+    type: EventType.RUN_FINISHED,
+    threadId: input.threadId,
+    runId: input.runId,
+  });
+  events.complete();
+  await vi.waitFor(async () =>
+    expect((await f.platform.nativeVoice!.list(f.thread.id))[0].status).toBe(
+      'completed',
+    ),
+  );
+  expect(progress).toHaveBeenCalledOnce();
+  expect(await update.authorize()).toBe(true);
+  await f.storage.repositories.workspace.memory.history.suppress(
+    [
+      {
+        threadId: input.threadId,
+        runId: input.runId,
+        messageIds: ['next-step'],
+        contentHash: evidenceHash({
+          id: 'next-step',
+          role: 'assistant',
+          content:
+            'I’ll inspect the launcher and check its Python configuration.',
+        }),
+        guard: { originDotId: f.dot.id, pageIds: [], spaceIds: [] },
+      },
+    ],
+    'fixture',
+  );
+  expect(await update.authorize()).toBe(false);
+});
+
+it.each(['read', 'readwrite'] as const)(
+  'invalidates deferred file-derived speech after %s revocation without execution scope',
+  async (access) => {
+    const f = await fixture();
+    await f.platform.nativeVoice!.turn(f.turn);
+    const jobs = f.storage.repositories.voiceDelegations;
+    const workspace = f.storage.repositories.workspace;
+    const worker = randomUUID();
+    await jobs.enqueue({
+      id: 'folder-task',
+      dotId: f.dot.id,
+      callId: f.turn.callId,
+      parentThreadId: f.thread.id,
+      workerThreadId: worker,
+      utteranceId: f.turn.messageId,
+      sourceMessageId: f.turn.messageId,
+      sourceText: 'Hello',
+      request: 'Read the notes',
+    });
+    const runId = randomUUID();
+    const claimed = (await jobs.claim('folder-task', runId, 60000))!;
+    const folder = dirname(f.database);
+    await writeFile(join(folder, 'notes.txt'), 'Private folder label.');
+    const request = await workspace.folders.request(f.dot.id, worker, {
+      reason: 'Read fixture notes',
+      folderHint: folder,
+      access,
+    });
+    const selection = await workspace.folders.select(
+      worker,
+      request.id,
+      folder,
+    );
+    const decision = await workspace.folders.decide(worker, request.id, {
+      toolCallId: 'folder-review',
+      approve: true,
+      selectionId: selection.id,
+      access,
+    });
+    const grantId = decision.grantId!;
+    expect(
+      await workspace.folders.executionScope(f.dot.id, worker),
+    ).toBeUndefined();
+    const thread =
+      (await f.platform.localConversations!.acquireThread(worker))!;
+    await thread.beginRun(
+      {
+        threadId: worker,
+        runId,
+        messages: [],
+        tools: [],
+        state: {},
+        context: [],
+        forwardedProps: {},
+      },
+      { originDotId: f.dot.id, pageIds: [], spaceIds: [] },
+    );
+    // A legacy task has canonical tool evidence but no folder field in its saved guard.
+    const result = await folderTools(
+      workspace.folders,
+      f.dot.id,
+      worker,
+      () => {},
+      new AbortController().signal,
+    ).find((tool) => tool.name === 'read_local_file')!.execute!({
+      grantId,
+      path: 'notes.txt',
+    } as never);
+    const messages: import('@ag-ui/core').Message[] = [
+      {
+        id: 'file-call',
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          {
+            id: 'read',
+            type: 'function',
+            function: {
+              name: 'read_local_file',
+              arguments: JSON.stringify({ grantId, path: 'notes.txt' }),
+            },
+          },
+        ],
+      },
+      {
+        id: 'file-result',
+        role: 'tool',
+        toolCallId: 'read',
+        content: JSON.stringify(result),
+      },
+      { id: 'answer', role: 'assistant', content: 'Private folder label.' },
+    ];
+    await thread.appendEvent({ type: EventType.MESSAGES_SNAPSHOT, messages });
+    await thread.finishRun(messages, {}, 'finished');
+    await thread.release();
+    await jobs.settle(claimed, {
+      status: 'completed',
+      result: 'Private folder label.',
+    });
+    const job = (await jobs.get('folder-task'))!;
+    const authorize = await f.platform.nativeVoice!.receiptValidator(job);
+    expect(await authorize()).toBe(true);
+    await workspace.folders.revoke(f.dot.id, grantId);
+    expect(await authorize()).toBe(false);
+    expect(await jobs.threadContext(worker, f.dot.id)).toMatchObject({
+      available: false,
+      messages: [],
+    });
+  },
+);
+
+it.each([false, true])(
+  'marks only guarded tool-backed completions for deferred speech (tool activity: %s)',
+  async (withTools) => {
+    const f = await fixture();
+    f.platform.config.agentEngine = 'codex';
+    f.platform.config.llmProvider = 'codex';
+    vi.spyOn(DotAgent.prototype, 'run').mockImplementation((input) =>
+      of(
+        {
+          type: EventType.RUN_STARTED,
+          threadId: input.threadId,
+          runId: input.runId,
+        },
+        ...(withTools
+          ? [
+              {
+                type: EventType.TOOL_CALL_START,
+                toolCallId: 'inspect-file',
+                toolCallName: 'inspect_note',
+                parentMessageId: 'inspection',
+              },
+              {
+                type: EventType.TOOL_CALL_ARGS,
+                toolCallId: 'inspect-file',
+                delta: '{"path":"README.md"}',
+              },
+              { type: EventType.TOOL_CALL_END, toolCallId: 'inspect-file' },
+              {
+                type: EventType.TOOL_CALL_RESULT,
+                toolCallId: 'inspect-file',
+                messageId: 'file-result',
+                content: '{"content":"Fixture README"}',
+                role: 'tool',
+              },
+            ]
+          : []),
+        {
+          type: EventType.TEXT_MESSAGE_START,
+          messageId: 'answer',
+          role: 'assistant',
+        },
+        {
+          type: EventType.TEXT_MESSAGE_CONTENT,
+          messageId: 'answer',
+          delta: withTools
+            ? 'The README contains Fixture README.'
+            : 'Hello there.',
+        },
+        { type: EventType.TEXT_MESSAGE_END, messageId: 'answer' },
+        {
+          type: EventType.RUN_FINISHED,
+          threadId: input.threadId,
+          runId: input.runId,
+        },
+      ),
+    );
+    const delivered: { text: string | null; retain: boolean | undefined }[] =
+      [];
+    const detach = f.platform.nativeVoice!.listen((job, retain) => {
+      delivered.push({ text: job.result, retain });
+    });
+    try {
+      await f.platform.nativeVoice!.turn(f.turn);
+      await vi.waitFor(
+        () =>
+          expect(delivered).toEqual([
+            {
+              text: withTools
+                ? 'The README contains Fixture README.'
+                : 'Hello there.',
+              retain: withTools,
+            },
+          ]),
+        { timeout: 4000 },
+      );
+    } finally {
+      detach();
+    }
+  },
+);

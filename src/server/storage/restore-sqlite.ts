@@ -26,7 +26,7 @@ export async function copyValidatedSQLite(
   ownerId: string,
   signal: AbortSignal,
   engine: 'legacy-postgres' | 'sqlite' = 'legacy-postgres',
-  expectedSchema?: 2 | 3 | 4 | 5 | 6,
+  expectedSchema?: 2 | 3 | 4 | 5 | 6 | 7,
 ) {
   const baselineDirectory = await mkdtemp(
     join(dirname(destination), '.schema-'),
@@ -49,6 +49,8 @@ export async function copyValidatedSQLite(
         supported.set(4, inventory(schema));
         initializeSQLiteSchema(schema, 5);
         supported.set(5, inventory(schema));
+        initializeSQLiteSchema(schema, 6);
+        supported.set(6, inventory(schema));
         initializeSQLiteSchema(schema);
         supported.set(sqliteStorageSchema, inventory(schema));
       } finally {
@@ -182,7 +184,7 @@ export async function restoreSQLite(
   ownerId: string,
   signal: AbortSignal,
   engine: 'legacy-postgres' | 'sqlite' = 'legacy-postgres',
-  expectedSchema?: 2 | 3 | 4 | 5 | 6,
+  expectedSchema?: 2 | 3 | 4 | 5 | 6 | 7,
 ) {
   await copyValidatedSQLite(
     source,

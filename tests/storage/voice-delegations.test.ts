@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { StorageClient } from '../../src/server/storage/storage-client.js';
+import { evidenceHash } from '../../src/server/conversation-memory.js';
 import { SQLiteConversations } from '../../src/server/storage/sqlite-conversations.js';
 import {
   copyValidatedSQLite,
@@ -20,6 +21,276 @@ import {
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const close of cleanups.splice(0).reverse()) await close();
+});
+
+it('reports only observed, authorized tool activity through the storage worker', async () => {
+  const f = await fixture();
+  await f.jobs.enqueue(f.input);
+  const request: Message = {
+    id: 'request',
+    role: 'user',
+    content: 'Write the project README.',
+  };
+  const call: Message = {
+    id: 'action',
+    role: 'assistant',
+    content: '',
+    toolCalls: [
+      {
+        id: 'write',
+        type: 'function',
+        function: {
+          name: 'inspect_note',
+          arguments: '{"content":"private payload"}',
+        },
+      },
+    ],
+  };
+  const result: Message = {
+    id: 'result',
+    role: 'tool',
+    toolCallId: 'write',
+    content: '{"error":"private failure payload"}',
+  };
+  const messages: Message[] = [
+    request,
+    call,
+    result,
+    ...Array.from({ length: 14 }, (_, i) => ({
+      id: `reply-${i}`,
+      role: 'assistant' as const,
+      content: `Progress ${i}`,
+    })),
+  ];
+  const guard = { originDotId: f.input.dotId, spaceIds: [], pageIds: [] };
+  const lease = (await f.conversations.acquireThread('worker'))!;
+  await lease.beginRun(
+    {
+      threadId: 'worker',
+      runId: 'observed',
+      messages,
+      state: {},
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    },
+    guard,
+  );
+  await lease.finishRun(messages, {}, 'finished');
+  await lease.release();
+  const context = await f.jobs.threadContext('worker', f.input.dotId, {
+    retainTaskRequest: true,
+  });
+  expect(context.hasToolActivity).toBe(true); // A returned error is activity, not success.
+  expect(context.request).toBe('Write the project README.');
+  expect(context.messages).toHaveLength(12);
+  expect(JSON.stringify(context)).not.toContain('private payload');
+  expect(JSON.stringify(context)).not.toContain('private failure payload');
+  expect(
+    await f.jobs.threadContext('worker', f.input.dotId, {
+      throughMessageId: request.id,
+    }),
+  ).toMatchObject({
+    available: true,
+    hasToolActivity: false,
+    messages: [request],
+  });
+  expect(
+    await f.jobs.threadContext('worker', f.input.dotId, {
+      throughMessageId: 'missing',
+    }),
+  ).toMatchObject({ available: false, hasToolActivity: false, messages: [] });
+  await f.workspace.memory.history.suppress(
+    [
+      {
+        threadId: 'worker',
+        runId: 'observed',
+        messageIds: [call.id],
+        contentHash: evidenceHash(call),
+        guard,
+      },
+    ],
+    'fixture',
+  );
+  expect(await f.jobs.threadContext('worker', f.input.dotId)).toMatchObject({
+    hasToolActivity: false,
+  });
+  const source = {
+    id: 'source',
+    role: 'user' as const,
+    content: f.input.sourceText,
+  };
+  await f.workspace.memory.history.suppress(
+    [
+      {
+        threadId: 'parent',
+        runId: 'source-run',
+        messageIds: [source.id],
+        contentHash: evidenceHash(source),
+        guard,
+      },
+    ],
+    'fixture',
+  );
+  expect(
+    await f.jobs.threadContext('worker', f.input.dotId, {
+      retainTaskRequest: true,
+    }),
+  ).toMatchObject({ available: false, hasToolActivity: false, messages: [] });
+});
+
+it('freezes retained task context to its completed run after later worker chat', async () => {
+  const f = await fixture();
+  await f.jobs.enqueue(f.input);
+  const jobLease = (await f.jobs.claim(f.input.id, 'original-run', 60000))!;
+  const guard = { originDotId: f.input.dotId, spaceIds: [], pageIds: [] };
+  const request: Message = {
+    id: 'original-request',
+    role: 'user',
+    content: 'Inspect the original project.',
+  };
+  const answer: Message = {
+    id: 'original-answer',
+    role: 'assistant',
+    content: 'Original project outcome.',
+  };
+  const input = {
+    threadId: 'worker',
+    runId: 'original-run',
+    messages: [request, { ...answer, content: 'Still inspecting.' }],
+    state: {},
+    tools: [],
+    context: [],
+    forwardedProps: {},
+  };
+  const first = (await f.conversations.acquireThread('worker'))!;
+  await first.beginRun(input, guard);
+  await first.finishRun([request, answer], {}, 'finished');
+  await first.release();
+  await f.jobs.settle(jobLease, {
+    status: 'completed',
+    result: answer.content as string,
+  });
+  const dot = (await f.workspace.dots())[0];
+  const page = await f.workspace.pages.create(dot.spaceId, {
+    title: 'Later context',
+    content: 'Later page',
+  });
+  const later: Message[] = [
+    request,
+    { ...answer, content: 'Edited in later chat.' },
+    { id: 'later-question', role: 'user', content: 'Future child input.' },
+    { id: 'later-answer', role: 'assistant', content: 'Future child outcome.' },
+  ];
+  const continuation = (await f.conversations.acquireThread('worker'))!;
+  await continuation.beginRun(
+    { ...input, runId: 'later-run', messages: later },
+    { ...guard, spaceIds: [dot.spaceId], pageIds: [page.id] },
+  );
+  await continuation.finishRun(later, {}, 'finished');
+  await continuation.release();
+  expect(
+    await f.jobs.threadContext('worker', f.input.dotId, {
+      retainTaskRequest: true,
+    }),
+  ).toMatchObject({
+    available: true,
+    messages: [request, answer],
+    request: request.content,
+    guard,
+  });
+  expect(
+    (await f.jobs.threadContext('worker', f.input.dotId)).messages,
+  ).toEqual(later);
+  await f.workspace.pages.delete(dot.spaceId, page.id);
+  expect(
+    (
+      await f.jobs.threadContext('worker', f.input.dotId, {
+        retainTaskRequest: true,
+      })
+    ).available,
+  ).toBe(true);
+  expect((await f.jobs.threadContext('worker', f.input.dotId)).available).toBe(
+    false,
+  );
+  await f.workspace.memory.history.suppress(
+    [
+      {
+        threadId: 'worker',
+        runId: 'original-run',
+        messageIds: [answer.id],
+        contentHash: evidenceHash(answer),
+        guard,
+      },
+    ],
+    'fixture',
+  );
+  expect(
+    JSON.stringify(
+      await f.jobs.threadContext('worker', f.input.dotId, {
+        retainTaskRequest: true,
+      }),
+    ),
+  ).not.toContain('Original project outcome.');
+});
+
+it('uses canonical input order to exclude future delegated tasks', async () => {
+  const f = await fixture();
+  await f.jobs.enqueue(f.input, true);
+  const source = {
+    id: 'source',
+    role: 'user' as const,
+    content: f.input.sourceText,
+  };
+  const current = {
+    id: 'current',
+    role: 'user' as const,
+    content: 'What is the progress?',
+  };
+  const future = {
+    id: 'future',
+    role: 'user' as const,
+    content: 'Later private request',
+  };
+  const lease = (await f.conversations.acquireThread('parent'))!;
+  await lease.beginRun(
+    {
+      threadId: 'parent',
+      runId: 'queued',
+      messages: [source, current, future],
+      state: {},
+      tools: [],
+      context: [],
+      forwardedProps: {},
+    },
+    { originDotId: f.input.dotId, spaceIds: [], pageIds: [] },
+  );
+  await lease.finishRun([source, current, future], {}, 'finished');
+  await lease.release();
+  for (const [id, message] of [
+    ['z-current', current],
+    ['a-future', future],
+  ] as const)
+    await f.jobs.enqueue(
+      {
+        ...f.input,
+        id,
+        workerThreadId: id,
+        utteranceId: id,
+        sourceMessageId: message.id,
+        sourceText: message.content,
+        request: message.content,
+      },
+      true,
+    );
+  expect(
+    (await f.jobs.list({ parentThreadId: 'parent' }, current.id))
+      .map((j) => j.id)
+      .sort(),
+  ).toEqual(['job', 'z-current']);
+  expect(await f.jobs.list({ parentThreadId: 'parent' }, 'missing')).toEqual(
+    [],
+  );
 });
 async function fixture(engine: 'sqlite' | 'legacy-postgres' = 'sqlite') {
   const root = await mkdtemp(join(tmpdir(), 'dots-voice-jobs-'));
@@ -500,49 +771,54 @@ it('fails cleanly on the legacy backend without adding delegation schema', async
   db.close();
 });
 
-it('restores known schema-2 history into schema 6 without mutating the source', async () => {
-  const f = await fixture();
-  await f.storage.close();
-  const old = new DatabaseSync(f.database);
-  old.exec(
-    'DROP TABLE voice_input_receipts; DROP TABLE voice_delegations; DROP TRIGGER ability_deleted_dot; DROP TABLE ability_cleanup; DROP TABLE ability_receipts; DROP TABLE ability_bindings; DROP TABLE ability_installations; DROP TABLE ability_packages; DELETE FROM workspace_storage_schema WHERE version>=3',
-  );
-  old.close();
-  const destination = join(f.root, 'restored');
-  await mkdir(join(destination, 'data'), { recursive: true });
-  await mkdir(join(destination, 'recovery'));
-  await restoreSQLite(
-    f.database,
-    join(destination, 'data/workspace.sqlite'),
-    f.ownerId,
-    new AbortController().signal,
-    'sqlite',
-  );
-  const restored = new DatabaseSync(
-    join(destination, 'data/workspace.sqlite'),
-    { readOnly: true },
-  );
-  expect(
-    restored
-      .prepare('SELECT max(version) AS version FROM workspace_storage_schema')
-      .get()!.version,
-  ).toBe(6);
-  expect(
-    restored.prepare('SELECT count(*) AS n FROM voice_delegations').get()!.n,
-  ).toBe(0);
-  expect(
-    restored.prepare('SELECT message_id FROM conversation_messages').get()!
-      .message_id,
-  ).toBe('source');
-  restored.close();
-  const original = new DatabaseSync(f.database, { readOnly: true });
-  expect(
-    original
-      .prepare('SELECT max(version) AS version FROM workspace_storage_schema')
-      .get()!.version,
-  ).toBe(2);
-  original.close();
-});
+it.each([2, 6])(
+  'restores known schema-%s history into schema 7 without mutating the source',
+  async (schema) => {
+    const f = await fixture();
+    await f.storage.close();
+    const old = new DatabaseSync(f.database);
+    old.exec(
+      schema === 2
+        ? 'DROP TABLE voice_input_receipts; DROP TABLE voice_delegations; DROP TRIGGER ability_deleted_dot; DROP TABLE ability_cleanup; DROP TABLE ability_receipts; DROP TABLE ability_bindings; DROP TABLE ability_installations; DROP TABLE ability_packages; DELETE FROM workspace_storage_schema WHERE version>=3'
+        : "DROP INDEX voice_delegations_active_dot; CREATE UNIQUE INDEX voice_delegations_active_dot ON voice_delegations(owner_id,dot_id) WHERE status IN ('running','approval'); DELETE FROM workspace_storage_schema WHERE version>6",
+    );
+    old.close();
+    const destination = join(f.root, 'restored');
+    await mkdir(join(destination, 'data'), { recursive: true });
+    await mkdir(join(destination, 'recovery'));
+    await restoreSQLite(
+      f.database,
+      join(destination, 'data/workspace.sqlite'),
+      f.ownerId,
+      new AbortController().signal,
+      'sqlite',
+    );
+    const restored = new DatabaseSync(
+      join(destination, 'data/workspace.sqlite'),
+      { readOnly: true },
+    );
+    expect(
+      restored
+        .prepare('SELECT max(version) AS version FROM workspace_storage_schema')
+        .get()!.version,
+    ).toBe(7);
+    expect(
+      restored.prepare('SELECT count(*) AS n FROM voice_delegations').get()!.n,
+    ).toBe(0);
+    expect(
+      restored.prepare('SELECT message_id FROM conversation_messages').get()!
+        .message_id,
+    ).toBe('source');
+    restored.close();
+    const original = new DatabaseSync(f.database, { readOnly: true });
+    expect(
+      original
+        .prepare('SELECT max(version) AS version FROM workspace_storage_schema')
+        .get()!.version,
+    ).toBe(schema);
+    original.close();
+  },
+);
 
 it('rejects a schema-2 archive with an unknown table before upgrading it', async () => {
   const f = await fixture();
@@ -634,7 +910,7 @@ it('atomically updates a known workspace manifest after runtime schema upgrade',
   await updateWorkspaceManifestSchema(f.root, f.ownerId);
   expect(await readWorkspaceManifest(f.root)).toEqual({
     ...identity,
-    schema: 6,
+    schema: 7,
   });
   await updateWorkspaceManifestSchema(f.root, f.ownerId);
   await expect(
@@ -982,4 +1258,54 @@ it('retires pending input atomically when its conversation moves to Trash', asyn
   await f.workspace.setCall(f.input.callId, 'ended', '');
   await f.workspace.deleteConversation('parent');
   expect(await f.jobs.pendingInputs()).toEqual([]);
+});
+
+it('upgrades schema 6 with a pending approval and reserves execution only for running tasks', async () => {
+  const f = await fixture();
+  await f.jobs.enqueue(f.input, true);
+  const first = (await f.jobs.claim('job', 'wait-run', 60000))!;
+  await f.jobs.settle(first, { status: 'approval' });
+  await f.storage.close();
+  const old = new DatabaseSync(f.database);
+  old.exec(
+    "DROP INDEX voice_delegations_active_dot; CREATE UNIQUE INDEX voice_delegations_active_dot ON voice_delegations(owner_id,dot_id) WHERE status IN ('running','approval'); DELETE FROM workspace_storage_schema WHERE version>6;",
+  );
+  old.close();
+  const reopened = await StorageClient.open({
+    database: f.database,
+    ownerId: f.ownerId,
+    engine: 'sqlite',
+  });
+  cleanups.push(() => reopened.close());
+  const jobs = reopened.repositories.voiceDelegations;
+  expect(await jobs.get('job')).toMatchObject({
+    status: 'approval',
+    runId: 'wait-run',
+  });
+  await jobs.enqueue(
+    {
+      ...f.input,
+      id: 'second',
+      utteranceId: 'second',
+      workerThreadId: 'second',
+    },
+    true,
+  );
+  expect(await jobs.claim('second', 'second-run', 60000)).toMatchObject({
+    id: 'second',
+  });
+  await jobs.enqueue(
+    { ...f.input, id: 'third', utteranceId: 'third', workerThreadId: 'third' },
+    true,
+  );
+  await expect(jobs.claim('third', 'third-run', 60000)).rejects.toThrow();
+  expect(await jobs.get('job')).toMatchObject({ status: 'approval' });
+  await reopened.close();
+  const verified = new DatabaseSync(f.database, { readOnly: true });
+  expect(
+    verified
+      .prepare('SELECT max(version) AS version FROM workspace_storage_schema')
+      .get()!.version,
+  ).toBe(7);
+  verified.close();
 });

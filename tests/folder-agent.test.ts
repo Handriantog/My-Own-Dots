@@ -119,6 +119,10 @@ it('requests approval without access, then resumes the governed turn using only 
       },
     );
     expect(decision.approved).toBe(true);
+    const evidence: import('../src/shared/memory').EvidenceGuard[] = [];
+    f.agent.setEvidenceRecorder(async (guard) => {
+      evidence.push(guard);
+    });
     engine.runAgent
       .mockReset()
       .mockResolvedValueOnce(
@@ -159,6 +163,12 @@ it('requests approval without access, then resumes the governed turn using only 
         .pipe(toArray()),
     );
     expect(resumed.some((event) => event.type === 'RUN_ERROR')).toBe(false);
+    expect(evidence).toContainEqual({
+      originDotId: f.dot.id,
+      spaceIds: [],
+      pageIds: [],
+      folderGrantIds: [decision.grantId],
+    });
     expect(read).toHaveBeenCalledWith(
       f.dot.id,
       decision.grantId,

@@ -257,3 +257,88 @@ it('preserves repository errors used by HTTP status handling', async () => {
     client.repositories.workspace.setVoiceSettings(dot.id, { invalid: true }),
   ).rejects.toBeInstanceOf(z.ZodError);
 });
+
+it('records a folder failure through storage RPC and HTTP, then recovers with managed Python under Finder PATH', async () => {
+  const { folderRoutes } = await import('../src/server/folder-routes.js');
+  const { folderPython } = await import('../src/server/folder-python.js');
+  const { readdir } = await import('node:fs/promises');
+  const python = folderPython();
+  const root = await mkdtemp(join(tmpdir(), 'dots-folder-runtime-'));
+  cleanup.push(() => rm(root, { recursive: true, force: true }));
+  cleanup.push(async () => {
+    vi.unstubAllEnvs();
+  });
+  vi.stubEnv('DOTS_ERROR_LOG_DIR', join(root, 'logs'));
+  vi.stubEnv('DOTS_FOLDER_PYTHON', join(root, 'missing-python'));
+  vi.stubEnv('PATH', '/usr/bin:/bin:/usr/sbin:/sbin');
+  const options = {
+    database: join(root, 'test.sqlite'),
+    ownerId: 'runtime-test',
+    engine: 'sqlite' as const,
+  };
+  const first = await StorageClient.open(options);
+  cleanup.push(() => first.close());
+  const { workspace } = first.repositories;
+  const dot = (await workspace.dots())[0];
+  const thread = await workspace.bindThread(
+    'folder-runtime',
+    dot.id,
+    'Folder runtime',
+  );
+  const request = await workspace.folders.request(dot.id, thread.id, {
+    reason: 'Fixture',
+    folderHint: 'my own stack',
+    access: 'read',
+  });
+  const route = `/conversations/${thread.id}/folder-requests/${request.id}/selection`;
+  const choose = () => ({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: root }),
+  });
+  const response = await folderRoutes(workspace.folders).request(
+    route,
+    choose(),
+  );
+  expect(response.status).toBe(503);
+  expect(await response.json()).toMatchObject({
+    error: expect.stringContaining('Python 3.12'),
+  });
+  const logs = join(root, 'logs');
+  const rows = (await readFile(join(logs, (await readdir(logs))[0]), 'utf8'))
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  expect(rows).toContainEqual(
+    expect.objectContaining({
+      event: 'folder_request_failed',
+      context: expect.objectContaining({
+        requestId: request.id,
+        threadId: thread.id,
+      }),
+    }),
+  );
+  expect(rows).toContainEqual(
+    expect.objectContaining({ event: 'folder_runtime_start_failed' }),
+  );
+  await first.close();
+  vi.stubEnv('DOTS_FOLDER_PYTHON', python);
+  const second = await StorageClient.open(options);
+  cleanup.push(() => second.close());
+  const selectedResponse = await folderRoutes(
+    second.repositories.workspace.folders,
+  ).request(route, choose());
+  expect(selectedResponse.status).toBe(200);
+  const selection = await selectedResponse.json();
+  expect(selection.path).toBe(await realpath(root));
+  await second.repositories.workspace.folders.decide(thread.id, request.id, {
+    toolCallId: 'test',
+    approve: true,
+    selectionId: selection.id,
+    access: 'read',
+  });
+  const grants = await second.repositories.workspace.folders.list(dot.id);
+  expect(grants).toContainEqual(
+    expect.objectContaining({ path: await realpath(root), access: 'read' }),
+  );
+});

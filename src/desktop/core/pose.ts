@@ -228,13 +228,21 @@ export function samplePose(
     breathing: Math.sin(time * 2.2) * secondary * (sleepy ? 1.8 : 0.65),
   };
   if (input.voice) {
-    const thinking = input.voice === 'thinking' || input.voice === 'connecting';
+    const connecting = input.voice === 'connecting';
+    const thinking = input.voice === 'thinking';
     const speaking = input.voice === 'speaking';
     const listening = input.voice === 'listening';
     const wave = reducedMotion ? 0 : Math.sin(time * 2.5);
+    const adjust = reducedMotion ? 0 : Math.sin(time * 1.6) * 0.07;
     next.lean = mix(
       previous.lean,
-      listening ? -0.055 : thinking ? 0.045 : wave * 0.018,
+      connecting
+        ? adjust * 0.12
+        : listening
+          ? -0.055
+          : thinking
+            ? 0.045
+            : wave * 0.018,
       easing,
     );
     next.look = {
@@ -262,16 +270,28 @@ export function samplePose(
       speaking ? opening : 0,
       1 - Math.exp(-dt / 0.045),
     );
-    // A hand cupped toward the headphones means listening; a tucked hand and
-    // upward gaze mean thinking. Speech opens/closes the mouth and gestures.
+    // Both paws gently adjust the headphones while connecting. Listening uses
+    // one cupped hand; thinking uses a tucked hand and upward gaze.
     next.leftArm = mix(
       previous.leftArm,
-      listening ? 1.85 : thinking ? -1.15 : 0.15 + wave * 0.12,
+      connecting
+        ? 2.85 + adjust
+        : listening
+          ? 1.85
+          : thinking
+            ? -1.15
+            : 0.15 + wave * 0.12,
       easing,
     );
     next.rightArm = mix(
       previous.rightArm,
-      input.voice === 'approval' ? -1.9 : speaking ? -0.35 - wave * 0.15 : 0,
+      connecting
+        ? -2.85 + adjust
+        : input.voice === 'approval'
+          ? -1.9
+          : speaking
+            ? -0.35 - wave * 0.15
+            : 0,
       easing,
     );
   }

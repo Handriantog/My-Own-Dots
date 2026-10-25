@@ -351,6 +351,16 @@ it
           revision,
           files: [{ path: 'audio_detokenizer/model.safetensors', bytes: 3 }],
         },
+        ...(speechOnly
+          ? {
+              tts: {
+                revision,
+                files: [
+                  { path: 'audio_detokenizer/model.safetensors', bytes: 3 },
+                ],
+              },
+            }
+          : {}),
         ...(!speechOnly
           ? {
               router: {
@@ -373,6 +383,9 @@ it
       nativePython: process.execPath,
       nativeLauncher: nativeManifest,
       nativeManifest,
+      qwenTtsRoot: f.root,
+      qwenTtsLauncher: nativeManifest,
+      qwenTtsManifest: nativeManifest,
       inferenceSession: true,
       providerSession: true,
     });
@@ -430,7 +443,7 @@ it
       'high',
     );
     expect(handle.quality).toBe('high');
-    expect(warmed).toHaveBeenCalledOnce();
+    expect(warmed).toHaveBeenCalledTimes(speechOnly ? 2 : 1);
     expect(localWarm).toHaveBeenCalledOnce();
     await (await service.require(handle.id, handle.token)).end();
     const resumed = await service.start(
@@ -461,12 +474,81 @@ it
     notify({ ...job, parentThreadId: 'other-thread' });
     notify({ ...job, dotId: 'other-dot' });
     expect(update).not.toHaveBeenCalled();
-    notify(job);
+    notify(job, true);
     expect(update).toHaveBeenCalledWith(
       expect.any(String),
       expect.stringContaining('project notes'),
       authorization,
+      { retainUntilPlayed: true },
     );
     await resumedCall.end();
   },
 );
+
+it('previews the unsaved High voice through its speech worker without warming recognition', async () => {
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  const launcher = join(f.root, 'qwen-fixture.mjs');
+  await writeFile(
+    launcher,
+    `
+    import { createInterface } from 'node:readline';
+    const voice = process.argv[process.argv.indexOf('--voice') + 1];
+    if (process.argv.includes('--audio-model') || !['ryan', 'vivian'].includes(voice)) process.exit(1);
+    for await (const line of createInterface({input:process.stdin})) {
+      const r=JSON.parse(line);
+      const result=r.method==='warm'?{ready:true}:{text:r.text,pcm:Buffer.alloc(4800,voice==='ryan'?4:2).toString('base64')};
+      process.stdout.write(JSON.stringify({id:r.id,result})+'\\n');
+    }
+  `,
+  );
+  const service = new LocalVoiceService(f.platform, {
+    enabled: true,
+    python: process.execPath,
+    worker: '',
+    assets: f.root,
+    manifest: '',
+    nativeRoot: f.root,
+    nativePython: process.execPath,
+    qwenTtsRoot: f.root,
+    qwenTtsLauncher: launcher,
+  });
+  cleanup.push(() => service.close());
+  vi.spyOn(service, 'status').mockResolvedValue({
+    enabled: true,
+    ready: true,
+    reason: '',
+    modes: {
+      high: {
+        ready: true,
+        reason: '',
+        audioInput: true,
+        audioOutput: true,
+        needsSetup: false,
+        speechEngine: 'qwen3',
+      },
+    },
+  } as Awaited<ReturnType<typeof service.status>>);
+  const wav = await service.preview(
+    f.dot.id,
+    {
+      ...DEFAULT_VOICE_SETTINGS,
+      quality: 'high',
+      highVoiceId: 'ryan',
+    },
+    new AbortController().signal,
+  );
+  expect(wav.subarray(0, 4).toString()).toBe('RIFF');
+  expect(wav[44]).toBe(4);
+  expect((await f.workspace.voiceSettings(f.dot.id)).quality).toBe('medium');
+  const second = await service.preview(
+    f.dot.id,
+    {
+      ...DEFAULT_VOICE_SETTINGS,
+      quality: 'high',
+      highVoiceId: 'vivian',
+    },
+    new AbortController().signal,
+  );
+  expect(second[44]).toBe(2);
+});

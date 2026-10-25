@@ -63,6 +63,34 @@ export class CodexExecutionCoordinator {
       this.pump(state);
     });
   }
+  /** Hold the same FIFO execution slot while a host resumes an approval. */
+  acquire(
+    dotId: string,
+    runId: string,
+    signal: AbortSignal,
+    threadId?: string,
+  ): Promise<() => Promise<void>> {
+    return new Promise((resolve, reject) => {
+      let release!: () => void;
+      const held = new Promise<void>((done) => {
+        release = done;
+      });
+      const completion = this.run(
+        dotId,
+        runId,
+        signal,
+        async () => {
+          resolve(async () => {
+            release();
+            await completion;
+          });
+          await held;
+        },
+        threadId,
+      );
+      void completion.catch(reject);
+    });
+  }
   private pump(state: { active?: Entry; queue: Entry[] }) {
     if (state.active) return;
     const entry = state.queue.shift();

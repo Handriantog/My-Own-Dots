@@ -20,6 +20,33 @@ Selecting a quality never installs packages or downloads models automatically.
 
 ## Explicit native High setup
 
+For `DOTS_AGENT_ENGINE=codex`, High uses LFM recognition, Codex replies/tasks,
+and Qwen3-TTS speech. Install the native runtime below, then its separate speech
+model with:
+
+```sh
+python3 -I -S -B scripts/local-voice/setup_qwen.py
+```
+
+This downloads **3.08 GB of pinned model data**, reusing the native runtime's
+reviewed MLX Audio 0.6.1 packages. No additional Python packages are installed.
+The default destination is `~/Library/Application Support/My Own Dots/qwen3-tts`;
+`--tts-root /absolute/dedicated/directory` selects another location. Set
+`LOCAL_VOICE_TTS_ROOT` to that directory if using a custom location.
+`--offline --model-source /absolute/models` uses predownloaded files under the
+revision directory from `qwen3-tts-model.json`. `--verify-only --offline` verifies
+an existing installation without downloads. See the [candidate review and
+measured limits](../../docs/desktop/qwen3-voice-evaluation.md).
+
+High offers nine saved voices and a cancellable preview. Speech is English.
+Selecting High or Preview never installs dependencies or falls back to Samantha.
+The Qwen speech process has no recognition, microphone, playback, provider or
+task access. It verifies hashes before loading, runs offline in the existing
+macOS sandbox, and rejects token-limit exhaustion instead of returning cut-off
+audio. Codex uses only LFM recognition from the older native models below.
+
+The following conversation/speech hybrid remains the **legacy engine**:
+
 `setup_native.py` prepares the selected **LFM2.5 Audio 1.5B 4-bit** audio model
 and **Qwen3-4B-Instruct-2507 4-bit** conversation/task model. Qwen chooses words
 from the recognized caption and bounded conversation context; LFM receives the

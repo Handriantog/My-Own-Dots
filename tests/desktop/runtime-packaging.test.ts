@@ -1,3 +1,4 @@
+import { folderPython } from '../../src/server/folder-python.js';
 import { afterEach, expect, it } from 'vitest';
 import {
   mkdtemp,
@@ -135,7 +136,13 @@ it('runs repository workers from the compiled runtime without a source loader', 
     [path.join(root, 'exercise.mjs')],
     {
       cwd: root,
-      env: { ...process.env, NODE_OPTIONS: '', DOTS_RUNTIME_ROOT: runtime },
+      env: {
+        ...process.env,
+        NODE_OPTIONS: '',
+        DOTS_RUNTIME_ROOT: runtime,
+        DOTS_FOLDER_PYTHON: folderPython(),
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+      },
     },
   );
   expect(JSON.parse(result.stdout)).toMatchObject({
@@ -167,7 +174,7 @@ it.skipIf(process.platform !== 'darwin')(
     for (const name of ['uv', 'explicit-uv'])
       await writeFile(
         path.join(bin, name),
-        `#!${process.execPath}\nrequire('node:fs').writeFileSync(process.env.SETUP_LOG,'${name}');`,
+        `#!${process.execPath}\nrequire('node:fs').writeFileSync(process.env.SETUP_LOG,'${name}');require('node:fs').writeFileSync(process.env.SETUP_LOG+'.args',JSON.stringify(process.argv.slice(2)));`,
         { mode: 0o755 },
       );
     const log = path.join(root, 'setup-log');
@@ -189,6 +196,13 @@ it.skipIf(process.platform !== 'darwin')(
     );
     await execute();
     expect(await readFile(log, 'utf8')).toBe('uv');
+    const argumentsUsed = JSON.parse(await readFile(log + '.args', 'utf8'));
+    expect(
+      argumentsUsed.slice(
+        argumentsUsed.indexOf('--python'),
+        argumentsUsed.indexOf('--python') + 2,
+      ),
+    ).toEqual(['--python', '3.12']);
     await writeFile(
       path.join(workspace, '.env'),
       `MYOWN_LLM_PYTHON=/kept/python\nUV_BIN=${path.join(bin, 'explicit-uv')}\n`,

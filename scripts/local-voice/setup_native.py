@@ -188,12 +188,14 @@ def sandbox_command(command, runtime, readable=(), network=False):
 
 
 def download_command(item):
+    # curl applies this bound to redirect bodies too. Permit small redirects;
+    # ensure_artifact still checks the exact final size/hash before publication.
     validate_artifact(item)
     return [
         "/usr/bin/curl", "-q", "--fail", "--silent", "--show-error", "--location",
         "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "5",
         "--proxy", "", "--no-ca-native", "--cacert", "/etc/ssl/cert.pem",
-        "--connect-timeout", "30", "--max-time", "3600", "--max-filesize", str(item["bytes"]),
+        "--connect-timeout", "30", "--max-time", "3600", "--max-filesize", str(max(item["bytes"], 65536)),
         "--output", "-", public_url(item["url"]),
     ]
 

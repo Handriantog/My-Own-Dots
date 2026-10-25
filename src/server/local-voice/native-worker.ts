@@ -112,6 +112,7 @@ export class NativeVoiceWorker implements NativeVoiceSession {
       executable: string;
       args: string[];
       timeoutMs?: number;
+      speechChunkSize?: 80 | 240;
     },
   ) {}
 
@@ -279,13 +280,15 @@ export class NativeVoiceWorker implements NativeVoiceSession {
     // Complete short spans independently; never retry a task or rewrite its words.
     let remaining = text.trim();
     const chunks: Buffer[] = [];
+    const chunkSize = this.launch.speechChunkSize ?? 80;
     while (remaining) {
       signal.throwIfAborted();
       const boundary =
-        remaining.length > 80
-          ? remaining.lastIndexOf(' ', 80)
+        remaining.length > chunkSize
+          ? remaining.lastIndexOf(' ', chunkSize)
           : remaining.length;
-      const end = boundary > 0 ? boundary : Math.min(80, remaining.length);
+      const end =
+        boundary > 0 ? boundary : Math.min(chunkSize, remaining.length);
       const segment = remaining.slice(0, end).trim();
       remaining = remaining.slice(end).trim();
       const result = await this.request(

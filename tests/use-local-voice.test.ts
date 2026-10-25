@@ -334,6 +334,36 @@ it('releases the ended session even if receipt refresh throws', async () => {
   expect(bridge.end).toHaveBeenCalledWith('call');
 });
 
+it('releases hidden High microphone/playback and desktop state on server hangup before receipt acknowledgement', async () => {
+  quality = 'high';
+  fetchMock.mockResolvedValueOnce(
+    json({ id: 'call', token: 'capability', quality: 'high' }),
+  );
+  Object.assign(bridge, { isWindowless: () => true });
+  documentEvents.visibilityState = 'hidden';
+  await act(async () => {
+    root.update(createElement(Hook));
+  });
+  await act(async () => {
+    await voice.start();
+  });
+  expect(voice.quality).toBe('high');
+  expect(voice.status).toBe('active');
+  const persistence = deferred<Response>();
+  fetchMock.mockImplementationOnce(() => persistence.promise);
+  await emit({ type: 'ended' });
+  expect(audio.instances[0].stop).toHaveBeenCalledTimes(1);
+  expect(bridge.end).toHaveBeenCalledWith('call');
+  expect(voice.status).toBe('ending');
+  expect(onTranscript).not.toHaveBeenCalled();
+  await act(async () => {
+    persistence.resolve(json({}));
+  });
+  expect(voice.status).toBe('idle');
+  expect(voice.error).toBe('');
+  expect(audio.instances[0].startCapture).toHaveBeenCalledTimes(1);
+});
+
 it('shows recognition retry guidance without ending or reopening microphone capture', async () => {
   await act(async () => {
     await voice.start();

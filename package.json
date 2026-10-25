@@ -34,7 +34,7 @@
     "format": "prettier --write src tests scripts *.json *.ts *.js index.html public .github Dockerfile \"compose*.yml\" deployment README.md docs .env.example --ignore-unknown",
     "check-format": "prettier --check src tests scripts *.json *.ts *.js index.html public .github Dockerfile \"compose*.yml\" deployment README.md docs .env.example --ignore-unknown",
     "setup:local": "node scripts/setup-local.mjs",
-    "setup:llm": "uv sync --project node_modules/myown-llm-integrator/python --frozen --no-dev",
+    "setup:llm": "uv sync --project node_modules/myown-llm-integrator/python --python 3.12 --frozen --no-dev",
     "llm:check": "node --env-file-if-exists=.env node_modules/myown-llm-integrator/dist/cli.js check",
     "conversations:up": "docker compose -f compose.local.yml up -d --wait",
     "conversations:down": "docker compose -f compose.local.yml down",

@@ -4,19 +4,55 @@ Talk supports per-Dot **Basic**, **Medium** and **High** quality. Basic and Medi
 
 ## Choose voice quality
 
+Starting Talk without opening chat shows a **Connecting…** bubble while Dot gently
+adjusts its headphones. Reduced motion keeps the gesture steady. The cue changes
+to the existing listening state when ready and clears if startup ends or fails.
+
+During a local Basic, Medium or High call, say **“Dot, end the call”** or **“Hang
+up”** to disconnect. The host handles the complete recognized request before chat
+or task routing, stops microphone/playback and saves the call transcript. Existing
+independent High tasks continue. Negated, quoted or instructional phrases such as
+“Don't end the call” and “How do I end the call?” remain conversation. Bare “stop”
+is not a hangup command. Recognition accuracy still depends on the captured speech.
+
 Open an existing Dot's settings, or **Chat → Voice & personality**, choose **Voice chat quality**, and save. The selector works before speech setup. Create a new Dot before selecting its voice preference. End its active call before changing settings.
 
-| Quality | Behavior                                                                                                                                   | Local prerequisites                                                                              |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| Basic   | Speak to Dot; read its answer in chat. No voice preview, synthesis worker, generated audio, or speaker control.                            | Pinned recognition/VAD runtime and Whisper/Silero assets; existing text inference                |
-| Medium  | Existing voice conversation with generated speech and captions. Default for older saved preferences.                                       | Basic prerequisites plus Kokoro and its voices                                                   |
-| High    | Local Qwen writes replies from transcribed speech; LFM generates speech. A local router delegates work to the existing subscription agent. | Apple Silicon macOS, SQLite workspace, Silero VAD and the separate pinned native runtime/models. |
+| Quality | Behavior                                                                                                                | Local prerequisites                                                                              |
+| ------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Basic   | Speak to Dot; read its answer in chat. No voice preview, synthesis worker, generated audio, or speaker control.         | Pinned recognition/VAD runtime and Whisper/Silero assets; existing text inference                |
+| Medium  | Existing voice conversation with generated speech and captions. Default for older saved preferences.                    | Basic prerequisites plus Kokoro and its voices                                                   |
+| High    | Codex replies and tasks with local LFM recognition and selectable Qwen3-TTS speech. Legacy retains the Qwen/LFM hybrid. | Apple Silicon macOS, SQLite workspace, Silero VAD and the separate pinned native runtime/models. |
 
 Choosing High does not download models or start another mode. If its prerequisites are missing, it displays the setup reason. Basic and High never fall back to hosted voice. The legacy paid Realtime path remains eligible only for Medium when configured and local voice is disabled.
 
 Readiness is checked per Dot. If settings change in another window just before startup, the call is rejected before workers start; retry with the refreshed preference. A running call keeps the quality it started with. Voice settings are included in the existing workspace backup; model/runtime paths remain host setup and readiness is checked again after reopening the restored workspace.
 
 ## High setup and task behavior
+
+With `DOTS_AGENT_ENGINE=codex`, High uses LFM recognition and the existing Codex
+agent for replies and tasks, with Qwen3-TTS for speech. Install the separate
+[Qwen speech model](../../scripts/local-voice/README.md#explicit-native-high-setup)
+as well as the native and VAD runtimes. `LOCAL_VOICE_TTS_ROOT` overrides its
+default location. The 8-bit model adds about 3.08 GB of data; it reuses the
+reviewed native Python environment. It does not replace the chat/task model.
+
+Choose **High → Voice → Preview**, then **Save**. Vivian is the default; nine
+voices are available. Each Dot keeps separate High and Medium selections.
+Personality adjusts delivery through fixed instructions; it does not infer your
+vocal tone. The next call uses the saved voice for replies and task announcements.
+Preview uses the unsaved selection and opens only the speech worker. Missing or
+corrupt assets fail explicitly; there is no Samantha fallback. See the
+[evaluation record](qwen3-voice-evaluation.md) for measurements and listening limits.
+
+Codex keeps approval waits separate from execution. Leaving a dialog undecided
+pauses only that task; you can keep talking or ask for something else. Approving
+while another task runs queues the continuation. The agent mentions an existing
+approval when your request needs it. Before substantial work or an approved
+continuation, it gives a brief, specific next step in its own words. High speaks
+that saved message and then the result, without adding a canned acknowledgment
+to casual replies. Muting queues updates; interruption suppresses stale speech.
+
+The following hybrid description applies to the **legacy engine**:
 
 Follow the explicit [native setup command](../../scripts/local-voice/README.md) after reviewing the [dependency evaluation](native-voice-evaluation.md). The pinned runtime requires Apple Silicon, macOS 26 or later, and a separate CPython 3.14 environment. It uses LFM2.5 Audio 1.5B and Qwen3-4B-Instruct-2507, both quantized to 4 bits; model data totals 3.682 GB. Keep the existing VAD runtime/assets installed. High does not load Whisper or Kokoro and does not use call-scoped provider-session flags. Set `LOCAL_VOICE_ENABLED=1` in the selected workspace and restart the app after setup. `LOCAL_VOICE_NATIVE_ROOT` and `LOCAL_VOICE_NATIVE_PYTHON` override the default native runtime location. Upgrades from Qwen 1.7B need a fresh runtime directory; retain the previous installation and point these settings at the verified replacement. The native process is offline and sandboxed; task inference remains the normal Integrator subscription path.
 
@@ -26,9 +62,9 @@ Task announcements use the same speech generator as conversation. Their words co
 
 Routing uses bounded, authorized conversation history and the current task state. File/action requests, permission questions such as “Do you have access now?”, and task follow-ups go to the same Dot agent and tools used by chat. Current local time/date questions use the computer's clock. Task-status questions use saved job state and results; pending folder approvals can reopen the desktop panel. Completed task answers are retained even when tool messages follow the assistant's text, and new results can be spoken in a restarted call on the same Dot and conversation.
 
-An accepted task gets a separate conversation belonging to the same Dot. The parent chat shows a task card with **Open task conversation**, **Review approval** or **Stop task**. The task agent receives bounded permitted context from the parent, and uses the existing folder, page and connection approval cards. Folder requests also open a panel beside the desktop Dot, so the owner can choose and approve the folder without opening the task chat; page and connection approvals stay in chat. Local conversation can continue during that work. One task may remain active per Dot, including approval waits. Results and status return to the parent; short spoken summaries use the actual saved result, while full details remain in the task conversation.
+An accepted task gets a separate conversation belonging to the same Dot. The parent chat shows a task card with **Open task conversation**, **Review approval** or **Stop task**. The task agent receives bounded permitted context from the parent, and uses the existing folder, page and connection approval cards. Folder requests also open a panel beside the desktop Dot, so the owner can choose and approve the folder without opening the task chat; page and connection approvals stay in chat. Local conversation can continue during that work. In the legacy engine, one task may remain active per Dot, including approval waits. Codex allows multiple pending approvals and one executing task. Results and status return to the parent; short spoken summaries use the actual saved result, while full details remain in the task conversation.
 
-Hangup stops capture and speech; accepted tasks continue. Barge-in stops playback and suppresses stale audio; it does not cancel work. Use **Stop task** to cancel a job. Restart recovery never retries actions or resumes audio automatically. Approval waits need an explicit decision. Restore/move invalidates executable work so an old callback cannot act on the restored workspace. These records use SQLite schema 3; known schema 2 archives remain readable and upgrade on restore/open. Runtime/model files stay outside backups.
+Hangup stops capture and speech; accepted tasks continue. Barge-in stops playback and suppresses stale audio; it does not cancel work. Use **Stop task** to cancel a job. Restart recovery never retries actions or resumes audio automatically. Approval waits need an explicit decision. Restore/move invalidates executable work so an old callback cannot act on the restored workspace. These records now use SQLite schema 7; known schema 2–6 archives remain readable and upgrade on restore/open. Runtime/model files stay outside backups.
 
 While Dot is speaking, automatic interruption waits for 1.5 seconds of sustained detected speech. Brief detections leave the reply playing, and the confirmation audio is retained so the beginning of your interruption reaches recognition. Normal listening keeps its short speech-start threshold; manual interruption stays immediate. This detects speech activity, not speaker identity, so sustained background speech or speaker echo can still trigger it.
 

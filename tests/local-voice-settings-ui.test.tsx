@@ -157,6 +157,11 @@ it('saves all three quality choices before setup, refreshes readiness, and never
   });
   expect(onSaved).toHaveBeenCalledOnce();
   await change('Voice chat quality', 'high');
+  expect(
+    select('Voice')
+      .findAllByType('option')
+      .map((option) => option.children.join('')),
+  ).toEqual(['Model voice']);
   expect(JSON.stringify(root!.toJSON())).toContain('not available yet');
   await click('Save voice settings');
   expect(JSON.parse(String(settingsCalls('PUT')[1][1]!.body)).quality).toBe(
@@ -443,4 +448,90 @@ it('releases the context even when playback cannot start or stop its source', as
   expect(root!.root.findByProps({ role: 'alert' }).children.join('')).toContain(
     'Speaker unavailable',
   );
+});
+
+it('selects and previews High voices separately from the retained Medium voice', async () => {
+  await mount({
+    ...props,
+    status: {
+      enabled: true,
+      ready: true,
+      reason: '',
+      modes: {
+        high: {
+          ready: true,
+          reason: '',
+          needsSetup: false,
+          audioInput: true,
+          audioOutput: true,
+          speechEngine: 'qwen3',
+        },
+      },
+    } as VoiceSettingsProps['status'],
+  });
+  await change('Voice', 'bm_george');
+  await change('Voice chat quality', 'high');
+  expect(select('Voice').props.disabled).toBe(false);
+  expect(select('Voice').props.value).toBe('vivian');
+  expect(select('Voice').findAllByType('option')).toHaveLength(9);
+  await change('Voice', 'ryan');
+  fetchMock.mockResolvedValueOnce(wav());
+  await click('Preview voice');
+  expect(JSON.parse(String(settingsCalls('POST')[0][1]!.body))).toMatchObject({
+    quality: 'high',
+    highVoiceId: 'ryan',
+    voiceId: 'bm_george',
+  });
+  await change('Voice chat quality', 'medium');
+  expect(select('Voice').props.value).toBe('bm_george');
+  expect(FakeAudioContext.instances[0].state).toBe('closed');
+  await change('Voice chat quality', 'high');
+  expect(select('Voice').props.value).toBe('ryan');
+  await click('Save voice settings');
+  expect(JSON.parse(String(settingsCalls('PUT')[0][1]!.body))).toMatchObject({
+    highVoiceId: 'ryan',
+    quality: 'high',
+  });
+});
+
+it('cancels High preview when its engine becomes unavailable', async () => {
+  const status = {
+    enabled: true,
+    ready: false,
+    reason: '',
+    modes: {
+      high: {
+        ready: true,
+        reason: '',
+        needsSetup: false,
+        audioInput: true,
+        audioOutput: true,
+        speechEngine: 'qwen3',
+      },
+    },
+  } as VoiceSettingsProps['status'];
+  await mount({ ...props, previewReady: false, status });
+  await change('Voice chat quality', 'high');
+  const pending = deferred<Response>();
+  fetchMock.mockReturnValueOnce(pending.promise);
+  await click('Preview voice');
+  const signal = settingsCalls('POST')[0][1]!.signal!;
+  await act(async () =>
+    root!.update(
+      createElement(VoiceSettings, {
+        ...props,
+        previewReady: false,
+        status: {
+          ...status!,
+          modes: {
+            ...status!.modes!,
+            high: { ...status!.modes!.high, ready: false },
+          },
+        },
+      }),
+    ),
+  );
+  expect(signal.aborted).toBe(true);
+  await act(async () => pending.resolve(wav()));
+  expect(FakeAudioContext.instances[0].source.start).not.toHaveBeenCalled();
 });

@@ -1,4 +1,5 @@
 import './local-defaults.js';
+import { installErrorLogging, logError } from '../shared/error-log.js';
 import { DesktopBrowserClient } from './desktop-browser.js';
 import {
   readWorkspaceManifest,
@@ -32,6 +33,13 @@ import {
   intelligenceWsUrlFromEnv,
   type PlatformConfig,
 } from './platform-config.js';
+installErrorLogging(
+  resolve(
+    process.env.DOTS_ERROR_LOG_DIR ||
+      join(dirname(resolve(process.env.DOTS_WORKSPACE_ENV || '.env')), 'logs'),
+  ),
+  'backend',
+);
 const localAi = localAiConfigFromEnv(process.env);
 const host = process.env.HOST ?? '127.0.0.1';
 const port = Number(process.env.PORT ?? 4310);
@@ -226,14 +234,13 @@ app.get('/api/*', (c) => c.json({ error: 'Not found.' }, 404));
 const server = serve({ fetch: app.fetch, hostname: host, port }, (info) => {
   console.log(`My Own Dots listening on http://${host}:${info.port}`);
   runner.start();
-  void platform
-    .start()
-    .catch((error) =>
-      reportChannelFailure(
-        'Conversation services could not initialize; check setup and database status',
-        [safeFailure(error)],
-      ),
+  void platform.start().catch((error) => {
+    logError('services_start_failed', error);
+    reportChannelFailure(
+      'Conversation services could not initialize; check setup and database status',
+      [safeFailure(error)],
     );
+  });
 });
 const shutdown = createShutdown({
   stopRunner: async () => {
@@ -255,12 +262,17 @@ const shutdown = createShutdown({
       server.close((error) => (error ? reject(error) : resolve())),
     ),
   exit: (code) => process.exit(code),
-  report: (operation, error) =>
-    reportChannelFailure(operation, [safeFailure(error)]),
+  report: (operation, error) => {
+    logError('shutdown_failed', error, { operation });
+    reportChannelFailure(operation, [safeFailure(error)]);
+  },
 });
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 const storageFailed = () => {
+  logError('storage_worker_failed', storage.signal.reason, {
+    worker: 'storage',
+  });
   reportChannelFailure('Storage worker stopped; closing the backend', [
     safeFailure(storage.signal.reason),
   ]);

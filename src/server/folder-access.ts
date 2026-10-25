@@ -1,3 +1,5 @@
+import { folderPython } from './folder-python.js';
+import { logError } from '../shared/error-log.js';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -82,6 +84,7 @@ export class FolderAccessError extends Error {
   constructor(
     message: string,
     readonly status: 400 | 403 | 404 | 409 | 410 | 503 = 400,
+    readonly code?: 'folder_unavailable',
   ) {
     super(message);
   }
@@ -106,11 +109,27 @@ function helper(
       new FolderAccessError('Folder operation was cancelled.', 403),
     );
   return new Promise((resolveResult, reject) => {
-    const child = spawn(
-      process.env.DOTS_FOLDER_PYTHON || 'python3',
-      ['-I', helperPath],
-      { stdio: ['pipe', 'pipe', 'pipe'] },
-    );
+    let python: string;
+    try {
+      python = folderPython();
+    } catch (error) {
+      logError('folder_runtime_invalid', error);
+      return reject(new FolderAccessError((error as Error).message, 503));
+    }
+    const fail = (
+      error: FolderAccessError,
+      details: Record<string, string | number | undefined> = {},
+    ) => {
+      logError('folder_helper_failed', error, {
+        operation: typeof input.action === 'string' ? input.action : undefined,
+        python,
+        ...details,
+      });
+      reject(error);
+    };
+    const child = spawn(python, ['-I', helperPath], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
     let output = '';
     let outputBytes = 0;
     let error: FolderAccessError | undefined;
@@ -142,9 +161,13 @@ function helper(
       if (outputBytes > 524288)
         stop('Folder helper exceeded its output limit.', 503);
     });
-    child.on('error', () => {
+    child.on('error', (cause) => {
+      logError('folder_runtime_start_failed', cause, {
+        python,
+        operation: String(input.action),
+      });
       error ??= new FolderAccessError(
-        'Python 3 is required for local folder access.',
+        'Managed Python 3.12 is unavailable. Run integration setup or configure DOTS_FOLDER_PYTHON with an absolute Python 3.12 path.',
         503,
       );
     });
@@ -158,22 +181,56 @@ function helper(
       clearTimeout(timeout);
       clearTimeout(killTimer);
       signal?.removeEventListener('abort', abort);
-      if (error) return reject(error);
+      if (error) return fail(error);
       if (code !== 0)
-        return reject(
+        return fail(
           new FolderAccessError('Folder operation could not complete.', 503),
+          { code: code ?? undefined },
         );
       try {
         const result = z
           .discriminatedUnion('ok', [
             z.object({ ok: z.literal(true), result: z.unknown() }),
-            z.object({ ok: z.literal(false), error: z.string().max(300) }),
+            z.object({
+              ok: z.literal(false),
+              error: z.string().max(300),
+              code: z.string().max(80).optional(),
+              pythonVersion: z.string().max(40).optional(),
+              exceptionType: z.string().max(80).optional(),
+              pythonTrace: z.string().max(1000).optional(),
+            }),
           ])
           .parse(JSON.parse(output));
-        if (!result.ok) return reject(new FolderAccessError(result.error));
+        if (!result.ok)
+          return fail(
+            new FolderAccessError(
+              result.error,
+              result.code === 'unsupported_python' ||
+                result.code === 'helper_failure'
+                ? 503
+                : 400,
+              input.action === 'verify' &&
+                (result.exceptionType === 'FileNotFoundError' ||
+                  result.exceptionType === 'NotADirectoryError' ||
+                  result.exceptionType === 'PermissionError' ||
+                  (result.exceptionType === 'Rejected' &&
+                    result.error ===
+                      'The approved folder changed. Choose and approve it again.'))
+                ? 'folder_unavailable'
+                : undefined,
+            ),
+            {
+              code: result.code,
+              pythonVersion: result.pythonVersion,
+              exceptionType: result.exceptionType,
+              pythonTrace: result.pythonTrace,
+            },
+          );
+        if (input.action === 'verify')
+          z.object({ ok: z.literal(true) }).parse(result.result);
         resolveResult(result.result);
       } catch {
-        reject(
+        fail(
           new FolderAccessError(
             'Folder helper returned an invalid response.',
             503,
@@ -555,17 +612,14 @@ export class FolderAccessService {
         this.db
           .prepare('INSERT INTO folder_grants VALUES (?,?,?,?)')
           .run(grant.id, this.ownerId, grant.dotId, JSON.stringify(grant));
+        // A decision belongs to its task. Updating a shared parent here can
+        // redirect or interrupt another task while this approval waits for admission.
         if (grant.access === 'execute')
           this.db
             .prepare(
               'INSERT OR REPLACE INTO project_execution_bindings VALUES (?,?,?,?)',
             )
-            .run(
-              this.ownerId,
-              value.executionThreadId ?? threadId,
-              grant.dotId,
-              grant.id,
-            );
+            .run(this.ownerId, threadId, grant.dotId, grant.id);
         value.request.status = 'approved';
         value.request.grantId = grant.id;
         value.decision = {
@@ -602,6 +656,61 @@ export class FolderAccessService {
       .map((row) => JSON.parse(String(row.value)) as StoredGrant)
       .filter((grant) => grant.revokedAt === undefined)
       .map((grant) => this.publicGrant(grant));
+  }
+  /** Model catalog only: retain stale owner records, and never renew their identity. */
+  async available(dotId: string): Promise<FolderGrant[]> {
+    this.requireDot(dotId);
+    const grants = this.db
+      .prepare(
+        'SELECT value FROM folder_grants WHERE ownerId=? AND dotId=? ORDER BY rowid',
+      )
+      .all(this.ownerId, dotId)
+      .map((row) => JSON.parse(String(row.value)) as StoredGrant)
+      .filter((grant) => grant.revokedAt === undefined);
+    const verified = new Map<string, boolean>();
+    const candidates: StoredGrant[] = [];
+    for (const grant of grants) {
+      const key = JSON.stringify([
+        grant.path,
+        grant.identity.dev,
+        grant.identity.ino,
+      ]);
+      if (!verified.has(key)) {
+        try {
+          await this.runHelper({
+            action: 'verify',
+            root: grant.path,
+            identity: grant.identity,
+          });
+          verified.set(key, true);
+        } catch (error) {
+          if (
+            !(error instanceof FolderAccessError) ||
+            error.status !== 400 ||
+            error.code !== 'folder_unavailable'
+          )
+            throw error;
+          verified.set(key, false);
+        }
+      }
+      if (verified.get(key)) candidates.push(grant);
+    }
+    this.requireDot(dotId);
+    const available = new Map<string, FolderGrant>();
+    // Revocation may run during any helper. Keep only current grants, then choose
+    // the newest duplicate at each access level without elevating permission.
+    for (const grant of candidates) {
+      const current = this.storedGrant(dotId, grant.id);
+      if (!current || current.revokedAt !== undefined) continue;
+      const key = JSON.stringify([
+        grant.path,
+        grant.identity.dev,
+        grant.identity.ino,
+        grant.access,
+      ]);
+      available.set(key, this.publicGrant(grant));
+    }
+    return [...available.values()];
   }
   revoke(dotId: string, grantId: string) {
     this.requireDot(dotId);

@@ -4,7 +4,7 @@ import type { LocalVoiceEvent } from '../src/shared/local-voice.js';
 import type { NativeUnderstanding } from '../src/server/local-voice/native-contract.js';
 import { NativeVoiceWorker } from '../src/server/local-voice/native-worker.js';
 import { join, resolve } from 'node:path';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 
 it.each([
@@ -683,3 +683,279 @@ it.each(['interrupt', 'mute'] as const)(
     }
   },
 );
+
+it('preserves a contextual start and consecutive results while muted, without duplicate speech', async () => {
+  const f = await receiptCall();
+  try {
+    await f.call.speaker(true);
+    f.call.nativeUpdate(
+      'start',
+      'I’ll inspect MyOwnStack and look for the launch error.',
+      async () => true,
+    );
+    f.call.nativeUpdate(
+      'result',
+      'The launcher now uses Python 3.12.',
+      async () => true,
+    );
+    f.call.nativeUpdate(
+      'result',
+      'The launcher now uses Python 3.12.',
+      async () => true,
+    );
+    f.call.nativeUpdate('other', 'Your other task is ready.', async () => true);
+    expect(f.speak).not.toHaveBeenCalled();
+    await f.call.speaker(false);
+    await vi.waitFor(() => expect(f.speak).toHaveBeenCalledTimes(3));
+    expect(f.speak.mock.calls.map(([text]) => text)).toEqual([
+      'I’ll inspect MyOwnStack and look for the launch error.',
+      'The launcher now uses Python 3.12.',
+      'Your other task is ready.',
+    ]);
+  } finally {
+    await f.call.end();
+  }
+});
+
+it('keeps an unsaid work completion across new speech while muted', async () => {
+  const f = await receiptCall();
+  try {
+    await f.call.speaker(true);
+    f.call.nativeUpdate(
+      'work',
+      'The requested README is saved.',
+      async () => true,
+      { retainUntilPlayed: true },
+    );
+    f.call.nativeUpdate('chat', 'Hello again.', async () => true);
+    await f.call.interrupt();
+    await f.call.speaker(false);
+    await vi.waitFor(() =>
+      expect(f.events).toContainEqual(
+        expect.objectContaining({
+          type: 'caption',
+          text: 'An earlier task result: The requested README is saved.',
+        }),
+      ),
+    );
+    expect(
+      f.events.some((e) => e.type === 'caption' && e.text === 'Hello again.'),
+    ).toBe(false);
+    expect(f.stop).not.toHaveBeenCalled();
+  } finally {
+    await f.call.end();
+  }
+});
+
+it.each(['authorization', 'synthesis', 'checkpoint'] as const)(
+  'defers an unsaid completion interrupted during %s without rerunning the task',
+  async (stage) => {
+    const reached = deferred<void>();
+    const release = deferred<void>();
+    let first = true;
+    const f = await receiptCall(async (text) => {
+      if (stage === 'synthesis' && first) {
+        first = false;
+        reached.resolve();
+        await release.promise;
+      }
+      return { text, pcm: Buffer.alloc(16000) };
+    });
+    if (stage === 'checkpoint')
+      f.receipt.mockImplementationOnce(async () => {
+        reached.resolve();
+        await release.promise;
+      });
+    const validate = async () => {
+      if (stage === 'authorization' && first) {
+        first = false;
+        reached.resolve();
+        await release.promise;
+      }
+      return true;
+    };
+    try {
+      f.call.nativeUpdate('work', 'The requested README is saved.', validate, {
+        retainUntilPlayed: true,
+      });
+      await reached.promise;
+      await f.call.interrupt();
+      release.resolve();
+      await vi.waitFor(() =>
+        expect(f.events).toContainEqual(
+          expect.objectContaining({
+            type: 'caption',
+            text: 'An earlier task result: The requested README is saved.',
+          }),
+        ),
+      );
+      await vi.waitFor(() =>
+        expect(f.events.some((e) => e.type === 'audio')).toBe(true),
+      );
+      expect(f.events.filter((e) => e.type === 'caption')).toHaveLength(1);
+      expect(f.stop).not.toHaveBeenCalled();
+      expect(f.call.ended).toBe(false);
+    } finally {
+      release.resolve();
+      await f.call.end();
+    }
+  },
+);
+
+it('revalidates retained completion after interruption and drops revoked speech', async () => {
+  const f = await receiptCall();
+  let allowed = true;
+  try {
+    await f.call.speaker(true);
+    f.call.nativeUpdate('work', 'Private work result.', async () => allowed, {
+      retainUntilPlayed: true,
+    });
+    await f.call.interrupt();
+    allowed = false;
+    await f.call.speaker(false);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(
+      f.events.some((e) => e.type === 'audio' || e.type === 'caption'),
+    ).toBe(false);
+    expect(f.stop).not.toHaveBeenCalled();
+  } finally {
+    await f.call.end();
+  }
+});
+
+it('does not repeat a completion once playback began and the owner interrupts', async () => {
+  const audio = deferred<void>();
+  const f = await receiptCall(
+    undefined,
+    (e) => {
+      if (e.type === 'audio') audio.resolve();
+    },
+    false,
+  );
+  try {
+    f.call.nativeUpdate('work', 'The README is saved.', async () => true, {
+      retainUntilPlayed: true,
+    });
+    await audio.promise;
+    const frame = f.events.find((e) => e.type === 'audio')!;
+    if (frame.type !== 'audio') throw Error('missing audio');
+    await f.call.played(
+      frame.generation,
+      frame.sequence,
+      Buffer.from(frame.pcm, 'base64').length / 2,
+    );
+    await f.call.interrupt();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(f.speak).toHaveBeenCalledTimes(1);
+    expect(f.events.filter((e) => e.type === 'caption')).toHaveLength(1);
+    expect(f.call.ended).toBe(false);
+  } finally {
+    await f.call.end();
+  }
+});
+
+it('leaves content-free daily traces for queued, deferred and played work outcomes', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'dots-speech-trace-'));
+  vi.stubEnv('DOTS_ERROR_LOG_DIR', root);
+  const f = await receiptCall();
+  try {
+    await f.call.speaker(true);
+    f.call.nativeUpdate('work-id', 'PRIVATE README CONTENT', async () => true, {
+      retainUntilPlayed: true,
+    });
+    await f.call.interrupt();
+    await f.call.speaker(false);
+    await vi.waitFor(async () => {
+      const files = await readdir(root);
+      expect(files).toHaveLength(1);
+      const raw = await readFile(join(root, files[0]), 'utf8');
+      const rows = raw
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(
+        rows
+          .filter((row) => row.event === 'voice_task_speech')
+          .map((row) => row.context.status),
+      ).toEqual(['queued', 'deferred', 'playing', 'played']);
+      expect(raw).not.toContain('PRIVATE');
+    });
+  } finally {
+    await f.call.end();
+    vi.unstubAllEnvs();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it('finishes playback diagnostics when interrupted queued audio is retried before the first acknowledgement', async () => {
+  vi.stubEnv('LOCAL_VOICE_TIMING_LOG', '1');
+  const timing = vi.spyOn(console, 'info').mockImplementation(() => {});
+  const queued = deferred<void>();
+  const f = await receiptCall(
+    undefined,
+    (event) => {
+      if (event.type !== 'audio') return;
+      if (event.generation === 0) queued.resolve();
+      else
+        queueMicrotask(
+          () =>
+            void f.call.played(
+              event.generation,
+              event.sequence,
+              Buffer.from(event.pcm, 'base64').length / 2,
+            ),
+        );
+    },
+    false,
+  );
+  try {
+    f.call.nativeUpdate(
+      'work',
+      'The requested file is saved.',
+      async () => true,
+      { retainUntilPlayed: true },
+    );
+    await queued.promise;
+    await f.call.interrupt();
+    await vi.waitFor(() =>
+      expect(
+        timing.mock.calls.some(
+          ([label, raw]) =>
+            label === '[voice-timing]' &&
+            JSON.parse(raw).stage === 'playback_finished',
+        ),
+      ).toBe(true),
+    );
+    expect(f.speak).toHaveBeenCalledTimes(2);
+    expect(f.call.ended).toBe(false);
+  } finally {
+    await f.call.end();
+    timing.mockRestore();
+    vi.unstubAllEnvs();
+  }
+});
+
+it('identifies a retained observation as earlier when delivered after another interruption', async () => {
+  const f = await receiptCall();
+  try {
+    await f.call.speaker(true);
+    f.call.nativeUpdate(
+      'inspection',
+      'The folder contains one file.',
+      async () => true,
+      { retainUntilPlayed: true },
+    );
+    await f.call.interrupt();
+    await f.call.speaker(false);
+    await vi.waitFor(() =>
+      expect(f.events).toContainEqual(
+        expect.objectContaining({
+          type: 'caption',
+          text: 'An earlier task result: The folder contains one file.',
+        }),
+      ),
+    );
+  } finally {
+    await f.call.end();
+  }
+});

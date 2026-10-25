@@ -1,3 +1,4 @@
+import { taskProgressEvent } from './local-voice/task-progress.js';
 import { randomUUID } from 'node:crypto';
 import { AbstractAgent } from '@ag-ui/client';
 import { EventType, type BaseEvent, type RunAgentInput } from '@ag-ui/core';
@@ -136,6 +137,7 @@ export class CodexAgent extends AbstractAgent {
       );
       const calls = new Set<string>();
       const messages = new Set<string>();
+      let progressSent = false;
       const finalMessages = new Map<string, string>();
       const outcomes: unknown[] = [];
       const emit = (event: BaseEvent) => {
@@ -214,7 +216,17 @@ export class CodexAgent extends AbstractAgent {
         signal.throwIfAborted();
         if (event.type === 'message') {
           if (event.final) finalMessages.set(event.id, event.text);
-          else message(event.id, event.text);
+          else {
+            message(event.id, event.text);
+            if (!progressSent && event.text.trim()) {
+              progressSent = true;
+              emit({
+                type: EventType.CUSTOM,
+                name: taskProgressEvent,
+                value: { messageId: event.id },
+              });
+            }
+          }
         }
         if (event.type === 'tool' && event.phase === 'started')
           await startTool(event.id, event.name, event.arguments);

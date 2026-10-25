@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -32,6 +32,15 @@ it('preserves an uncaught host exception even when the process immediately exits
     const saved = JSON.parse(
       await readFile(path.join(directory, 'last-exception.json'), 'utf8'),
     );
+    const files = await readdir(path.join(directory, 'errors'));
+    const daily = JSON.parse(
+      (await readFile(path.join(directory, 'errors', files[0]), 'utf8')).trim(),
+    );
+    expect(daily).toMatchObject({
+      source: 'desktop',
+      event: 'uncaught_exception',
+      error: { message: 'test host failure' },
+    });
     expect(saved.message).toBe('test host failure');
     expect(saved.stack).toContain('test host failure');
   } finally {

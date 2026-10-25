@@ -1,3 +1,5 @@
+import { logError } from '../../shared/error-log.js';
+import { listenTaskProgress } from './task-progress.js';
 import { randomUUID } from 'node:crypto';
 import {
   EventType,
@@ -127,6 +129,12 @@ export function voiceJobReceipt(job: VoiceDelegation, sharedExecution = false) {
     spoken,
   };
 }
+export type VoiceTaskProgress = {
+  id: string;
+  job: VoiceDelegation;
+  text: string;
+  authorize: () => Promise<boolean>;
+};
 export class NativeVoiceRuntime {
   private closed = false;
   private timer?: ReturnType<typeof setInterval>;
@@ -137,7 +145,14 @@ export class NativeVoiceRuntime {
   private scheduling = false;
   private inputDelivery?: Promise<void>;
   private inputController = new AbortController();
-  private readonly updates = new Set<(job: VoiceDelegation) => void>();
+  private detachProgress?: () => void;
+  private progressDelivery: Promise<void> = Promise.resolve();
+  private readonly progressUpdates = new Set<
+    (progress: VoiceTaskProgress) => void
+  >();
+  private readonly updates = new Set<
+    (job: VoiceDelegation, retainUntilPlayed?: boolean) => void
+  >();
   constructor(
     private platform: Platform,
     private runner: LocalAgentRunner,
@@ -145,6 +160,19 @@ export class NativeVoiceRuntime {
   ) {}
   async start() {
     await this.coordinator.recover();
+    this.detachProgress = listenTaskProgress(
+      this.platform.workspace,
+      (input, messageId) => {
+        this.progressDelivery = this.progressDelivery
+          .then(() => this.deliverProgress(input, messageId))
+          .catch((error) =>
+            logError('voice_progress_failed', error, {
+              threadId: input.threadId,
+              runId: input.runId,
+            }),
+          );
+      },
+    );
     this.timer = setInterval(() => {
       void this.deliverReceipts();
       void this.dispatchQueued();
@@ -152,11 +180,121 @@ export class NativeVoiceRuntime {
     }, 1000);
     this.timer.unref?.();
   }
-  listen(listener: (job: VoiceDelegation) => void) {
+  listen(
+    listener: (job: VoiceDelegation, retainUntilPlayed?: boolean) => void,
+  ) {
     this.updates.add(listener);
     return () => {
       this.updates.delete(listener);
     };
+  }
+  listenProgress(listener: (progress: VoiceTaskProgress) => void) {
+    this.progressUpdates.add(listener);
+    return () => {
+      this.progressUpdates.delete(listener);
+    };
+  }
+  private async progressText(
+    job: VoiceDelegation,
+    runId: string,
+    messageId: string,
+  ) {
+    const context = await this.coordinator.jobs.threadContext(
+      job.workerThreadId,
+      job.dotId,
+    );
+    if (!context.available) return;
+    const snapshot = await this.platform.localConversations!.getSnapshot(
+      job.workerThreadId,
+    );
+    if (snapshot.lastRun?.runId !== runId) return;
+    let text = '',
+      started = false,
+      ended = false;
+    for (const event of snapshot.lastRun.events) {
+      if (!('messageId' in event) || event.messageId !== messageId) continue;
+      if (
+        event.type === EventType.TEXT_MESSAGE_START &&
+        'role' in event &&
+        event.role === 'assistant'
+      )
+        started = true;
+      if (
+        started &&
+        !ended &&
+        event.type === EventType.TEXT_MESSAGE_CONTENT &&
+        'delta' in event
+      )
+        text += String(event.delta);
+      if (started && event.type === EventType.TEXT_MESSAGE_END) ended = true;
+    }
+    if (!ended || !text.trim()) return;
+    const projected = await this.platform.memory!.repository.modelMessages(
+      job.workerThreadId,
+      [{ id: messageId, role: 'assistant', content: text }],
+    );
+    return projected.some(
+      (message) => message.id === messageId && message.content === text,
+    )
+      ? text
+      : undefined;
+  }
+  private async deliverProgress(input: RunAgentInput, messageId: string) {
+    if (
+      this.closed ||
+      !this.progressUpdates.size ||
+      this.platform.config.agentEngine !== 'codex'
+    )
+      return;
+    const job = await this.coordinator.jobs.forThread(input.threadId);
+    if (
+      !job ||
+      job.runId !== input.runId ||
+      !['running', 'approval', 'completed'].includes(job.status)
+    )
+      return;
+    const suppression =
+      await this.platform.workspace.memory.suppressionGeneration();
+    const scope = JSON.stringify(await this.taskScope(job));
+    const text = await this.progressText(job, input.runId, messageId);
+    if (!text) return;
+    const authorize = async () => {
+      try {
+        if (
+          this.closed ||
+          (await this.platform.workspace.memory.suppressionGeneration()) !==
+            suppression
+        )
+          return false;
+        const current = await this.coordinator.jobs.get(job.id);
+        return (
+          !!current &&
+          current.runId === input.runId &&
+          current.leaseGeneration === job.leaseGeneration &&
+          ['running', 'approval', 'completed'].includes(current.status) &&
+          (await this.progressText(current, input.runId, messageId)) === text &&
+          JSON.stringify(await this.taskScope(job)) === scope
+        );
+      } catch {
+        return false;
+      }
+    };
+    const spoken = voiceJobReceipt(
+      { ...job, status: 'completed', result: text },
+      true,
+    ).spoken;
+    for (const listener of this.progressUpdates) {
+      try {
+        listener({
+          id: `voice-progress:${job.id}:${job.leaseGeneration}:${messageId}`,
+          job,
+          text: spoken,
+          authorize,
+        });
+      } catch {
+        /* Saved prose remains in the task conversation. */
+      }
+    }
   }
   private async currentJob(
     dotId: string,
@@ -166,12 +304,14 @@ export class NativeVoiceRuntime {
     const jobs = await this.coordinator.jobs.list();
     return (
       (this.platform.config.agentEngine === 'codex'
-        ? jobs.find(
-            (job) =>
-              job.dotId === dotId &&
-              ['running', 'approval'].includes(job.status),
-          )
+        ? jobs.find((job) => job.dotId === dotId && job.status === 'running')
         : undefined) ??
+      jobs.findLast(
+        (job) =>
+          job.dotId === dotId &&
+          job.parentThreadId === threadId &&
+          job.status === 'approval',
+      ) ??
       jobs.findLast(
         (job) => job.dotId === dotId && job.parentThreadId === threadId,
       ) ??
@@ -211,16 +351,23 @@ export class NativeVoiceRuntime {
       result: outcome.status === 'completed' ? (outcome.result ?? null) : null,
     };
   }
+  private async taskScope(job: VoiceDelegation) {
+    // Codex snapshots the parent default at admission. Only its task binding
+    // governs subsequent execution and speech, including permission recovery.
+    return this.platform.workspace.folders.executionScope(
+      job.dotId,
+      this.platform.config.agentEngine === 'codex'
+        ? job.workerThreadId
+        : job.parentThreadId,
+    );
+  }
   /** Playback must remain authorized even while a reply is muted or synthesizing. */
   async receiptValidator(
     job: VoiceDelegation,
   ): Promise<() => Promise<boolean>> {
     const suppression =
       await this.platform.workspace.memory.suppressionGeneration();
-    const scope = await this.platform.workspace.folders.executionScope(
-      job.dotId,
-      job.parentThreadId,
-    );
+    const scope = await this.taskScope(job);
     const expected = JSON.stringify({
       status: job.status,
       generation: job.leaseGeneration,
@@ -251,12 +398,7 @@ export class NativeVoiceRuntime {
         )
           return false;
         return (
-          JSON.stringify(
-            await this.platform.workspace.folders.executionScope(
-              job.dotId,
-              job.parentThreadId,
-            ),
-          ) === JSON.stringify(scope)
+          JSON.stringify(await this.taskScope(job)) === JSON.stringify(scope)
         );
       } catch {
         return false;
@@ -797,9 +939,7 @@ export class NativeVoiceRuntime {
     try {
       const jobs = await this.coordinator.jobs.list();
       const occupied = new Set(
-        jobs
-          .filter((job) => ['running', 'approval'].includes(job.status))
-          .map((job) => job.dotId),
+        jobs.filter((job) => job.status === 'running').map((job) => job.dotId),
       );
       for (const job of jobs) {
         if (this.closed) break;
@@ -832,13 +972,15 @@ export class NativeVoiceRuntime {
     return await this.platform.maintenance.runWrite(
       new AbortController().signal,
       async () => {
-        if (['queued', 'approval'].includes(job.status)) {
-          await this.coordinator.jobs.cancel(id, true);
+        const current = await this.coordinator.jobs.cancel(id, true);
+        if (current.status === 'cancelled')
           this.dispatchControllers.get(id)?.abort();
-        }
         await this.runner.stop({
-          threadId: job.workerThreadId,
-          ...(job.runId ? { runId: job.runId } : {}),
+          threadId: current.workerThreadId,
+          // A waiting continuation has a new run ID which has not claimed the job yet.
+          ...(current.status !== 'cancelled' && current.runId
+            ? { runId: current.runId }
+            : {}),
         });
         this.dispatchControllers.get(id)?.abort();
         // Active tasks settle from the persisted provider outcome. Only work
@@ -896,22 +1038,35 @@ export class NativeVoiceRuntime {
                 forwardedProps: {},
               },
             );
+            await this.progressDelivery;
+            const context = await this.coordinator.jobs.threadContext(
+              job.workerThreadId,
+              job.dotId,
+            );
+            const retainUntilPlayed =
+              delivered.status === 'completed' &&
+              Boolean(delivered.result) &&
+              context.available &&
+              context.hasToolActivity;
             await this.coordinator.jobs.markDelivered(job.id, receiptId, {
               status: job.status,
               generation: job.leaseGeneration,
             });
             for (const listener of this.updates) {
               try {
-                listener(delivered);
-              } catch {
-                /* Replay remains available in chat. */
+                listener(delivered, retainUntilPlayed);
+              } catch (error) {
+                logError('voice_task_notification_failed', error, {
+                  callId: job.callId,
+                  requestId: job.id,
+                });
               }
             }
           }
         },
         { background: true },
       )
-      .catch(() => {})
+      .catch((error) => logError('voice_receipt_failed', error))
       .finally(() => {
         if (this.delivering === work) this.delivering = undefined;
       });
@@ -925,6 +1080,9 @@ export class NativeVoiceRuntime {
       controller.abort();
     clearInterval(this.timer);
     this.updates.clear();
+    this.detachProgress?.();
+    this.progressUpdates.clear();
+    await this.progressDelivery;
     await this.delivering;
     await this.inputDelivery;
   }

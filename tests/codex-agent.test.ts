@@ -307,3 +307,44 @@ it('rejects a stale host admission before dispatch', async () => {
   expect(provider.run).not.toHaveBeenCalled();
   expect(f.events.at(-1)?.type).toBe(EventType.RUN_ERROR);
 });
+
+it('marks contextual commentary after its durable prose, without marking the final answer for early speech', async () => {
+  const f = fixture();
+  provider.run.mockImplementation(async (options) => {
+    await options.onEvent({
+      type: 'message',
+      id: 'start',
+      text: 'I’ll check the selected project and run its failing test.',
+      final: false,
+    });
+    await options.onEvent({
+      type: 'message',
+      id: 'result',
+      text: 'The test passes.',
+      final: true,
+    });
+    return completed;
+  });
+  await f.run();
+  const progress = f.events.filter(
+    (e) =>
+      e.type === EventType.CUSTOM &&
+      'name' in e &&
+      e.name === 'dot.task-progress',
+  );
+  expect(progress).toEqual([
+    {
+      type: EventType.CUSTOM,
+      name: 'dot.task-progress',
+      value: { messageId: 'start' },
+    },
+  ]);
+  expect(f.events.indexOf(progress[0])).toBeGreaterThan(
+    f.events.findIndex(
+      (e) =>
+        e.type === EventType.TEXT_MESSAGE_END &&
+        'messageId' in e &&
+        e.messageId === 'start',
+    ),
+  );
+});

@@ -1,10 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Message } from '@ag-ui/core';
+import { z } from 'zod';
 import type { WorkspaceStore } from '../workspace.js';
 import type { SQLiteConversationRecords } from './sqlite-conversation-records.js';
 import { beginSQLiteTransaction } from './sqlite-transaction.js';
-import { guardDependenciesAllowed } from '../conversation-memory.js';
+import {
+  guardDependenciesAllowed,
+  unionEvidence,
+} from '../conversation-memory.js';
 import {
   folderApprovalSchema,
   folderApprovalTool,
@@ -37,6 +41,12 @@ const columns = `owner_id AS ownerId,id,dot_id AS dotId,call_id AS callId,
   lease_until AS leaseUntil,created_at AS createdAt,updated_at AS updatedAt,result,error,
   receipt_message_id AS receiptMessageId,delivered_at AS deliveredAt`;
 const active = "('queued','running','approval')";
+const fileTools = new Set([
+  'list_local_folder',
+  'read_local_file',
+  'write_local_file',
+]);
+const fileEvidence = z.object({ grantId: z.uuid() });
 
 /** Worker-only synchronous operations; no transaction spans model work or an await. */
 export class VoiceDelegations {
@@ -157,16 +167,21 @@ export class VoiceDelegations {
   threadContext(
     threadId: string,
     dotId: string,
+    options: { throughMessageId?: string; retainTaskRequest?: boolean } = {},
   ): {
     available: boolean;
     messages: Message[];
     guard: EvidenceGuard;
+    /** A host-recorded call/result pair, not evidence of a successful effect. */
+    hasToolActivity: boolean;
+    request?: string;
   } {
     this.available();
     const empty = {
       available: false,
       messages: [] as Message[],
       guard: { originDotId: dotId, spaceIds: [], pageIds: [] },
+      hasToolActivity: false,
     };
     const binding = this.db
       .prepare(
@@ -175,15 +190,38 @@ export class VoiceDelegations {
       .get(this.ownerId, threadId);
     if (binding?.dotId === dotId && binding.deletedAt !== null) return empty;
     this.workspace.requireThread(threadId, dotId);
-    const run = this.db
-      .prepare(
-        `SELECT r.evidence_guard,r.provenance_complete FROM conversation_threads t
+    const job = this.forThread(threadId);
+    if (job) {
+      // Never revive a forgotten/changed parent request from the copied worker
+      // input or the unmasked delegation row.
+      const source = this.message(job.parentThreadId, job.sourceMessageId);
+      if (
+        source?.role !== 'user' ||
+        source.content !== job.sourceText ||
+        this.workspace.memory.maskMessages(job.parentThreadId, [source])[0]
+          ?.content !== source.content
+      )
+        return empty;
+    }
+    const taskRunId =
+      options.retainTaskRequest && job && !voiceDelegationActive(job.status)
+        ? job.runId
+        : undefined;
+    const run = taskRunId
+      ? this.db
+          .prepare(
+            'SELECT evidence_guard,provenance_complete FROM conversation_runs WHERE owner_id=? AND thread_id=? AND run_id=?',
+          )
+          .get(this.ownerId, threadId, taskRunId)
+      : this.db
+          .prepare(
+            `SELECT r.evidence_guard,r.provenance_complete FROM conversation_threads t
       JOIN conversation_runs r ON r.owner_id=t.owner_id AND r.thread_id=t.id AND r.run_id=t.last_run_id
       WHERE t.owner_id=? AND t.id=?`,
-      )
-      .get(this.ownerId, threadId);
+          )
+          .get(this.ownerId, threadId);
     if (!run?.provenance_complete || !run.evidence_guard) return empty;
-    const guard = evidenceGuardSchema.parse(
+    let guard = evidenceGuardSchema.parse(
       JSON.parse(String(run.evidence_guard)),
     );
     if (
@@ -203,9 +241,97 @@ export class VoiceDelegations {
       )
     )
       return empty;
-    const snapshot = this.conversations.readSnapshot(threadId);
-    const messages = this.workspace.memory
-      .maskMessages(threadId, snapshot.messages)
+    const canonical = taskRunId
+      ? [
+          ...new Map(
+            this.db
+              .prepare(
+                `SELECT v.value FROM conversation_run_messages m
+          JOIN conversation_message_versions v USING(owner_id,thread_id,message_id,hash)
+          WHERE m.owner_id=? AND m.thread_id=? AND m.run_id=?
+          ORDER BY CASE m.kind WHEN 'input' THEN 0 ELSE 1 END,m.seq`,
+              )
+              .all(this.ownerId, threadId, taskRunId)
+              .map((row) => {
+                const message = JSON.parse(String(row.value)) as Message;
+                return [message.id, message] as const;
+              }),
+          ).values(),
+        ]
+      : this.conversations.readSnapshot(threadId).messages;
+    const boundary =
+      options.throughMessageId === undefined
+        ? canonical.length - 1
+        : canonical.findIndex(
+            (m) => m.id === options.throughMessageId && m.role === 'user',
+          );
+    if (options.throughMessageId !== undefined && boundary < 0) return empty;
+    // Historical runs predate folder evidence guards. Recover authority only
+    // from canonical recognized call/result pairs, never assistant claims.
+    // Keep these dependencies even when masking hides a call's contents.
+    const folderCalls = new Map<string, string>();
+    const folderGrantIds = new Set<string>();
+    for (const message of canonical.slice(0, boundary + 1)) {
+      if (message.role === 'assistant') {
+        for (const call of message.toolCalls ?? [])
+          if (fileTools.has(call.function.name))
+            folderCalls.set(call.id, call.function.arguments);
+      } else if (
+        message.role === 'tool' &&
+        folderCalls.has(message.toolCallId)
+      ) {
+        try {
+          folderGrantIds.add(
+            fileEvidence.parse(JSON.parse(folderCalls.get(message.toolCallId)!))
+              .grantId,
+          );
+        } catch {
+          return empty;
+        }
+      }
+    }
+    if (folderGrantIds.size) {
+      guard = unionEvidence(guard, {
+        originDotId: dotId,
+        spaceIds: [],
+        pageIds: [],
+        folderGrantIds: [...folderGrantIds],
+      });
+      if (
+        !guardDependenciesAllowed(
+          this.workspace,
+          guard,
+          dotId,
+          this.memoryEnabled(),
+        )
+      )
+        return empty;
+    }
+    const authorized = this.workspace.memory.maskMessages(
+      threadId,
+      canonical.slice(0, boundary + 1),
+    );
+    const calls = new Set<string>();
+    let hasToolActivity = false;
+    for (const message of authorized) {
+      if (message.role === 'assistant') {
+        for (const call of message.toolCalls ?? [])
+          if (call.function.arguments !== '{"memoryContentWithheld":true}')
+            calls.add(call.id);
+      } else if (
+        message.role === 'tool' &&
+        calls.has(message.toolCallId) &&
+        !message.content.includes('[Memory content withheld]')
+      ) {
+        hasToolActivity = true;
+      }
+    }
+    const request = options.retainTaskRequest
+      ? authorized.find(
+          (m) => m.role === 'user' && typeof m.content === 'string',
+        )?.content
+      : undefined;
+    const messages = authorized
       .filter(
         (m) =>
           (m.role === 'user' || m.role === 'assistant') &&
@@ -220,7 +346,15 @@ export class VoiceDelegations {
             content: String(m.content).slice(0, 2000),
           }) as Message,
       );
-    return { available: true, messages, guard };
+    return {
+      available: true,
+      messages,
+      guard,
+      hasToolActivity,
+      ...(typeof request === 'string'
+        ? { request: request.slice(0, 2000) }
+        : {}),
+    };
   }
   /** A stopped executor may invalidate only its own attempt, even after expiry. */
   interrupt(raw: VoiceDelegationLease): VoiceDelegation | null {
@@ -292,7 +426,10 @@ export class VoiceDelegations {
       null
     );
   }
-  list(filter: VoiceDelegationFilter = {}): VoiceDelegation[] {
+  list(
+    filter: VoiceDelegationFilter = {},
+    throughMessageId?: string,
+  ): VoiceDelegation[] {
     this.available();
     return this.db
       .prepare(
@@ -300,12 +437,22 @@ export class VoiceDelegations {
       ${filter.parentThreadId === undefined ? '' : 'AND parent_thread_id=?'}
       ${filter.callId === undefined ? '' : 'AND call_id=?'}
       ${filter.active === undefined ? '' : `AND status ${filter.active ? 'IN' : 'NOT IN'} ${active}`}
+      ${
+        throughMessageId === undefined
+          ? ''
+          : `AND source_message_id IN (
+        SELECT message_id FROM conversation_messages m
+        WHERE m.owner_id=voice_delegations.owner_id AND m.thread_id=voice_delegations.parent_thread_id
+        AND m.seq <= (SELECT seq FROM conversation_messages b
+          WHERE b.owner_id=m.owner_id AND b.thread_id=m.thread_id AND b.message_id=?))`
+      }
       ORDER BY created_at,id`,
       )
       .all(
         this.ownerId,
         ...(filter.parentThreadId === undefined ? [] : [filter.parentThreadId]),
         ...(filter.callId === undefined ? [] : [filter.callId]),
+        ...(throughMessageId === undefined ? [] : [throughMessageId]),
       ) as unknown as VoiceDelegation[];
   }
   private message(threadId: string, id: string): Message | undefined {

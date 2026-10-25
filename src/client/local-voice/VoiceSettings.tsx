@@ -11,6 +11,8 @@ import { ChevronDown, Play, SlidersHorizontal, Square } from 'lucide-react';
 import { authHeaders } from '../api';
 import {
   DEFAULT_VOICE_SETTINGS,
+  DEFAULT_HIGH_VOICE,
+  HIGH_VOICES,
   PERSONALITIES,
   VOICES,
   VOICE_QUALITIES,
@@ -125,6 +127,13 @@ function DotVoiceSettings({
   const settingsRevision = status?.settingsRevision ?? status?.selectedQuality;
   const path = `/api/local-voice/dots/${encodeURIComponent(dotId)}`;
 
+  const selectableHigh = status?.modes?.high.speechEngine === 'qwen3';
+  const canPreview =
+    draft.quality === 'high'
+      ? selectableHigh && status?.modes?.high.ready
+      : previewReady &&
+        draft.quality === 'medium' &&
+        saved?.quality === 'medium';
   const stopPreview = useCallback(() => {
     const current = preview.current;
     preview.current = null;
@@ -133,8 +142,8 @@ function DotVoiceSettings({
   }, []);
   useImperativeHandle(ref, () => ({ stopPreview }), [stopPreview]);
   useEffect(() => {
-    if (callActive || !previewReady || !active) stopPreview();
-  }, [callActive, previewReady, active, stopPreview]);
+    if (callActive || !canPreview || !active) stopPreview();
+  }, [callActive, canPreview, active, stopPreview]);
   useEffect(
     () => () => {
       const current = preview.current;
@@ -196,12 +205,12 @@ function DotVoiceSettings({
   const dirty =
     saved?.quality !== draft.quality ||
     saved?.voiceId !== draft.voiceId ||
+    (saved?.highVoiceId ?? DEFAULT_HIGH_VOICE) !==
+      (draft.highVoiceId ?? DEFAULT_HIGH_VOICE) ||
     saved?.personality !== draft.personality;
   const personality = PERSONALITIES.find(
     (item) => item.id === draft.personality,
   )!;
-  const canPreview =
-    previewReady && draft.quality === 'medium' && saved?.quality === 'medium';
   const update = (settings: Settings) => {
     stopPreview();
     setDraft(settings);
@@ -277,7 +286,7 @@ function DotVoiceSettings({
           // Decode the WAV directly; no media element or object URL outlives the preview.
           return context.decodeAudioData(bytes);
         },
-        30000,
+        draft.quality === 'high' ? 60000 : 30000,
       )
         .then((buffer) => {
           if (preview.current !== current || !buffer) return;
@@ -372,31 +381,58 @@ function DotVoiceSettings({
               <select
                 id={`${id}-voice`}
                 aria-label="Voice"
-                value={draft.voiceId}
-                disabled={disabled || draft.quality !== 'medium'}
+                value={
+                  draft.quality === 'high'
+                    ? selectableHigh
+                      ? (draft.highVoiceId ?? DEFAULT_HIGH_VOICE)
+                      : 'native'
+                    : draft.voiceId
+                }
+                disabled={
+                  disabled ||
+                  draft.quality === 'basic' ||
+                  (draft.quality === 'high' && !selectableHigh)
+                }
                 onChange={(event) =>
                   update({
                     ...draft,
-                    voiceId: event.target.value as Settings['voiceId'],
+                    ...(draft.quality === 'high'
+                      ? {
+                          highVoiceId: event.target
+                            .value as Settings['highVoiceId'],
+                        }
+                      : { voiceId: event.target.value as Settings['voiceId'] }),
                   })
                 }
               >
-                {(['American', 'British'] as const).flatMap((accent) =>
-                  (['Female', 'Male'] as const).map((gender) => (
-                    <optgroup
-                      key={`${accent}-${gender}`}
-                      label={`${accent} · ${gender}`}
-                    >
-                      {VOICES.filter(
-                        (voice) =>
-                          voice.accent === accent && voice.gender === gender,
-                      ).map((voice) => (
-                        <option key={voice.id} value={voice.id}>
-                          {voice.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  )),
+                {draft.quality === 'high' ? (
+                  selectableHigh ? (
+                    HIGH_VOICES.map((voice) => (
+                      <option key={voice.id} value={voice.id}>
+                        {voice.name}
+                      </option>
+                    ))
+                  ) : (
+                    <option value="native">Model voice</option>
+                  )
+                ) : (
+                  (['American', 'British'] as const).flatMap((accent) =>
+                    (['Female', 'Male'] as const).map((gender) => (
+                      <optgroup
+                        key={`${accent}-${gender}`}
+                        label={`${accent} · ${gender}`}
+                      >
+                        {VOICES.filter(
+                          (voice) =>
+                            voice.accent === accent && voice.gender === gender,
+                        ).map((voice) => (
+                          <option key={voice.id} value={voice.id}>
+                            {voice.name}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )),
+                  )
                 )}
               </select>
             </label>
@@ -450,6 +486,7 @@ function DotVoiceSettings({
           </p>
           {callActive && <p>End the call to change these settings.</p>}
           {!previewReady &&
+            !canPreview &&
             !(
               draft.quality === 'high' &&
               unavailableReason === status?.modes?.high.reason

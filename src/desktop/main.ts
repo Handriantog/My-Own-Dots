@@ -108,7 +108,11 @@ app.setPath(
     desktopLocation.profile,
 );
 const diagnosticsDirectory = path.join(app.getPath('userData'), 'diagnostics');
-const diagnostics = new DesktopDiagnostics(diagnosticsDirectory);
+const diagnostics = new DesktopDiagnostics(
+  diagnosticsDirectory,
+  undefined,
+  path.join(app.getPath('userData'), 'logs'),
+);
 process.on('uncaughtExceptionMonitor', (error) => {
   diagnostics.captureException(error);
 });

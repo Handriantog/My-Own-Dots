@@ -194,9 +194,21 @@ export class VoiceDelegationCoordinator implements RunLifecycle {
       throw Error('Resume this task using its pending approval card.');
     }
     request.signal.throwIfAborted();
+    // Keep approval durable while another task executes. Claim only after FIFO admission.
+    const release =
+      job.status === 'approval'
+        ? await request.acquireExecution?.()
+        : undefined;
     const leaseMs = this.options.leaseMs ?? 30000;
-    let lease = await this.jobs.claim(job.id, request.input.runId, leaseMs);
-    if (!lease) throw Error('Delegated task could not be claimed.');
+    let lease: VoiceDelegationLease | null;
+    try {
+      request.signal.throwIfAborted();
+      lease = await this.jobs.claim(job.id, request.input.runId, leaseMs);
+      if (!lease) throw Error('Delegated task could not be claimed.');
+    } catch (error) {
+      await release?.();
+      throw error;
+    }
     let ended = false;
     let pending: Promise<void> = Promise.resolve();
     let renewalFailure: unknown;
@@ -244,6 +256,8 @@ export class VoiceDelegationCoordinator implements RunLifecycle {
         } catch {
           this.interrupted.set(job.id, lease!);
           await this.reconcile();
+        } finally {
+          await release?.();
         }
       },
     };

@@ -1,3 +1,4 @@
+import { logDiagnostic, logError } from '../../shared/error-log.js';
 import { randomUUID } from 'node:crypto';
 import type { ConversationSnapshot } from '../local-conversations.js';
 import type {
@@ -8,6 +9,7 @@ import type { Transcript } from './prototype.js';
 import { RecognitionInputError } from './worker.js';
 import { playSpeechOutput } from './speech-output.js';
 import { VoiceTurnTiming } from './timing.js';
+import { isEndCallRequest } from './call-control.js';
 import type {
   NativeTurnReply,
   NativeRoutingContext,
@@ -222,12 +224,16 @@ export class LiveVoiceCall {
   private startedAt = Date.now();
   private lastSeen = Date.now();
   private timer?: ReturnType<typeof setInterval>;
-  private update?: {
+  private seenUpdates = new Set<string>();
+  private retainedUpdates = new Set<string>();
+  private updates: {
     id: string;
     text: string;
     generation: number;
     authorization: Promise<() => Promise<boolean>>;
-  };
+    retainUntilPlayed: boolean;
+    deferred: boolean;
+  }[] = [];
   constructor(
     readonly scope: {
       id: string;
@@ -344,6 +350,10 @@ export class LiveVoiceCall {
       }, 2000);
       this.timer.unref?.();
     } catch (error) {
+      logError('voice_start_failed', error, {
+        callId: this.scope.id,
+        threadId: this.scope.threadId,
+      });
       await this.end(
         'The call could not start. Check the local speech and inference runtimes.',
       );
@@ -465,6 +475,26 @@ export class LiveVoiceCall {
           return;
         }
         if (text.length > 4000) throw Error('Transcript exceeds limit');
+        if (isEndCallRequest(text)) {
+          // Save the control in the terminal receipt, without admitting an agent
+          // task or delaying device teardown on an active checkpoint write.
+          this.appendTranscript(`You: ${text}`);
+          logDiagnostic('voice_call_control', {
+            callId: this.scope.id,
+            threadId: this.scope.threadId,
+            operation: 'end_call',
+          });
+          // High end() drains this recognition promise; awaiting it here would
+          // deadlock. end() emits flush/ended synchronously and owns cleanup.
+          void this.end().catch((error) =>
+            logError('voice_call_end_failed', error, {
+              callId: this.scope.id,
+              threadId: this.scope.threadId,
+              operation: 'spoken_hangup',
+            }),
+          );
+          return;
+        }
         if (this.committedTurns >= 100) throw Error('Call turn limit reached');
         this.committedTurns++;
         this.utterance = {
@@ -661,21 +691,56 @@ export class LiveVoiceCall {
     id: string,
     text: string,
     authorization: Promise<() => Promise<boolean>> | (() => Promise<boolean>),
+    options: { retainUntilPlayed?: boolean } = {},
   ) {
-    if (!this.workers.native || this.ended) return;
-    this.update = {
+    if (!this.workers.native || this.ended || this.seenUpdates.has(id)) return;
+    this.seenUpdates.add(id);
+    if (this.seenUpdates.size > 256)
+      this.seenUpdates.delete(this.seenUpdates.values().next().value!);
+    if (this.updates.length >= 64) {
+      const disposable = this.updates.findIndex(
+        (update) => !update.retainUntilPlayed,
+      );
+      const [removed] = this.updates.splice(disposable < 0 ? 0 : disposable, 1);
+      this.traceUpdate(removed.id, 'queue_full');
+      this.retainedUpdates.delete(removed.id);
+    }
+    if (options.retainUntilPlayed) this.retainedUpdates.add(id);
+    this.updates.push({
       id,
       text,
       generation: this.generation,
       authorization: Promise.resolve(authorization).catch(
         () => async () => false,
       ),
-    };
+      retainUntilPlayed: options.retainUntilPlayed === true,
+      deferred: this.speakerMuted && options.retainUntilPlayed === true,
+    });
+    this.traceUpdate(id, 'queued');
     this.announceUpdate();
+  }
+  private traceUpdate(
+    id: string,
+    status:
+      | 'queued'
+      | 'deferred'
+      | 'playing'
+      | 'played'
+      | 'unavailable'
+      | 'interrupted'
+      | 'call_ended'
+      | 'queue_full',
+  ) {
+    if (this.retainedUpdates.has(id))
+      logDiagnostic('voice_task_speech', {
+        callId: this.scope.id,
+        requestId: id,
+        status,
+      });
   }
   private announceUpdate() {
     if (
-      !this.update ||
+      !this.updates.length ||
       !this.ready ||
       !this.workers.native ||
       this.ended ||
@@ -685,8 +750,7 @@ export class LiveVoiceCall {
       this.speakerMuted
     )
       return;
-    const update = this.update;
-    this.update = undefined;
+    const update = this.updates.shift()!;
     const generation = update.generation;
     const signal = AbortSignal.any([
       this.controller.signal,
@@ -713,7 +777,12 @@ export class LiveVoiceCall {
       // closes that worker, so drain stale synthesis before the next recognition.
       // Call shutdown still owns cancellation; the generation gates playback.
       const reply = await waitForVoiceOperation(
-        this.workers.native!.speak(update.text, this.controller.signal),
+        this.workers.native!.speak(
+          update.deferred
+            ? `An earlier task result: ${update.text}`
+            : update.text,
+          this.controller.signal,
+        ),
         this.controller.signal,
       );
       if (!(await authorized())) return;
@@ -779,6 +848,43 @@ export class LiveVoiceCall {
       })
       .finally(() => {
         if (this.recognizing === work) this.recognizing = undefined;
+        // Barge-in stops speech, not the completed work it was announcing.
+        // Retry only an outcome that has not begun software playback. Fresh
+        // authorization is still required; never repeat the task's effects.
+        if (
+          !this.ended &&
+          generation !== this.generation &&
+          update.retainUntilPlayed &&
+          !this.deliveries.some(
+            (row) =>
+              row.messageId === update.id && row.softwarePlayedSamples > 0,
+          )
+        ) {
+          update.generation = this.generation;
+          update.deferred = true;
+          this.updates.unshift(update);
+          this.traceUpdate(update.id, 'deferred');
+        } else {
+          const rows = this.deliveries.filter(
+            (row) =>
+              row.messageId === update.id && row.generation === generation,
+          );
+          this.traceUpdate(
+            update.id,
+            this.ended
+              ? 'call_ended'
+              : rows.some((row) => row.softwarePlayedSamples > 0)
+                ? rows.every(
+                    (row) =>
+                      !row.interrupted &&
+                      row.generatedSamples === row.softwarePlayedSamples,
+                  )
+                  ? 'played'
+                  : 'interrupted'
+                : 'unavailable',
+          );
+          this.retainedUpdates.delete(update.id);
+        }
         if (!this.ended && generation === this.generation)
           this.emit({ type: 'phase', phase: 'listening' });
         if (!this.ended) this.announceUpdate();
@@ -792,9 +898,12 @@ export class LiveVoiceCall {
     this.speechStartFrames = 3;
     this.silence = 0;
   }
-  private async checkpoint(line: string) {
+  private appendTranscript(line: string) {
     this.transcript =
       `${this.transcript}${this.transcript ? '\n' : ''}${line}`.slice(-20000);
+  }
+  private async checkpoint(line: string) {
+    this.appendTranscript(line);
     await this.port.receipt('active', this.transcript);
   }
   async mute(value: boolean) {
@@ -834,9 +943,13 @@ export class LiveVoiceCall {
     if (stopRun) this.recognizingTiming?.mark('interrupted');
     if (utterance?.output) utterance.output.queue = [];
     this.generation++;
-    if (this.update) {
-      if (reason === 'speaker_muted') this.update.generation = this.generation;
-      else this.update = undefined;
+    this.updates = this.updates.filter(
+      (update) => reason === 'speaker_muted' || update.retainUntilPlayed,
+    );
+    for (const update of this.updates) {
+      update.generation = this.generation;
+      if (update.retainUntilPlayed) update.deferred = true;
+      this.traceUpdate(update.id, 'deferred');
     }
     if (stopRun) this.port.voiceTurn?.();
     if (stopRun) this.recognitionGeneration++;
@@ -1233,7 +1346,9 @@ export class LiveVoiceCall {
   }
   private markPlaybackFinished(utterance: Utterance) {
     const rows = this.deliveries.filter(
-      (row) => row.messageId === utterance.messageId,
+      (row) =>
+        row.messageId === utterance.messageId &&
+        row.generation === utterance.generation,
     );
     if (
       rows.length &&
@@ -1253,6 +1368,14 @@ export class LiveVoiceCall {
     if (!item) return;
     if (item.generation !== generation || item.samples !== samples)
       throw Error('Invalid playback acknowledgement');
+    if (
+      !this.deliveries.some(
+        (row) =>
+          row.messageId === item.delivery.messageId &&
+          row.softwarePlayedSamples > 0,
+      )
+    )
+      this.traceUpdate(item.delivery.messageId, 'playing');
     item.delivery.softwarePlayedSamples += samples;
     item.timing.mark('first_playback_ack');
     clearTimeout(item.timer);
@@ -1261,6 +1384,16 @@ export class LiveVoiceCall {
   }
   end(error?: string): Promise<void> {
     if (this.closing) return this.closing;
+    for (const update of this.updates) {
+      this.traceUpdate(update.id, 'call_ended');
+      this.retainedUpdates.delete(update.id);
+    }
+    this.updates = [];
+    if (error)
+      logError('voice_call_failed', error, {
+        callId: this.scope.id,
+        threadId: this.scope.threadId,
+      });
     const utterance = this.utterance;
     utterance?.timing.mark(error ? 'call_failed' : 'call_ended');
     this.recognizingTiming?.mark(error ? 'call_failed' : 'call_ended');
