@@ -1,4 +1,16 @@
 import { z } from 'zod';
+export interface VoiceInputReceipt {
+  id: string;
+  dotId: string;
+  callId: string;
+  parentThreadId: string;
+  caption: string;
+  kind: 'request' | 'status' | 'stop';
+  reply: string;
+  status: 'received' | 'interrupted';
+  createdAt: number;
+  deliveredAt: number | null;
+}
 
 export const expiredFolderApprovalMessage =
   'Folder approval expired. Please ask again.';

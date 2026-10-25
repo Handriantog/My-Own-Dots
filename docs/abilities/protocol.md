@@ -160,6 +160,20 @@ selection-needed requires that reference. Only the host mints references and bin
 them to source/digest/Dot/account/revision/expiry. A later model call can supply an
 opaque selection reference, but receives none of the action or display metadata.
 
+Companion activity outcomes may also include host-owned `activity` feedback:
+`{ "action":"start", "status":"paused", "resumeAfterIdleMs":5000 }`.
+The action is `start`, `stop`, or `status`; the state is `inactive`, `approaching`,
+`running`, or `paused`. The optional idle interval comes from the reviewed activity
+definition. Pointer activities report `running` only after a rendered frame's
+native movement acknowledgement; manual input clears that evidence until movement
+resumes. The host reads state again when the invocation completes; a start
+that is already inactive returns `uncertain`. A successful status query can report
+`inactive`, with an optional fixed `reason` such as `scene_stale`,
+`helper_unavailable`, or `permission_revoked` when the driver knows why it stopped.
+This bounded metadata may enter inference and receipts; private worker
+text remains excluded. Workers cannot supply the `activity` field. State describes
+the completion-time observation and does not promise an ongoing activity stays active.
+
 For explicitly `model-visible` tools, the host validates `value` against the tool's
 output schema before returning `{ "status":"success", "visibility":"model-visible",
 "value":... }`. This is separate from the owner-only envelope. The worker cannot

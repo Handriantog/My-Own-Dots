@@ -274,3 +274,54 @@ describe('durable Ability authority', () => {
     },
   );
 });
+
+it.each(['direct', 'worker'] as const)(
+  'reads safe selection receipts through %s storage without requiring private references',
+  async (mode) => {
+    const root = await mkdtemp(join(tmpdir(), 'dots-diagnostic-receipts-'));
+    cleanup.push(() => rm(root, { recursive: true, force: true }));
+    const direct =
+      mode === 'direct'
+        ? new WorkspaceStore(join(root, 'workspace.sqlite'), 'owner')
+        : undefined;
+    const client =
+      mode === 'worker'
+        ? await StorageClient.open({
+            database: join(root, 'workspace.sqlite'),
+            ownerId: 'owner',
+            engine: 'sqlite',
+          })
+        : undefined;
+    cleanup.push(() => (direct ? direct.close() : client!.close()));
+    const workspace = direct ?? client!.repositories.workspace;
+    const dot = (await workspace.dots())[0];
+    await workspace.bindThread('thread-a', dot.id, 'Diagnostics');
+    await workspace.bindThread('thread-b', dot.id, 'Other');
+    const store = workspace.abilities;
+    await store.recordPackage(pkg());
+    const binding = await store.bind(
+      dot.id,
+      pkg().digest,
+      ['account', 'search'],
+      { clientId: 'private-setting' },
+    );
+    for (let i = 0; i < 24; i++) {
+      const invocation = context(binding);
+      if (i === 23) invocation.threadId = 'thread-b';
+      expect(await store.claimInvocation(invocation)).toBe(true);
+      await store.settleInvocation(invocation.invocationId, {
+        status: 'selection_needed',
+        resultRef: randomUUID(),
+      });
+    }
+    const receipts = await store.recentReceipts(dot.id, 'thread-a');
+    expect(receipts).toHaveLength(20);
+    expect(
+      receipts.every(
+        (receipt) => receipt.outcome?.status === 'selection_needed',
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(receipts)).not.toMatch(/resultRef|private-setting/);
+    expect(await store.recentReceipts('another-dot', 'thread-a')).toEqual([]);
+  },
+);

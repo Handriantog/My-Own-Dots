@@ -32,6 +32,10 @@ export class CompanionFolderPicker {
     );
   }
 
+  get choosing(): boolean {
+    return this.pending;
+  }
+
   private workspacePage(value: string): boolean {
     try {
       const url = new URL(value);
@@ -92,11 +96,18 @@ export class CompanionFolderPicker {
     const revision = this.revision;
     this.pending = true;
     try {
-      const selection = await dialog.showOpenDialog(window, {
-        properties: ['openDirectory'],
-        title: 'Choose a folder for your Dot',
-        buttonLabel: 'Choose folder',
-      });
+      const selection = await dialog
+        .showOpenDialog(window, {
+          properties: ['openDirectory'],
+          title: 'Choose a folder for your Dot',
+          buttonLabel: 'Choose folder',
+        })
+        .catch(() => {
+          throw new Error(
+            'Could not open the folder chooser. Please try again.',
+          );
+        });
+      if (selection.canceled || !selection.filePaths[0]) return null;
       // Even navigation away and back or hide/show invalidates this selection.
       // No caller data can set a default path or change native dialog options.
       if (
@@ -108,14 +119,12 @@ export class CompanionFolderPicker {
         !this.available(window, false) ||
         window.webContents.mainFrame !== frame ||
         frame.url !== url ||
-        this.getAddress() !== address ||
-        selection.canceled ||
-        !selection.filePaths[0]
+        this.getAddress() !== address
       )
-        return null;
+        throw new Error(
+          'Folder selection was interrupted. Choose the folder again.',
+        );
       return { path: selection.filePaths[0] };
-    } catch {
-      throw new Error('Could not open the folder chooser. Please try again.');
     } finally {
       this.pending = false;
     }
@@ -146,13 +155,13 @@ export class CompanionFolderPicker {
     const contentLifecycle: NodeJS.EventEmitter = window.webContents;
     for (const name of windowEvents) windowLifecycle.on(name, invalidate);
     for (const name of contentEvents) contentLifecycle.on(name, invalidate);
-    window.webContents.on('did-start-navigation', navigating);
+    contentLifecycle.on('did-start-navigation', navigating);
     this.detach = () => {
       for (const name of windowEvents)
         windowLifecycle.removeListener(name, invalidate);
       for (const name of contentEvents)
         contentLifecycle.removeListener(name, invalidate);
-      window.webContents.removeListener('did-start-navigation', navigating);
+      contentLifecycle.removeListener('did-start-navigation', navigating);
     };
   }
 

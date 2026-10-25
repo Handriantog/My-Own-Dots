@@ -32,6 +32,7 @@ import type {
   ActivityDriver,
   ActivityStatus,
 } from '../../src/shared/abilities/activity';
+import { ActivityDriverFailure } from '../../src/shared/abilities/activity';
 import manifestFixture from '../fixtures/abilities/manifest.json';
 import activity from '../fixtures/abilities/activity.json';
 const cleanups: (() => Promise<unknown> | void)[] = [];
@@ -294,6 +295,120 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         status: 'success',
       });
       expect(f.state()).toBe('inactive');
+    });
+    it('reports trusted activity state for starts, status and stops without private worker text', async () => {
+      const f = await fixture();
+      const id = randomUUID();
+      const started = await f.invoke('activity-start', true, undefined, id);
+      expect(started).toMatchObject({
+        status: 'success',
+        activity: { action: 'start', status: 'approaching' },
+      });
+      expect(f.workspace.abilities.receipt(id)?.outcome).toEqual({
+        status: 'success',
+        activity: { action: 'start', status: 'approaching' },
+      });
+      f.driver.status = () => 'paused';
+      const paused = await f.invoke('activity-status');
+      expect(paused).toMatchObject({
+        status: 'success',
+        activity: {
+          action: 'status',
+          status: 'paused',
+          resumeAfterIdleMs: activity.pointer.idleMs,
+        },
+      });
+      expect(paused).not.toHaveProperty('owner');
+      expect(paused).not.toHaveProperty('value');
+      expect(await f.invoke('activity-stop')).toMatchObject({
+        status: 'success',
+        activity: { action: 'stop', status: 'inactive' },
+      });
+      expect(await f.invoke('activity-status')).toMatchObject({
+        status: 'success',
+        activity: { action: 'status', status: 'inactive' },
+      });
+    });
+    it('does not confirm a start when the driver stops before the worker result arrives', async () => {
+      const f = await fixture();
+      const start = f.driver.start.bind(f.driver);
+      f.driver.start = async (owner, definition) => {
+        await start(owner, definition);
+        await f.driver.stop();
+      };
+      const outcome = await f.invoke('activity-start');
+      expect(outcome).toEqual({
+        status: 'uncertain',
+        activity: { action: 'start', status: 'inactive' },
+      });
+      expect(f.state()).toBe('inactive');
+    });
+    it.each(['activity-ignore-denial', 'activity-query-after-denial'])(
+      'does not confirm a worker success after a trusted driver refusal: %s',
+      async (op) => {
+        const f = await fixture();
+        const start = f.driver.start;
+        f.driver.start = async () => {
+          throw new ActivityDriverFailure('setup_needed');
+        };
+        expect(await f.invoke(op)).toEqual({
+          status: 'uncertain',
+          activity: {
+            action: 'start',
+            status: 'inactive',
+            reason: 'accessibility_required',
+          },
+        });
+        expect(f.state()).toBe('inactive');
+        expect(await f.invoke('activity-status')).toHaveProperty('activity', {
+          action: 'status',
+          status: 'inactive',
+        });
+        f.driver.start = start;
+        const restarted = await f.invoke('activity-start');
+        expect(restarted).toHaveProperty('activity', {
+          action: 'start',
+          status: 'approaching',
+        });
+      },
+    );
+    it('rejects worker-injected activity reasons and retires provisional effects', async () => {
+      const f = await fixture();
+      expect(await f.invoke('activity-forged-reason')).toEqual({
+        status: 'uncertain',
+        activity: { action: 'start', status: 'inactive' },
+      });
+      expect(f.state()).toBe('inactive');
+      const queried = await f.invoke('activity-status');
+      expect(queried).toHaveProperty('activity', {
+        action: 'status',
+        status: 'inactive',
+      });
+    });
+    it('does not infer Accessibility from a generic setup error', async () => {
+      const f = await fixture();
+      f.driver.start = async () => {
+        throw new AbilityFailure('setup_needed');
+      };
+      expect(await f.invoke('activity-start')).toEqual({
+        status: 'error',
+        code: 'setup_needed',
+      });
+      expect(f.state()).toBe('inactive');
+    });
+    it('reports the native stop cause after the activity lease has been retired', async () => {
+      const f = await fixture();
+      await f.invoke('activity-start');
+      f.driver.reason = () => 'scene_stale';
+      await f.driver.stop();
+      expect(await f.invoke('activity-status')).toMatchObject({
+        status: 'success',
+        activity: {
+          action: 'status',
+          status: 'inactive',
+          reason: 'scene_stale',
+        },
+      });
     });
     it.each(['activity-fail', 'activity-invalid', 'activity-hold'])(
       'releases a provisional start on %s',

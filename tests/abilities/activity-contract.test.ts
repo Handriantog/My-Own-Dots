@@ -7,6 +7,8 @@ import {
   capabilitySchema,
   capabilityReplySchema,
   hostMessageSchema,
+  parseOwnerOutcome,
+  workerResultSchema,
 } from '../../src/shared/abilities/protocol';
 import { invocationContextSchema } from '../../src/shared/abilities/bridge';
 import { permissionDiff } from '../../src/shared/abilities/permissions';
@@ -34,6 +36,49 @@ const manifest = () => ({
 });
 
 describe('declarative companion activity contract', () => {
+  it('admits only fixed host activity reasons on error envelopes', () => {
+    const activity = {
+      action: 'start',
+      status: 'inactive',
+      reason: 'accessibility_required',
+    };
+    const outcome = { status: 'error', code: 'setup_needed', activity };
+    expect(parseOwnerOutcome(outcome)).toEqual(outcome);
+    expect(workerResultSchema.safeParse(outcome).success).toBe(false);
+    for (const change of [
+      { reason: 'OWNER_ONLY_SENTINEL' },
+      { detail: 'OWNER_ONLY_SENTINEL' },
+    ])
+      expect(() =>
+        parseOwnerOutcome({ ...outcome, activity: { ...activity, ...change } }),
+      ).toThrow();
+  });
+  it('allows bounded host activity feedback while rejecting worker-forged feedback and private text', () => {
+    const activity = {
+      action: 'start',
+      status: 'paused',
+      resumeAfterIdleMs: 5000,
+    };
+    expect(parseOwnerOutcome({ status: 'success', activity })).toEqual({
+      status: 'success',
+      activity,
+    });
+    expect(
+      workerResultSchema.safeParse({ status: 'success', activity }).success,
+    ).toBe(false);
+    for (const change of [
+      { status: 'provider secret' },
+      { detail: 'provider secret' },
+      { reason: 'provider secret' },
+      { resumeAfterIdleMs: 60001 },
+    ])
+      expect(() =>
+        parseOwnerOutcome({
+          status: 'success',
+          activity: { ...activity, ...change },
+        }),
+      ).toThrow();
+  });
   it('returns validation errors for too few keyframes without throwing', () => {
     expect(
       activityDefinitionSchema.safeParse({ ...activity, keyframes: [] })

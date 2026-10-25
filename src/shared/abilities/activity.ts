@@ -77,6 +77,28 @@ export const activityStatusSchema = z.enum([
 export type ActivityDefinition = z.infer<typeof activityDefinitionSchema>;
 export type ActivityCommand = z.infer<typeof activityCommandSchema>;
 export type ActivityStatus = z.infer<typeof activityStatusSchema>;
+export const activityStopReasonSchema = z.enum([
+  'accessibility_required',
+  'scene_stale',
+  'scene_changed',
+  'helper_unavailable',
+  'permission_revoked',
+  'desktop_unavailable',
+  'selection_changed',
+  'pointer_unavailable',
+  'frame_stale',
+  'completed',
+  'stopped',
+]);
+export type ActivityStopReason = z.infer<typeof activityStopReasonSchema>;
+/** Host-observed state only. Never accept this envelope from an Ability worker. */
+export const activityFeedbackSchema = z.strictObject({
+  action: z.enum(['start', 'stop', 'status']),
+  status: activityStatusSchema,
+  resumeAfterIdleMs: z.number().int().min(1000).max(60000).optional(),
+  reason: activityStopReasonSchema.optional(),
+});
+export type ActivityFeedback = z.infer<typeof activityFeedbackSchema>;
 export interface ActivityDriver {
   start(
     owner: { bindingId: string; dotId: string },
@@ -84,6 +106,10 @@ export interface ActivityDriver {
   ): Promise<void>;
   stop(bindingId?: string): void | Promise<void>;
   status(bindingId: string): ActivityStatus;
+  reason?(
+    bindingId: string,
+    activityId?: string,
+  ): ActivityStopReason | undefined;
 }
 
 /** Fixed host-driver refusals; codes survive independently bundled host modules. */

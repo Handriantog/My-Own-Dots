@@ -1,5 +1,5 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -23,6 +23,34 @@ async function fixture(entry?: URL) {
   cleanup.push(() => client.close());
   return { root, database, client };
 }
+it('resolves and binds execution scope through the worker without serializing an unfinished promise', async () => {
+  const { client, root } = await fixture();
+  const { workspace } = client.repositories;
+  const dot = (await workspace.dots())[0];
+  const thread = await workspace.bindThread('project', dot.id, 'Project');
+  const request = await workspace.folders.request(dot.id, thread.id, {
+    reason: 'Run fixture tests',
+    folderHint: root,
+    access: 'execute',
+  });
+  const selection = await workspace.folders.select(thread.id, request.id, root);
+  const approved = await workspace.folders.decide(thread.id, request.id, {
+    toolCallId: 'fixture',
+    approve: true,
+    selectionId: selection.id,
+    access: 'execute',
+  });
+  expect(
+    await workspace.folders.executionScope(dot.id, thread.id),
+  ).toMatchObject({ path: await realpath(root), access: 'execute' });
+  expect(
+    await workspace.folders.bindExecution(dot.id, thread.id, approved.grantId!),
+  ).toMatchObject({ grantId: approved.grantId });
+  await workspace.folders.revoke(dot.id, approved.grantId!);
+  await expect(
+    workspace.folders.executionScope(dot.id, thread.id),
+  ).rejects.toThrow(/revoked/);
+});
 it('persists typed repository operations through a worker and drains on close', async () => {
   const { client, database } = await fixture();
   const { workspace, store } = client.repositories;

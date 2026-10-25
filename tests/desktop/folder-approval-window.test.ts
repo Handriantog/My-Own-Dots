@@ -7,6 +7,7 @@ const host = vi.hoisted(() => ({
   windows: [] as WindowDouble[],
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   ipc: null as EventEmitter | null,
+  showOpenDialog: vi.fn(),
 }));
 class WindowDouble extends EventEmitter {
   visible = false;
@@ -73,7 +74,7 @@ vi.mock('electron', async () => {
   return {
     BrowserWindow: WindowDouble,
     ipcMain: host.ipc,
-    dialog: { showOpenDialog: vi.fn() },
+    dialog: { showOpenDialog: host.showOpenDialog },
   };
 });
 
@@ -102,9 +103,24 @@ function invoke(action: string, event = sender(), ...args: unknown[]) {
 async function flush() {
   for (let i = 0; i < 10; i++) await Promise.resolve();
 }
+
+it('reports a destroyed approval window as closed before its closed event arrives', async () => {
+  panel.sync(true);
+  await panel.refresh();
+  await flush();
+  const window = host.windows.at(-1)!;
+  window.destroyed = true;
+  window.isVisible = () => {
+    throw new TypeError('Object has been destroyed');
+  };
+  expect(() => panel.isOpen).not.toThrow();
+  expect(panel.isOpen).toBe(false);
+});
+
 beforeEach(async () => {
   host.windows = [];
   host.handlers.clear();
+  host.showOpenDialog.mockReset();
   connection = {
     url: 'http://127.0.0.1:4310/',
     ownerToken: 'test-owner',
@@ -235,6 +251,52 @@ it('closes stale controls while offline and resumes after a healthy poll', async
   await flush();
   expect(panel.isOpen).toBe(true);
 });
+
+it('reports an interrupted choice when Dot hides while the native picker is open', async () => {
+  let choose!: (value: { canceled: boolean; filePaths: string[] }) => void;
+  host.showOpenDialog.mockImplementationOnce(
+    () => new Promise((resolve) => (choose = resolve)),
+  );
+  host.windows[0].focused = true;
+  const selection = host.handlers.get('dot:approval-folders:choose')!(sender());
+  panel.sync(false);
+  expect(panel.isOpen).toBe(false);
+  panel.sync(true);
+  expect(panel.isOpen).toBe(true);
+  choose({ canceled: false, filePaths: ['/chosen/project'] });
+  await expect(selection).rejects.toThrow('Choose the folder again');
+});
+
+it.each(['before', 'during'])(
+  'keeps the owner choice when a feed failure starts %s the native picker',
+  async (timing) => {
+    let choose!: (value: { canceled: boolean; filePaths: string[] }) => void;
+    let offline!: (error: Error) => void;
+    host.showOpenDialog.mockImplementationOnce(
+      () => new Promise((resolve) => (choose = resolve)),
+    );
+    fetcher.mockImplementationOnce(
+      () => new Promise((_resolve, reject) => (offline = reject)),
+    );
+    const polling = timing === 'before' ? panel.refresh() : undefined;
+    host.windows[0].focused = true;
+    const selection = host.handlers.get('dot:approval-folders:choose')!(
+      sender(),
+    );
+    const concurrent = timing === 'during' ? panel.refresh() : undefined;
+    offline?.(new Error('offline'));
+    await polling;
+    await concurrent;
+    expect(panel.isOpen).toBe(true);
+    expect(invoke('state')).toEqual({ request: a, count: 1 });
+    choose({ canceled: false, filePaths: ['/chosen/project'] });
+    await expect(selection).resolves.toEqual({ path: '/chosen/project' });
+    fetcher.mockReset().mockImplementation(async () => Response.json([]));
+    await panel.refresh();
+    expect(panel.isOpen).toBe(false);
+    expect(invoke('state')).toEqual({ request: null, count: 0 });
+  },
+);
 
 it('does not send owner credentials to non-loopback or ambiguous addresses', async () => {
   for (const url of [

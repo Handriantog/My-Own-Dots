@@ -96,6 +96,162 @@ final class ActivityPointerSession {
     }
 }
 
+// Slow cross-process observations never block pointer commands or CG scene heartbeats.
+// Admission and completion are main-thread-only; a single serial job owns AX state.
+final class AsyncObservation<Value> {
+    private let queue = DispatchQueue(label: "dots.accessibility-observation", qos: .utility)
+    private(set) var busy = false
+    @discardableResult
+    func request(_ read: @escaping () -> Value, completion: @escaping (Value) -> Void) -> Bool {
+        precondition(Thread.isMainThread)
+        guard !busy else { return false }
+        busy = true
+        queue.async {
+            let value = read()
+            DispatchQueue.main.async {
+                self.busy = false
+                completion(value)
+            }
+        }
+        return true
+    }
+}
+struct AccessibilityScreen: Equatable {
+    let id: String
+    let bounds: CGRect
+}
+struct DockObservation {
+    let surfaces: [[String: Any]]
+    let observedAtMs: Double
+    let screens: [AccessibilityScreen]
+    let revision: Int
+    func current(now: Double, screens: [AccessibilityScreen], revision: Int) -> [[String: Any]] {
+        guard now >= observedAtMs, now - observedAtMs <= 500,
+              self.screens == screens, self.revision == revision else { return [] }
+        return surfaces
+    }
+}
+// Only the observation queue accesses these dictionaries or calls AX APIs.
+// Notification run-loop sources invoke the immutable callback on the main thread.
+final class AccessibilityObserverWorker {
+    let onChange: () -> Void
+    private var observers: [pid_t: AXObserver] = [:]
+    private var watchedWindows: [pid_t: [AXUIElement]] = [:]
+    var clock: Double { ProcessInfo.processInfo.systemUptime * 1000 }
+    init(onChange: @escaping () -> Void) { self.onChange = onChange }
+    func rect(_ r: CGRect) -> [String: Double] { ["x": r.origin.x, "y": r.origin.y, "width": r.width, "height": r.height] }
+    func read(pids: [pid_t], trusted: Bool, refresh: Bool, dockPid: pid_t?, screens: [AccessibilityScreen], revision: Int) -> DockObservation {
+        // Configure the process default before the first notification subscription,
+        // including child AX elements whose timeout has not been set explicitly.
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 0.02)
+        if refresh { refreshObservers(pids: pids, trusted: trusted) }
+        let observedAt = clock
+        let surfaces = trusted ? dockSurfaces(dockPid: dockPid, screens: screens) : []
+        return DockObservation(surfaces: surfaces, observedAtMs: observedAt, screens: screens, revision: revision)
+    }
+    func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+        var value: CFTypeRef?
+        return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
+    }
+    func dockBounds(_ element: AXUIElement) -> CGRect? {
+        guard let position = attribute(element, kAXPositionAttribute), CFGetTypeID(position) == AXValueGetTypeID(),
+              let size = attribute(element, kAXSizeAttribute), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero, extent = CGSize.zero
+        guard AXValueGetValue(position as! AXValue, .cgPoint, &point),
+              AXValueGetValue(size as! AXValue, .cgSize, &extent),
+              [point.x, point.y, extent.width, extent.height].allSatisfy({ $0.isFinite }) else { return nil }
+        return CGRect(origin: point, size: extent)
+    }
+    func dockFits(_ r: CGRect, _ d: CGRect) -> Bool {
+        guard r.width >= 12, r.height >= 12, r.minX >= d.minX - 1, r.minY >= d.minY - 1,
+              r.maxX <= d.maxX + 1, r.maxY <= d.maxY + 1 else { return false }
+        if r.width >= r.height { return r.height < d.height / 2 && abs(r.maxY - d.maxY) <= 24 }
+        return r.width < d.width / 2 && (abs(r.minX - d.minX) <= 24 || abs(r.maxX - d.maxX) <= 24)
+    }
+    func dockSurfaces(dockPid: pid_t?, screens: [AccessibilityScreen]) -> [[String: Any]] {
+        // Dock's on-screen CG window can cover an entire display. Never turn that
+        // backing container, or NSScreen.visibleFrame's full-width inset, into a perch.
+        guard AXIsProcessTrusted(), let dockPid = dockPid else { return [] }
+        let application = AXUIElementCreateApplication(dockPid)
+        AXUIElementSetMessagingTimeout(application, 0.02)
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.02)
+        var queue: [(AXUIElement, String, Int)] = [(application, "root", 0)]
+        var surfaces: [[String: Any]] = []
+        var visited = 0
+        let deadline = clock + 75
+        while !queue.isEmpty && visited < 32 && clock < deadline {
+            let (element, identity, depth) = queue.removeFirst(); visited += 1
+            if (attribute(element, kAXHiddenAttribute) as? Bool) == true { continue }
+            if (attribute(element, kAXRoleAttribute) as? String) == kAXListRole,
+               let bounds = dockBounds(element) {
+                // A hit test confirms the list is currently exposed. Hidden Dock
+                // geometry can linger in AX; it must disappear as physical support.
+                var hit: AXUIElement?
+                var hitPid: pid_t = 0
+                guard AXUIElementCopyElementAtPosition(system, Float(bounds.midX), Float(bounds.midY), &hit) == .success,
+                      let hit = hit, AXUIElementGetPid(hit, &hitPid) == .success, hitPid == dockPid else { continue }
+                for screen in screens {
+                    if dockFits(bounds, screen.bounds) {
+                        surfaces.append(["id": "ax:\(dockPid):\(identity)", "displayId": screen.id, "bounds": rect(bounds)])
+                    }
+                }
+                continue
+            }
+            if depth < 2 {
+                var children: CFArray?
+                if AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, 16, &children) == .success,
+                   let children = children as? [AXUIElement] {
+                    for (index, child) in children.enumerated() { queue.append((child, "\(identity).\(index)", depth + 1)) }
+                }
+            }
+        }
+        return Array(surfaces.prefix(32))
+    }
+    func refreshObservers(pids: [pid_t], trusted: Bool) {
+        let alive = Set(pids)
+        for pid in Array(observers.keys) where !alive.contains(pid) || !trusted {
+            if let observer = observers.removeValue(forKey: pid) {
+                DispatchQueue.main.async { CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes) }
+            }
+            watchedWindows.removeValue(forKey: pid)
+        }
+        guard trusted else { return }
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        for pid in pids {
+            if observers[pid] == nil {
+                var created: AXObserver?
+                let result = AXObserverCreate(pid, { _, _, _, context in
+                    guard let context = context else { return }
+                    Unmanaged<AccessibilityObserverWorker>.fromOpaque(context).takeUnretainedValue().onChange()
+                }, &created)
+                guard result == .success, let created = created else { continue }
+                observers[pid] = created
+                DispatchQueue.main.async { CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(created), .commonModes) }
+                let element = AXUIElementCreateApplication(pid)
+                for name in [kAXWindowCreatedNotification, kAXFocusedWindowChangedNotification, kAXApplicationActivatedNotification] {
+                    AXObserverAddNotification(created, element, name as CFString, context)
+                }
+            }
+            guard let observer = observers[pid] else { continue }
+            var value: CFTypeRef?
+            let application = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(application, 0.05)
+            guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value) == .success,
+                  let windows = value as? [AXUIElement] else { continue }
+            let old = watchedWindows[pid] ?? []
+            let notifications = [kAXMovedNotification, kAXResizedNotification, kAXUIElementDestroyedNotification, kAXWindowMiniaturizedNotification, kAXWindowDeminiaturizedNotification]
+            for window in old where !windows.contains(where: { CFEqual($0, window) }) {
+                for name in notifications { AXObserverRemoveNotification(observer, window, name as CFString) }
+            }
+            for window in windows where !old.contains(where: { CFEqual($0, window) }) {
+                for name in notifications { AXObserverAddNotification(observer, window, name as CFString, context) }
+            }
+            watchedWindows[pid] = windows
+        }
+    }
+}
+
 // Geometry-only adapter. Never reads AX titles, text, screenshots, or document data.
 final class DesktopObserver {
     let session = UUID().uuidString
@@ -103,8 +259,10 @@ final class DesktopObserver {
     var revision = 0
     var generation = 0
     var identities: [String: Int] = [:]
-    var observers: [pid_t: AXObserver] = [:]
-    var watchedWindows: [pid_t: [AXUIElement]] = [:]
+    let accessibilityWork = AsyncObservation<DockObservation>()
+    lazy var accessibilityObserver = AccessibilityObserverWorker(onChange: { [weak self] in self?.invalidate() })
+    var dockObservation: DockObservation?
+    var nextAccessibilityPoll = 0.0
     var lastObservation = 0.0
     var activeUntil = 0.0
     var requestedActive = true
@@ -145,114 +303,29 @@ final class DesktopObserver {
         FileHandle.standardOutput.write(Data([10]))
     }
     func rect(_ r: CGRect) -> [String: Double] { ["x": r.origin.x, "y": r.origin.y, "width": r.width, "height": r.height] }
-    func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
-        var value: CFTypeRef?
-        return AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success ? value : nil
-    }
-    func dockBounds(_ element: AXUIElement) -> CGRect? {
-        guard let position = attribute(element, kAXPositionAttribute), CFGetTypeID(position) == AXValueGetTypeID(),
-              let size = attribute(element, kAXSizeAttribute), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
-        var point = CGPoint.zero, extent = CGSize.zero
-        guard AXValueGetValue(position as! AXValue, .cgPoint, &point),
-              AXValueGetValue(size as! AXValue, .cgSize, &extent),
-              [point.x, point.y, extent.width, extent.height].allSatisfy({ $0.isFinite }) else { return nil }
-        return CGRect(origin: point, size: extent)
-    }
-    func dockFits(_ r: CGRect, _ d: CGRect) -> Bool {
-        guard r.width >= 12, r.height >= 12, r.minX >= d.minX - 1, r.minY >= d.minY - 1,
-              r.maxX <= d.maxX + 1, r.maxY <= d.maxY + 1 else { return false }
-        if r.width >= r.height { return r.height < d.height / 2 && abs(r.maxY - d.maxY) <= 24 }
-        return r.width < d.width / 2 && (abs(r.minX - d.minX) <= 24 || abs(r.maxX - d.maxX) <= 24)
-    }
-    func dockSurfaces() -> [[String: Any]] {
-        // Dock's on-screen CG window can cover an entire display. Never turn that
-        // backing container, or NSScreen.visibleFrame's full-width inset, into a perch.
-        guard AXIsProcessTrusted(), let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else { return [] }
-        let application = AXUIElementCreateApplication(dock.processIdentifier)
-        AXUIElementSetMessagingTimeout(application, 0.02)
-        let system = AXUIElementCreateSystemWide()
-        AXUIElementSetMessagingTimeout(system, 0.02)
-        var queue: [(AXUIElement, String, Int)] = [(application, "root", 0)]
-        var surfaces: [[String: Any]] = []
-        var visited = 0
-        let deadline = clock + 75
-        while !queue.isEmpty && visited < 32 && clock < deadline {
-            let (element, identity, depth) = queue.removeFirst(); visited += 1
-            if (attribute(element, kAXHiddenAttribute) as? Bool) == true { continue }
-            if (attribute(element, kAXRoleAttribute) as? String) == kAXListRole,
-               let bounds = dockBounds(element) {
-                // A hit test confirms the list is currently exposed. Hidden Dock
-                // geometry can linger in AX; it must disappear as physical support.
-                var hit: AXUIElement?
-                var hitPid: pid_t = 0
-                guard AXUIElementCopyElementAtPosition(system, Float(bounds.midX), Float(bounds.midY), &hit) == .success,
-                      let hit = hit, AXUIElementGetPid(hit, &hitPid) == .success, hitPid == dock.processIdentifier else { continue }
-                for screen in NSScreen.screens {
-                    guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { continue }
-                    let displayBounds = CGDisplayBounds(CGDirectDisplayID(id.uint32Value))
-                    if dockFits(bounds, displayBounds) {
-                        surfaces.append(["id": "ax:\(dock.processIdentifier):\(identity)", "displayId": id.stringValue, "bounds": rect(bounds)])
-                    }
-                }
-                continue
-            }
-            if depth < 2 {
-                var children: CFArray?
-                if AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, 16, &children) == .success,
-                   let children = children as? [AXUIElement] {
-                    for (index, child) in children.enumerated() { queue.append((child, "\(identity).\(index)", depth + 1)) }
-                }
-            }
-        }
-        return Array(surfaces.prefix(32))
-    }
     func invalidate() { dirty = true; activeUntil = clock + 2000 }
     func sceneChanged() { activityPointer.invalidate(); revision += 1; invalidate(); snapshot(valid: false) }
+    func accessibilityScreens() -> [AccessibilityScreen] {
+        NSScreen.screens.compactMap { screen in
+            guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+            return AccessibilityScreen(id: id.stringValue, bounds: CGDisplayBounds(CGDirectDisplayID(id.uint32Value)))
+        }
+    }
     func refreshObservers() {
         let trusted = AXIsProcessTrusted()
-        if trusted != lastTrusted { revision += 1; dirty = true; lastTrusted = trusted }
-        let apps = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular && !excluded.contains($0.processIdentifier) }
-        let alive = Set(apps.map { $0.processIdentifier })
-        for pid in Array(observers.keys) where !alive.contains(pid) || !trusted {
-            if let observer = observers.removeValue(forKey: pid) {
-                CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
-            }
-            watchedWindows.removeValue(forKey: pid)
-        }
-        guard trusted else { return }
-        let context = Unmanaged.passUnretained(self).toOpaque()
-        for app in apps {
-            let pid = app.processIdentifier
-            if observers[pid] == nil {
-                var created: AXObserver?
-                let result = AXObserverCreate(pid, { _, _, _, context in
-                    guard let context = context else { return }
-                    Unmanaged<DesktopObserver>.fromOpaque(context).takeUnretainedValue().invalidate()
-                }, &created)
-                guard result == .success, let created = created else { continue }
-                observers[pid] = created
-                CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(created), .commonModes)
-                let element = AXUIElementCreateApplication(pid)
-                for name in [kAXWindowCreatedNotification, kAXFocusedWindowChangedNotification, kAXApplicationActivatedNotification] {
-                    AXObserverAddNotification(created, element, name as CFString, context)
-                }
-            }
-            guard let observer = observers[pid] else { continue }
-            var value: CFTypeRef?
-            let application = AXUIElementCreateApplication(pid)
-            AXUIElementSetMessagingTimeout(application, 0.05)
-            guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value) == .success,
-                  let windows = value as? [AXUIElement] else { continue }
-            let old = watchedWindows[pid] ?? []
-            let notifications = [kAXMovedNotification, kAXResizedNotification, kAXUIElementDestroyedNotification, kAXWindowMiniaturizedNotification, kAXWindowDeminiaturizedNotification]
-            for window in old where !windows.contains(where: { CFEqual($0, window) }) {
-                for name in notifications { AXObserverRemoveNotification(observer, window, name as CFString) }
-            }
-            for window in windows where !old.contains(where: { CFEqual($0, window) }) {
-                for name in notifications { AXObserverAddNotification(observer, window, name as CFString, context) }
-            }
-            watchedWindows[pid] = windows
-        }
+        if trusted != lastTrusted { revision += 1; dirty = true; lastTrusted = trusted; dockObservation = nil }
+        guard !accessibilityWork.busy else { return }
+        // AppKit access stays on main; the worker receives immutable values only.
+        let pids = NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular && !excluded.contains($0.processIdentifier) }.map { $0.processIdentifier }
+        let dockPid = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
+        let screens = accessibilityScreens(), revision = self.revision
+        let refresh = clock >= nextObserverRefresh
+        if refresh { nextObserverRefresh = clock + 2000 }
+        let worker = accessibilityObserver
+        accessibilityWork.request({ worker.read(pids: pids, trusted: trusted, refresh: refresh, dockPid: dockPid, screens: screens, revision: revision) }, completion: { [weak self] value in
+            self?.dockObservation = value
+            self?.dirty = true
+        })
     }
     func snapshot(valid: Bool = true) {
         let now = clock
@@ -287,7 +360,7 @@ final class DesktopObserver {
         sequence += 1
         emit(["protocolVersion": 1, "helperSession": session, "seq": sequence, "observedAtMs": now,
               "sceneRevision": revision, "pollIntervalMs": cadence, "accessibility": AXIsProcessTrusted(),
-              "sceneValid": valid && !displays.isEmpty, "displays": displays, "windows": Array(windows.prefix(2048)), "docks": valid ? dockSurfaces() : []])
+              "sceneValid": valid && !displays.isEmpty, "displays": displays, "windows": Array(windows.prefix(2048)), "docks": valid && AXIsProcessTrusted() ? (dockObservation?.current(now: now, screens: accessibilityScreens(), revision: revision) ?? []) : []])
         lastObservation = now; dirty = !valid
     }
     func pointer() {
@@ -335,7 +408,9 @@ final class DesktopObserver {
             let now = self.clock
             self.pointer()
             for reply in self.activityPointer.flush() { self.emit(reply) }
-            if now >= self.nextObserverRefresh { self.refreshObservers(); self.nextObserverRefresh = now + 2000 }
+            // Refresh cached Dock geometry before its 500ms validity expires,
+            // including when the ordinary scene heartbeat is idle at 500ms.
+            if now >= self.nextAccessibilityPoll { self.refreshObservers(); self.nextAccessibilityPoll = now + min(self.cadence, 250) }
             if (self.dirty && now - self.lastObservation >= 34) || now - self.lastObservation >= self.cadence { self.dirty = false; self.snapshot() }
         }
         RunLoop.main.add(timer, forMode: .common)

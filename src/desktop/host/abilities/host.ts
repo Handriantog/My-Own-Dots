@@ -279,6 +279,7 @@ export class AbilityHost implements DesktopAbilityHandlers {
     let id: string | undefined;
     let dispatched = false;
     let success = false;
+    let activityFinished = false;
     let authorityTimer: ReturnType<typeof setInterval> | undefined;
     const controller = new AbortController(),
       abort = () => controller.abort();
@@ -340,14 +341,28 @@ export class AbilityHost implements DesktopAbilityHandlers {
       }
       assertBoundedJson(raw, abilityLimits.frameBytes);
       const result = workerResultSchema.parse(raw);
-      if (tool.visibility === 'model-visible' && result.status === 'success') {
+      if (tool.visibility === 'model-visible' && result.status === 'success')
         validateValue(tool.output, result.value);
+      await this.authorize(context);
+      const activity = await this.activities.finish(
+        context.invocationId,
+        result.status === 'success',
+      );
+      activityFinished = true;
+      if (controller.signal.aborted) return { status: 'uncertain' };
+      if (
+        result.status === 'success' &&
+        activity?.action === 'start' &&
+        activity.status === 'inactive'
+      )
+        return { status: 'uncertain', activity };
+      if (tool.visibility === 'model-visible' && result.status === 'success') {
         const outcome = parseOutcome({
           status: 'success',
           visibility: 'model-visible',
           value: result.value,
+          ...(activity ? { activity } : {}),
         });
-        await this.authorize(context);
         success = true;
         return outcome;
       }
@@ -363,8 +378,8 @@ export class AbilityHost implements DesktopAbilityHandlers {
         status: result.status,
         ...(result.status === 'error' ? { code: result.code } : {}),
         ...(resultRef ? { resultRef } : {}),
+        ...(activity ? { activity } : {}),
       });
-      await this.authorize(context);
       success = result.status === 'success';
       return outcome;
     } catch (error) {
@@ -376,10 +391,11 @@ export class AbilityHost implements DesktopAbilityHandlers {
       signal.removeEventListener('abort', abort);
       if (id) {
         try {
-          await this.activities.finish(
-            id,
-            success && !controller.signal.aborted,
-          );
+          if (!activityFinished || !success || controller.signal.aborted)
+            await this.activities.finish(
+              id,
+              success && !controller.signal.aborted,
+            );
         } finally {
           this.active.delete(id);
         }

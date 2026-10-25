@@ -1,5 +1,13 @@
 import { afterEach, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile, cp } from 'node:fs/promises';
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+  cp,
+  symlink,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { parseEnv, promisify } from 'node:util';
@@ -284,3 +292,53 @@ fs.writeFileSync(path.join(destination,'bin/python'),'installed fixture interpre
       );
   },
 );
+
+it('stages a linked dependency cycle once using the root dependency topology', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'dots-linked-package-'));
+  cleanups.push(() => rm(root, { recursive: true, force: true }));
+  await mkdir(path.join(root, 'app/node_modules'), { recursive: true });
+  await mkdir(path.join(root, 'external/node_modules/alpha'), {
+    recursive: true,
+  });
+  await mkdir(path.join(root, 'external/node_modules/beta'), {
+    recursive: true,
+  });
+  await writeFile(
+    path.join(root, 'app/package.json'),
+    JSON.stringify({ dependencies: { alpha: '1.0.0' } }),
+  );
+  for (const [name, dependency] of [
+    ['alpha', 'beta'],
+    ['beta', 'alpha'],
+  ]) {
+    await writeFile(
+      path.join(root, 'external/node_modules', name, 'package.json'),
+      JSON.stringify({
+        name,
+        version: '1.0.0',
+        dependencies: { [dependency]: '1.0.0' },
+      }),
+    );
+    await symlink(
+      path.join(root, 'external/node_modules', name),
+      path.join(root, 'app/node_modules', name),
+    );
+  }
+  const helper = await import(
+    pathToFileURL(path.join(process.cwd(), 'scripts/desktop-runtime.mjs')).href
+  );
+  expect(
+    await helper.stageProductionDependencies(
+      path.join(root, 'app'),
+      path.join(root, 'out'),
+    ),
+  ).toBe(2);
+  expect(
+    JSON.parse(
+      await readFile(
+        path.join(root, 'out/node_modules/beta/package.json'),
+        'utf8',
+      ),
+    ).name,
+  ).toBe('beta');
+});

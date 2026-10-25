@@ -18,6 +18,7 @@ import {
   type FolderRequest,
   type FolderRequestDetail,
   type FolderSelection,
+  type FolderExecutionScope,
 } from '../shared/folder-access.js';
 
 const TTL = 60 * 60 * 1000;
@@ -65,6 +66,7 @@ type StoredSelection = FolderSelection & { identity: Identity };
 type StoredGrant = FolderGrant & { identity: Identity };
 type StoredRequest = {
   request: FolderRequest;
+  executionThreadId?: string;
   selection?: StoredSelection;
   toolCallId?: string;
   decision?: FolderDecision;
@@ -183,6 +185,11 @@ function helper(
   });
 }
 
+export function initializeProjectExecutionSchema(db: DatabaseSync) {
+  db.exec(
+    'CREATE TABLE IF NOT EXISTS project_execution_bindings (ownerId TEXT NOT NULL, threadId TEXT NOT NULL, dotId TEXT NOT NULL, grantId TEXT NOT NULL, PRIMARY KEY(ownerId,threadId))',
+  );
+}
 /** Owner decisions are durable; model tools receive only opaque grant IDs. */
 export class FolderAccessService {
   private inFlight = new Map<string, Set<AbortController>>();
@@ -202,6 +209,7 @@ export class FolderAccessService {
       CREATE TABLE IF NOT EXISTS folder_grants (id TEXT NOT NULL, ownerId TEXT NOT NULL, dotId TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(ownerId,id));
       CREATE INDEX IF NOT EXISTS folder_grants_dot ON folder_grants(ownerId,dotId);
     `);
+    initializeProjectExecutionSchema(db);
   }
   close() {
     this.closed = true;
@@ -254,9 +262,11 @@ export class FolderAccessService {
     dotId: string,
     threadId: string,
     input: z.input<typeof folderRequestSchema>,
+    executionThreadId = threadId,
   ): FolderRequest {
     this.requireDot(dotId);
     this.requireThread(threadId, dotId);
+    this.requireThread(executionThreadId, dotId);
     const parsed = folderRequestSchema.parse(input);
     const request: FolderRequest = {
       id: randomUUID(),
@@ -275,7 +285,7 @@ export class FolderAccessService {
         this.ownerId,
         threadId,
         dotId,
-        JSON.stringify({ request }),
+        JSON.stringify({ request, executionThreadId }),
       );
     return request;
   }
@@ -545,6 +555,17 @@ export class FolderAccessService {
         this.db
           .prepare('INSERT INTO folder_grants VALUES (?,?,?,?)')
           .run(grant.id, this.ownerId, grant.dotId, JSON.stringify(grant));
+        if (grant.access === 'execute')
+          this.db
+            .prepare(
+              'INSERT OR REPLACE INTO project_execution_bindings VALUES (?,?,?,?)',
+            )
+            .run(
+              this.ownerId,
+              value.executionThreadId ?? threadId,
+              grant.dotId,
+              grant.id,
+            );
         value.request.status = 'approved';
         value.request.grantId = grant.id;
         value.decision = {
@@ -553,7 +574,7 @@ export class FolderAccessService {
           name: grant.name,
           access: grant.access,
           message:
-            'The owner approved this folder. Use its grant ID for folder tools.',
+            'The owner selected and approved this folder for the current request, replacing any earlier folder hint. Continue the requested work in this selected folder using its grant ID; do not ask to reconfirm the replacement.',
         };
       } else {
         value.request.status = 'declined';
@@ -594,6 +615,56 @@ export class FolderAccessService {
       controller.abort();
     return { revoked: true };
   }
+  /** Bind an existing owner-approved execution grant; this cannot elevate read/edit grants. */
+  async bindExecution(dotId: string, threadId: string, grantId: string) {
+    this.requireThread(threadId, dotId);
+    const grant = await this.verifyExecutionGrant(dotId, grantId);
+    this.requireThread(threadId, dotId);
+    this.authorized(dotId, grantId);
+    this.db
+      .prepare(
+        'INSERT OR REPLACE INTO project_execution_bindings VALUES (?,?,?,?)',
+      )
+      .run(this.ownerId, threadId, dotId, grantId);
+    return { grantId, name: grant.name, access: 'execute' as const };
+  }
+  private async verifyExecutionGrant(dotId: string, grantId: string) {
+    const grant = this.authorized(dotId, grantId);
+    if (grant.access !== 'execute')
+      throw new FolderAccessError(
+        'This project needs explicit permission to run commands.',
+        403,
+      );
+    await this.runHelper({
+      action: 'verify',
+      root: grant.path,
+      identity: grant.identity,
+    });
+    this.authorized(dotId, grantId);
+    return grant;
+  }
+  async executionScope(
+    dotId: string,
+    threadId: string,
+  ): Promise<FolderExecutionScope | undefined> {
+    this.requireThread(threadId, dotId);
+    const binding = this.db
+      .prepare(
+        'SELECT grantId FROM project_execution_bindings WHERE ownerId=? AND dotId=? AND threadId=?',
+      )
+      .get(this.ownerId, dotId, threadId);
+    if (!binding) return undefined;
+    const grant = await this.verifyExecutionGrant(
+      dotId,
+      String(binding.grantId),
+    );
+    return {
+      grantId: grant.id,
+      path: grant.path,
+      identity: grant.identity,
+      access: 'execute',
+    };
+  }
   private authorized(dotId: string, grantId: string, write = false) {
     this.requireDot(dotId);
     const grant = this.storedGrant(dotId, grantId);
@@ -602,7 +673,7 @@ export class FolderAccessService {
         'Folder permission is missing or revoked.',
         403,
       );
-    if (write && grant.access !== 'readwrite')
+    if (write && grant.access !== 'readwrite' && grant.access !== 'execute')
       throw new FolderAccessError('This folder has read-only permission.', 403);
     return grant;
   }

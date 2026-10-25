@@ -52,6 +52,7 @@ export interface RunLifecycle {
   >;
 }
 interface EvidenceAgent extends AbstractAgent {
+  executionIdentity?(): string;
   evidenceGuard?(threadId: string): EvidenceGuard | Promise<EvidenceGuard>;
   setEvidenceRecorder?(record?: (guard: EvidenceGuard) => Promise<void>): void;
   onPersistedEvent?(input: RunAgentInput, event: BaseEvent): void;
@@ -261,11 +262,49 @@ export class LocalAgentRunner extends AgentRunner {
         );
         snapshot = await lease.read();
       }
+      const identity = (request.agent as EvidenceAgent).executionIdentity?.();
+      if (identity && snapshot.lastRun) {
+        const previous = (
+          snapshot.lastRun.input.forwardedProps as
+            Record<string, unknown> | undefined
+        )?.executionEngine;
+        const results = new Set(
+          snapshot.messages
+            .filter((message) => message.role === 'tool')
+            .map((message) => message.toolCallId),
+        );
+        const unresolved = snapshot.messages.some(
+          (message) =>
+            message.role === 'assistant' &&
+            message.toolCalls?.some((call) => !results.has(call.id)),
+        );
+        if (unresolved && (previous ?? 'legacy') !== identity)
+          throw Error(
+            'Execution engine changed while approval was pending. Restore the previous engine or start a new conversation; no action was resumed.',
+          );
+      }
       const messages = mergeInputMessages(
         snapshot.messages,
         request.persistedInputMessages ?? request.input.messages,
       );
-      const input = { ...request.input, messages, state: snapshot.state };
+      const input = {
+        ...request.input,
+        messages,
+        state: snapshot.state,
+        forwardedProps: {
+          ...(typeof request.input.forwardedProps === 'object' &&
+          request.input.forwardedProps
+            ? request.input.forwardedProps
+            : {}),
+          executionEngine:
+            identity ??
+            (
+              snapshot.lastRun?.input.forwardedProps as
+                Record<string, unknown> | undefined
+            )?.executionEngine ??
+            'host',
+        },
+      };
       canonicalInput = input;
       lifecycle = await this.lifecycle?.begin({
         agentId: request.agent.agentId ?? 'default',
@@ -349,10 +388,22 @@ export class LocalAgentRunner extends AgentRunner {
       const failed = active.events.some(
         (event) => event.type === EventType.RUN_ERROR,
       );
+      const uncertain = active.events.some(
+        (event) =>
+          event.type === EventType.RUN_ERROR &&
+          'code' in event &&
+          event.code === 'EXECUTION_UNCERTAIN',
+      );
       await lease.finishRun(
         final.messages,
         final.state,
-        active.stopRequested ? 'stopped' : failed ? 'failed' : 'finished',
+        uncertain
+          ? 'interrupted'
+          : active.stopRequested
+            ? 'stopped'
+            : failed
+              ? 'failed'
+              : 'finished',
         active.events.at(-1),
       );
       finalSnapshot = await lease.read();

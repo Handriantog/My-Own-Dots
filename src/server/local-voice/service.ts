@@ -320,7 +320,9 @@ export class LocalVoiceService {
           'audio' | 'router',
           { revision: string; files: { path: string; bytes: number }[] }
         >;
-        for (const model of [native.audio, native.router]) {
+        for (const model of this.platform.config.agentEngine === 'codex'
+          ? [native.audio]
+          : [native.audio, native.router]) {
           if (!/^[a-f0-9]{40}$/.test(model.revision) || !model.files.length)
             throw Error();
           for (const file of model.files) {
@@ -348,7 +350,9 @@ export class LocalVoiceService {
         high = mode(
           true,
           true,
-          'Local conversation and speech are installed. Replies use your transcribed words; emotion and background sounds do not guide the answer. Tasks use your subscription and existing approvals.',
+          this.platform.config.agentEngine === 'codex'
+            ? 'Speech stays on this Mac using its Samantha voice. Conversation and tasks use your Codex subscription and approved tools.'
+            : 'Local conversation and speech are installed. Replies use your transcribed words; emotion and background sounds do not guide the answer. Tasks use your subscription and existing approvals.',
         );
       } catch {
         /* Readiness is separate from Basic and Medium. Hashes are checked at warmup. */
@@ -367,7 +371,9 @@ export class LocalVoiceService {
       ready: modes[selectedQuality].ready,
       inferenceRuntime:
         selectedQuality === 'high'
-          ? 'native-local'
+          ? this.platform.config.agentEngine === 'codex'
+            ? 'codex-execution'
+            : 'native-local'
           : this.config.providerSession &&
               this.platform.config.llmProvider === 'codex'
             ? 'persistent-provider'
@@ -432,7 +438,13 @@ export class LocalVoiceService {
         this.platform.localConversations!.getSnapshot(threadId),
         signal,
       );
-      if (snapshot.lastRun?.status === 'running')
+      if (
+        snapshot.lastRun?.status === 'running' &&
+        !(
+          voiceSettings.quality === 'high' &&
+          this.platform.config.agentEngine === 'codex'
+        )
+      )
         throw Error('Wait for the current response before starting a call.');
       signal.throwIfAborted();
       const receipt = await this.platform.workspace.createCall(threadId);
@@ -446,6 +458,9 @@ export class LocalVoiceService {
                 this.config.nativeRoot!,
                 '--python',
                 this.config.nativePython!,
+                ...(this.platform.config.agentEngine === 'codex'
+                  ? ['--speech-only']
+                  : []),
               ],
             })
           : undefined;
@@ -567,8 +582,15 @@ export class LocalVoiceService {
               job.parentThreadId === threadId &&
               !call.ended
             ) {
-              const update = voiceJobReceipt(job);
-              call.nativeUpdate(update.id, update.spoken);
+              const update = voiceJobReceipt(
+                job,
+                this.platform.config.agentEngine === 'codex',
+              );
+              call.nativeUpdate(
+                update.id,
+                update.spoken,
+                this.platform.nativeVoice!.receiptValidator(job),
+              );
             }
           })
         : undefined;

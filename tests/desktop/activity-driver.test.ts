@@ -87,6 +87,50 @@ function fixture() {
   };
 }
 describe('desktop activity driver', () => {
+  it('reports pointer motion as running only after a presented frame receives a native move acknowledgement', async () => {
+    const f = fixture();
+    await f.driver.start({ bindingId: 'b', dotId: 'dot' }, definition);
+    f.now = 500;
+    const frame = f.render();
+    expect(f.driver.status('b')).toBe('approaching');
+    let moved!: (value: boolean) => void;
+    f.env.pointer.move = () =>
+      new Promise((resolve) => {
+        moved = resolve;
+      });
+    const presenting = f.driver.presented(frame);
+    expect(f.driver.status('b')).toBe('approaching');
+    moved(true);
+    await presenting;
+    expect(f.driver.status('b')).toBe('running');
+    f.input({ revision: 2, idleMs: 0 });
+    expect(f.driver.status('b')).toBe('paused');
+    f.input({ idleMs: 5000 });
+    f.now = 6000;
+    f.render();
+    f.now = 6500;
+    f.render();
+    expect(f.driver.status('b')).toBe('approaching');
+    await f.driver.stop();
+  });
+  it('retains the stop cause for a later status check and clears it after a new start', async () => {
+    const f = fixture();
+    f.env.unavailableReason = () => 'scene_stale';
+    await f.driver.start({ bindingId: 'b', dotId: 'dot' }, definition);
+    f.available = false;
+    f.render();
+    expect(f.driver.status('b')).toBe('inactive');
+    expect(f.driver.reason?.('b')).toBe('scene_stale');
+    expect(f.driver.reason?.('other')).toBeUndefined();
+    expect(f.driver.reason?.('b', 'other-activity')).toBeUndefined();
+    await f.driver.stop();
+    expect(f.driver.reason?.('b')).toBe('scene_stale');
+    f.available = true;
+    await f.driver.start({ bindingId: 'b', dotId: 'dot' }, definition);
+    expect(f.driver.reason?.('b')).toBeUndefined();
+    await f.driver.stop();
+    expect(f.driver.reason?.('b')).toBe('stopped');
+  });
   it('releases local effects immediately but awaits native retirement before stop resolves', async () => {
     const f = fixture();
     await f.driver.start({ bindingId: 'b', dotId: 'dot' }, definition);

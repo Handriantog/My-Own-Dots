@@ -18,9 +18,23 @@ export const delegatedApprovalTools = [
   connectionActionTool,
   folderApprovalTool,
 ];
+function uncertain(snapshot?: ConversationSnapshot) {
+  return snapshot?.lastRun?.events.some(
+    (event) =>
+      event.type === 'RUN_ERROR' &&
+      'code' in event &&
+      event.code === 'EXECUTION_UNCERTAIN',
+  );
+}
 export function delegatedOutcome(
   snapshot: ConversationSnapshot,
 ): VoiceDelegationOutcome {
+  if (uncertain(snapshot))
+    return {
+      status: 'interrupted',
+      error:
+        'Execution could not confirm its final state. Inspect recorded actions before retrying.',
+    };
   if (snapshot.lastRun?.status !== 'finished')
     return {
       status:
@@ -211,17 +225,19 @@ export class VoiceDelegationCoordinator implements RunLifecycle {
         ended = true;
         clearInterval(timer);
         await pending;
-        const result: VoiceDelegationOutcome = outcome.stopped
-          ? { status: 'cancelled' }
-          : outcome.failed
-            ? {
-                status: 'failed',
-                error:
-                  'The task failed. Review its conversation before retrying.',
-              }
-            : outcome.snapshot
-              ? delegatedOutcome(outcome.snapshot)
-              : { status: 'interrupted' };
+        const result: VoiceDelegationOutcome = uncertain(outcome.snapshot)
+          ? delegatedOutcome(outcome.snapshot!)
+          : outcome.stopped
+            ? { status: 'cancelled' }
+            : outcome.failed
+              ? {
+                  status: 'failed',
+                  error:
+                    'The task failed. Review its conversation before retrying.',
+                }
+              : outcome.snapshot
+                ? delegatedOutcome(outcome.snapshot)
+                : { status: 'interrupted' };
         try {
           if (renewalFailure) throw renewalFailure;
           this.notify(await this.jobs.settle(lease!, result));

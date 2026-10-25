@@ -471,6 +471,64 @@ export class AbilityService {
   async list(dotId: string) {
     return this.workspace.abilities.list(dotId);
   }
+  /** Read-only diagnosis; no worker invocation, private results or grant changes. */
+  async diagnose(
+    dotId: string,
+    threadId: string,
+    channel: 'text' | 'voice' = 'text',
+    interactive = false,
+  ) {
+    const thread = await this.workspace.requireThread(threadId);
+    if (thread.dotId !== dotId) throw new AbilityFailure('permission_denied');
+    const [installed, bindings, recentInvocations] = await Promise.all([
+      this.installed(),
+      this.list(dotId),
+      this.workspace.abilities.recentReceipts(dotId, threadId),
+    ]);
+    const session = this.host.session();
+    const hostConnected = session?.workspaceId === this.options.workspaceId;
+    return {
+      hostConnected,
+      maintenance: this.maintenance,
+      availabilityMeaning:
+        'Available means the tool is eligible for this turn. Native readiness and actual effects require an Ability status result; installation alone does not verify Accessibility, the selected desktop Dot or pointer movement.',
+      abilities: installed.slice(0, 50).map((pkg) => {
+        const binding = bindings.find((item) => item.digest === pkg.digest);
+        const approved = !pkg.restored && !!binding && !binding.restored;
+        const enabledForDot = binding?.enabled ?? false;
+        const eligibleToolCount = pkg.manifest.tools.filter(
+          (tool) =>
+            (!tool.channels || tool.channels.includes(channel)) &&
+            (tool.execution !== 'interactive' || interactive),
+        ).length;
+        return {
+          id: pkg.manifest.id,
+          name: pkg.manifest.name,
+          version: pkg.manifest.version,
+          enabled: pkg.enabled,
+          enabledForDot,
+          approved,
+          available:
+            hostConnected &&
+            !this.maintenance &&
+            pkg.enabled &&
+            enabledForDot &&
+            approved &&
+            eligibleToolCount > 0,
+          toolCount: pkg.manifest.tools.length,
+          eligibleToolCount,
+        };
+      }),
+      recentInvocations: recentInvocations.map(({ bindingId, ...receipt }) => ({
+        abilityId:
+          bindings.find((binding) => binding.id === bindingId)?.manifest.id ??
+          null,
+        ...receipt,
+      })),
+      receiptMeaning:
+        'Receipts are historical observations, not proof an activity is still running. Use the Ability status tool for its current state. Never infer private result contents.',
+    };
+  }
   async tools(
     dotId: string,
     channel: 'text' | 'voice' = 'text',

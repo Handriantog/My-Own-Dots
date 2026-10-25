@@ -13,6 +13,19 @@ const input: RunAgentInput = {
   state: {},
   forwardedProps: {},
 };
+it('saves an admitted voice caption without inventing an assistant acknowledgement', async () => {
+  const store = new MemoryStore();
+  const runner = new LocalAgentRunner(store);
+  const agent = new NativeConversationAgent('dot', async () => null);
+  const events = await lastValueFrom(
+    runner.run({ threadId: 'parent', agent, input }).pipe(toArray()),
+  );
+  expect(store.snapshot.messages).toEqual(input.messages);
+  expect(events.some((e) => e.type === EventType.TEXT_MESSAGE_CONTENT)).toBe(
+    false,
+  );
+  expect(events.at(-1)?.type).toBe(EventType.RUN_FINISHED);
+});
 it('saves the audio caption before native work and the native answer before completion', async () => {
   const store = new MemoryStore();
   const run = vi.fn(async () => {

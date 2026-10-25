@@ -7,6 +7,7 @@ import {
   symlink,
   link,
   rename,
+  realpath,
   rm,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -36,7 +37,7 @@ async function fixture() {
 }
 async function grant(
   f: Awaited<ReturnType<typeof fixture>>,
-  access: 'read' | 'readwrite' = 'read',
+  access: 'read' | 'readwrite' | 'execute' = 'read',
 ) {
   const request = f.folders.request(f.dot.id, f.thread.id, {
     reason: 'Read this project',
@@ -52,6 +53,91 @@ async function grant(
   });
   return { request, selected, result, id: result.grantId! };
 }
+
+it.each(['read', 'readwrite'] as const)(
+  'does not turn %s access into command execution',
+  async (access) => {
+    const f = await fixture();
+    const approved = await grant(f, access);
+    await expect(
+      f.folders.bindExecution(f.dot.id, f.thread.id, approved.id),
+    ).rejects.toThrow(/execution|run/i);
+    expect(
+      await f.folders.executionScope(f.dot.id, f.thread.id),
+    ).toBeUndefined();
+  },
+);
+
+it('binds an explicit execution grant to the selected project and invalidates revocation', async () => {
+  const f = await fixture();
+  const approved = await grant(f, 'execute');
+  expect(await f.folders.executionScope(f.dot.id, f.thread.id)).toMatchObject({
+    grantId: approved.id,
+    path: await realpath(f.folder),
+    access: 'execute',
+  });
+  await f.folders.writeFile(f.dot.id, approved.id, 'new.txt', {
+    content: 'allowed',
+    expectedHash: 'new',
+  });
+  expect(await readFile(join(f.folder, 'new.txt'), 'utf8')).toBe('allowed');
+  f.folders.revoke(f.dot.id, approved.id);
+  await expect(f.folders.executionScope(f.dot.id, f.thread.id)).rejects.toThrow(
+    /revoked/i,
+  );
+});
+
+it('reuses an already approved project only after explicitly binding the conversation', async () => {
+  const f = await fixture();
+  const approved = await grant(f, 'execute');
+  const next = f.workspace.bindThread(
+    randomUUID(),
+    f.dot.id,
+    'Next project task',
+  );
+  expect(await f.folders.executionScope(f.dot.id, next.id)).toBeUndefined();
+  await f.folders.bindExecution(f.dot.id, next.id, approved.id);
+  expect(await f.folders.executionScope(f.dot.id, next.id)).toMatchObject({
+    grantId: approved.id,
+  });
+  const second = await fixture();
+  await expect(
+    f.folders.bindExecution(second.dot.id, next.id, approved.id),
+  ).rejects.toThrow();
+});
+
+it('rejects execution after the approved directory is replaced', async () => {
+  const f = await fixture();
+  await grant(f, 'execute');
+  await rename(f.folder, join(f.root, 'old'));
+  await mkdir(f.folder);
+  await expect(f.folders.executionScope(f.dot.id, f.thread.id)).rejects.toThrow(
+    /changed|identity|permission/i,
+  );
+});
+
+it('keeps voice worker approval in its card while binding execution to the parent conversation', async () => {
+  const f = await fixture();
+  const worker = f.workspace.bindThread(randomUUID(), f.dot.id, 'Voice task');
+  const request = f.folders.request(
+    f.dot.id,
+    worker.id,
+    { reason: 'Run tests', folderHint: f.folder, access: 'execute' },
+    f.thread.id,
+  );
+  const selected = await f.folders.select(worker.id, request.id, f.folder);
+  await f.folders.decide(worker.id, request.id, {
+    toolCallId: 'voice-review',
+    approve: true,
+    selectionId: selected.id,
+    access: 'execute',
+  });
+  expect(await f.folders.executionScope(f.dot.id, f.thread.id)).toMatchObject({
+    access: 'execute',
+    path: await realpath(f.folder),
+  });
+  expect(await f.folders.executionScope(f.dot.id, worker.id)).toBeUndefined();
+});
 
 it('starts with no authority and makes selection distinct from approval', async () => {
   const f = await fixture();

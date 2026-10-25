@@ -132,6 +132,45 @@ it('requires an owner picker gesture and a separate approval of the verified fol
   expect(props.respond).toHaveBeenCalledExactlyOnceWith(approved);
 });
 
+it('proposes requested execution access visibly without approving it or overwriting the owner choice on refresh', async () => {
+  vi.useFakeTimers();
+  try {
+    detail = {
+      request: { ...pendingRequest, requestedAccess: 'execute' },
+      selection,
+    };
+    await mount();
+    expect(
+      root!.root.findByProps({ 'aria-label': 'Folder permission' }).props.value,
+    ).toBe('execute');
+    expect(text()).toContain('Read, edit and run commands');
+    expect(props.respond).not.toHaveBeenCalled();
+    await act(async () =>
+      root!.root
+        .findByProps({ 'aria-label': 'Folder permission' })
+        .props.onChange({ target: { value: 'read' } }),
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2200);
+    });
+    expect(
+      root!.root.findByProps({ 'aria-label': 'Folder permission' }).props.value,
+    ).toBe('read');
+    expect(mutations()).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('replaces the suggested folder with the owner selection throughout the review', async () => {
+  await mount();
+  expect(text()).toContain(pendingRequest.folderHint);
+  await click('Choose folder');
+  expect(text()).toContain(selection.path);
+  expect(text()).not.toContain(pendingRequest.folderHint);
+  expect(props.respond).not.toHaveBeenCalled();
+});
+
 it('preselects a resolved folder in the compact panel but waits for approval', async () => {
   const original = api.getMockImplementation()!;
   api.mockImplementation(async (path, ...args) =>

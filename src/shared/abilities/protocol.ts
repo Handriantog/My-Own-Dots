@@ -2,7 +2,11 @@ import { z } from 'zod';
 import { identifier, isHttpsUrl, type JsonValue } from './manifest.js';
 import { abilityLimits, assertBoundedJson } from './limits.js';
 import { appCommandSchema } from './app-control.js';
-import { activityCommandSchema, activityStatusSchema } from './activity.js';
+import {
+  activityCommandSchema,
+  activityFeedbackSchema,
+  activityStatusSchema,
+} from './activity.js';
 
 const requestId = z
   .string()
@@ -38,6 +42,7 @@ export const ownerOutcomeSchema = z.discriminatedUnion('status', [
   z.strictObject({
     status: z.literal('success'),
     resultRef: reference.optional(),
+    activity: activityFeedbackSchema.optional(),
   }),
   z.strictObject({
     status: z.literal('selection_needed'),
@@ -46,11 +51,13 @@ export const ownerOutcomeSchema = z.discriminatedUnion('status', [
   z.strictObject({
     status: z.literal('uncertain'),
     resultRef: reference.optional(),
+    activity: activityFeedbackSchema.optional(),
   }),
   z.strictObject({
     status: z.literal('error'),
     code: errorCodeSchema,
     resultRef: reference.optional(),
+    activity: activityFeedbackSchema.optional(),
   }),
 ]);
 export const outcomeSchema = z.union([
@@ -59,6 +66,7 @@ export const outcomeSchema = z.union([
     status: z.literal('success'),
     visibility: z.literal('model-visible'),
     value: json,
+    activity: activityFeedbackSchema.optional(),
   }),
 ]);
 export type InvocationOutcome = z.infer<typeof outcomeSchema>;

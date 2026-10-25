@@ -12,7 +12,11 @@ export interface LocalVoiceStatus {
   ready: boolean;
   reason: string;
   inferenceRuntime?:
-    'warm-session' | 'per-request' | 'persistent-provider' | 'native-local';
+    | 'warm-session'
+    | 'per-request'
+    | 'persistent-provider'
+    | 'native-local'
+    | 'codex-execution';
   /** Optional only for clients talking to a workspace predating quality settings. */
   selectedQuality?: VoiceQuality;
   /** Changes whenever the saved quality, voice or personality changes. */

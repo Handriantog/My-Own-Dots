@@ -27,6 +27,7 @@ import {
   type VoiceDelegationOutcome,
   type VoiceDelegationRecovery,
   type VoiceDelegationReceiptState,
+  type VoiceInputReceipt,
 } from '../../shared/voice-delegation.js';
 
 const columns = `owner_id AS ownerId,id,dot_id AS dotId,call_id AS callId,
@@ -47,6 +48,111 @@ export class VoiceDelegations {
     private enabled = true,
     private memoryEnabled: () => boolean = () => false,
   ) {}
+  /** Admit busy-call input without acquiring the active conversation's run lease. */
+  receiveInput(
+    input: Omit<VoiceInputReceipt, 'status' | 'createdAt' | 'deliveredAt'>,
+  ) {
+    if (!this.enabled) throw Error('Voice input storage requires SQLite.');
+    if (
+      !input.id ||
+      input.id.length > 200 ||
+      !input.caption.trim() ||
+      input.caption.length > 4000 ||
+      !['request', 'status', 'stop'].includes(input.kind) ||
+      input.reply.length > 400
+    )
+      throw Error('Invalid voice input.');
+    return this.transaction(() => {
+      this.workspace.requireThread(input.parentThreadId, input.dotId);
+      const call = this.workspace.call(input.callId);
+      if (call.threadId !== input.parentThreadId || call.endedAt)
+        throw Error('Voice call is no longer active.');
+      const prior = this.db
+        .prepare('SELECT * FROM voice_input_receipts WHERE ownerId=? AND id=?')
+        .get(this.ownerId, input.id) as unknown as
+        VoiceInputReceipt | undefined;
+      if (prior) {
+        if (
+          prior.callId !== input.callId ||
+          prior.parentThreadId !== input.parentThreadId ||
+          prior.dotId !== input.dotId ||
+          prior.caption !== input.caption ||
+          prior.kind !== input.kind
+        )
+          throw Error('Voice input identity was reused.');
+        return { created: false, receipt: prior };
+      }
+      const queued = Number(
+        this.db
+          .prepare(
+            "SELECT count(*) AS n FROM voice_input_receipts WHERE ownerId=? AND dotId=? AND kind='request' AND status='received' AND deliveredAt IS NULL",
+          )
+          .get(this.ownerId, input.dotId)!.n,
+      );
+      if (input.kind === 'request' && queued >= 16)
+        throw Error('The request queue is full. Wait for current work.');
+      const receipt: VoiceInputReceipt = {
+        ...input,
+        status: 'received',
+        createdAt: Date.now(),
+        deliveredAt: null,
+      };
+      this.db
+        .prepare(
+          'INSERT INTO voice_input_receipts VALUES(?,?,?,?,?,?,?,?,?,?,NULL)',
+        )
+        .run(
+          this.ownerId,
+          receipt.id,
+          receipt.dotId,
+          receipt.callId,
+          receipt.parentThreadId,
+          receipt.caption,
+          receipt.kind,
+          receipt.reply,
+          receipt.status,
+          receipt.createdAt,
+        );
+      return { created: true, receipt };
+    });
+  }
+  pendingInputs(): VoiceInputReceipt[] {
+    if (!this.enabled) return [];
+    return this.db
+      .prepare(
+        'SELECT id,dotId,callId,parentThreadId,caption,kind,reply,status,createdAt,deliveredAt FROM voice_input_receipts WHERE ownerId=? AND deliveredAt IS NULL ORDER BY createdAt,rowid LIMIT 100',
+      )
+      .all(this.ownerId) as unknown as VoiceInputReceipt[];
+  }
+  deliverInput(id: string) {
+    this.db
+      .prepare(
+        'UPDATE voice_input_receipts SET deliveredAt=? WHERE ownerId=? AND id=?',
+      )
+      .run(Date.now(), this.ownerId, id);
+  }
+  cancelInput(id: string): VoiceDelegation | undefined {
+    return this.transaction(() => {
+      this.db
+        .prepare(
+          "UPDATE voice_input_receipts SET status='interrupted',reply='Stop requested; review recorded actions in chat.' WHERE ownerId=? AND id=? AND kind='request'",
+        )
+        .run(this.ownerId, id);
+      const row = this.db
+        .prepare(
+          'SELECT callId FROM voice_input_receipts WHERE ownerId=? AND id=?',
+        )
+        .get(this.ownerId, id);
+      const job = row
+        ? this.list({ callId: String(row.callId) }).find(
+            (job) => job.utteranceId === id,
+          )
+        : undefined;
+      if (job && ['queued', 'approval'].includes(job.status))
+        return this.cancel(job.id, true);
+      return job;
+    });
+  }
   /** Bounded canonical prose with an inherited guard; never upgrades unknown provenance. */
   threadContext(
     threadId: string,
@@ -57,12 +163,18 @@ export class VoiceDelegations {
     guard: EvidenceGuard;
   } {
     this.available();
-    this.workspace.requireThread(threadId, dotId);
     const empty = {
       available: false,
       messages: [] as Message[],
       guard: { originDotId: dotId, spaceIds: [], pageIds: [] },
     };
+    const binding = this.db
+      .prepare(
+        'SELECT dotId,deletedAt FROM thread_bindings WHERE ownerId=? AND id=?',
+      )
+      .get(this.ownerId, threadId);
+    if (binding?.dotId === dotId && binding.deletedAt !== null) return empty;
+    this.workspace.requireThread(threadId, dotId);
     const run = this.db
       .prepare(
         `SELECT r.evidence_guard,r.provenance_complete FROM conversation_threads t
@@ -206,9 +318,29 @@ export class VoiceDelegations {
       .get(this.ownerId, threadId, id);
     return row ? (JSON.parse(String(row.value)) as Message) : undefined;
   }
-  enqueue(raw: VoiceDelegationEnqueue): VoiceDelegationEnqueued {
+  enqueue(
+    raw: VoiceDelegationEnqueue,
+    allowQueue = false,
+  ): VoiceDelegationEnqueued {
     return this.transaction(() => {
       const input = voiceDelegationEnqueueSchema.parse(raw);
+      const receipt = this.db
+        .prepare(
+          'SELECT status,callId,dotId,parentThreadId,caption FROM voice_input_receipts WHERE ownerId=? AND id=?',
+        )
+        .get(this.ownerId, input.utteranceId);
+      if (
+        receipt &&
+        (receipt.status !== 'received' ||
+          receipt.callId !== input.callId ||
+          receipt.dotId !== input.dotId ||
+          receipt.parentThreadId !== input.parentThreadId ||
+          receipt.caption !== input.sourceText)
+      )
+        throw Error(
+          'Voice input was cancelled or its scope changed; no task was queued.',
+        );
+
       const prior = this.db
         .prepare(
           `SELECT ${columns} FROM voice_delegations WHERE owner_id=? AND call_id=? AND utterance_id=?`,
@@ -243,7 +375,13 @@ export class VoiceDelegations {
           `SELECT ${columns} FROM voice_delegations WHERE owner_id=? AND dot_id=? AND status IN ${active}`,
         )
         .get(this.ownerId, input.dotId) as VoiceDelegation | undefined;
-      if (busy) return { kind: 'busy', job: busy };
+      if (
+        busy &&
+        (!allowQueue ||
+          this.list({ active: true }).filter((job) => job.dotId === input.dotId)
+            .length >= 16)
+      )
+        return { kind: 'busy', job: busy };
       this.conversations.getOrCreateThread({
         userId: this.ownerId,
         agentId: input.dotId,
@@ -394,9 +532,10 @@ export class VoiceDelegations {
       return this.outcome(lease.id, outcome);
     });
   }
-  cancel(id: string): VoiceDelegation {
+  cancel(id: string, idleOnly = false): VoiceDelegation {
     return this.transaction(() => {
       const job = this.required(id);
+      if (idleOnly && !['queued', 'approval'].includes(job.status)) return job;
       return voiceDelegationActive(job.status)
         ? this.outcome(id, { status: 'cancelled' })
         : job;
@@ -465,6 +604,11 @@ export class VoiceDelegations {
   /** Startup reconciliation only. Never claims a job or retries an interrupted action. */
   recover(input: VoiceDelegationRecovery = {}): VoiceDelegation[] {
     return this.transaction(() => {
+      this.db
+        .prepare(
+          "UPDATE voice_input_receipts SET status='interrupted',reply='Interrupted by restart; review chat before asking again.' WHERE ownerId=? AND deliveredAt IS NULL AND status='received'",
+        )
+        .run(this.ownerId);
       const supplied = new Map(
         (input.reconciled ?? []).map((item) => [item.id, item]),
       );

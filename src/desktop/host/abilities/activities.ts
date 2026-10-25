@@ -1,5 +1,9 @@
 import { AbilityFailure } from '../../../shared/abilities/bridge.js';
-import type { ActivityDriver } from '../../../shared/abilities/activity.js';
+import type {
+  ActivityCommand,
+  ActivityDriver,
+  ActivityFeedback,
+} from '../../../shared/abilities/activity.js';
 import type {
   Binding,
   CapabilityReply,
@@ -20,6 +24,16 @@ type Lease = {
 /** One desktop owner. Worker starts stay provisional until validated completion. */
 export class AbilityActivities {
   private lease?: Lease;
+  private readonly requests = new Map<
+    string,
+    {
+      context: InvocationContext;
+      command: ActivityCommand;
+      idleMs?: number;
+    }
+  >();
+  // Later worker requests cannot erase a trusted refusal in this invocation.
+  private readonly refusals = new Map<string, ActivityFeedback>();
   constructor(
     private readonly options: {
       driver(): ActivityDriver | undefined;
@@ -109,8 +123,18 @@ export class AbilityActivities {
               'code' in error &&
               (error.code === 'setup_needed' ||
                 error.code === 'host_unavailable')
-            )
+            ) {
+              if (!this.refusals.has(context.invocationId))
+                this.refusals.set(context.invocationId, {
+                  action: 'start',
+                  status: 'inactive',
+                  reason:
+                    error.code === 'setup_needed'
+                      ? 'accessibility_required'
+                      : 'desktop_unavailable',
+                });
               throw new AbilityFailure(error.code);
+            }
             throw error;
           }
         });
@@ -128,6 +152,11 @@ export class AbilityActivities {
         }
       }
     }
+    this.requests.set(context.invocationId, {
+      context,
+      command: request.command,
+      idleMs: definition.pointer?.idleMs,
+    });
     return {
       ok: true,
       kind: 'companion-activity',
@@ -138,13 +167,52 @@ export class AbilityActivities {
           : 'inactive',
     };
   }
-  async finish(invocationId: string, success: boolean): Promise<void> {
+  async finish(
+    invocationId: string,
+    success: boolean,
+  ): Promise<ActivityFeedback | undefined> {
     const lease = this.lease;
-    if (!lease || lease.context.invocationId !== invocationId) return;
-    if (!success || lease.retired) {
+    if (
+      lease?.context.invocationId === invocationId &&
+      (!success ||
+        this.refusals.has(invocationId) ||
+        lease.retired ||
+        lease.driver.status(lease.context.bindingId) === 'inactive')
+    )
       await this.retire(lease);
-      return;
-    }
+    // Retirement awaits activation, which can still record a trusted refusal.
+    const request = this.requests.get(invocationId);
+    this.requests.delete(invocationId);
+    const refusal = this.refusals.get(invocationId);
+    this.refusals.delete(invocationId);
+    if (refusal) return refusal;
+    const status =
+      request &&
+      lease &&
+      !lease.retired &&
+      lease.context.bindingId === request.context.bindingId &&
+      lease.activityId === request.command.activityId
+        ? lease.driver.status(request.context.bindingId)
+        : 'inactive';
+    const reason =
+      request && status === 'inactive'
+        ? this.options
+            .driver()
+            ?.reason?.(request.context.bindingId, request.command.activityId)
+        : undefined;
+    const feedback: ActivityFeedback | undefined = request
+      ? {
+          action: request.command.action,
+          status,
+          ...(reason ? { reason } : {}),
+          ...(status === 'paused' && request.idleMs !== undefined
+            ? { resumeAfterIdleMs: request.idleMs }
+            : {}),
+        }
+      : undefined;
+    if (!lease || lease.context.invocationId !== invocationId || lease.retired)
+      return feedback;
+    if (lease.committed) return feedback;
     lease.committed = true;
     lease.cleanup();
     let checking = false;
@@ -177,6 +245,7 @@ export class AbilityActivities {
         });
     }, 500);
     lease.timer.unref?.();
+    return feedback;
   }
   private retire(lease: Lease): Promise<void> {
     if (lease.stopping) return lease.stopping;

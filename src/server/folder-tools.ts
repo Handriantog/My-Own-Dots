@@ -14,6 +14,7 @@ export function folderTools(
   check: () => void | Promise<void>,
   signal: AbortSignal,
   queueApproval?: (requestId: string) => void,
+  executionThreadId = threadId,
 ) {
   const verify = async () => {
     signal.throwIfAborted();
@@ -30,7 +31,12 @@ export function folderTools(
       parameters: folderRequestSchema,
       execute: async (input) => {
         await verify();
-        const request = await folders.request(dotId, threadId, input);
+        const request = await folders.request(
+          dotId,
+          threadId,
+          input,
+          executionThreadId,
+        );
         await verify();
         queueApproval?.(request.id);
         return {

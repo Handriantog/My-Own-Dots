@@ -268,13 +268,40 @@ export class NativeVoiceWorker implements NativeVoiceSession {
     );
   }
   async speak(text: string, signal: AbortSignal): Promise<NativeSpeech> {
-    if (!textSchema.safeParse(text).success || text.length > 400)
+    if (
+      !textSchema.safeParse(text).success ||
+      text.length > 400 ||
+      text.includes('[[')
+    )
       throw Error('Invalid native voice text');
-    return await this.request('speak', { text }, signal, (value) => {
-      const parsed = speech(value);
-      if (parsed.text !== text) throw Error('Invalid native voice text');
-      return parsed;
-    });
+    // Each backend validates a bounded utterance. Technical names can take
+    // much longer to pronounce than prose of the same length.
+    // Complete short spans independently; never retry a task or rewrite its words.
+    let remaining = text.trim();
+    const chunks: Buffer[] = [];
+    while (remaining) {
+      signal.throwIfAborted();
+      const boundary =
+        remaining.length > 80
+          ? remaining.lastIndexOf(' ', 80)
+          : remaining.length;
+      const end = boundary > 0 ? boundary : Math.min(80, remaining.length);
+      const segment = remaining.slice(0, end).trim();
+      remaining = remaining.slice(end).trim();
+      const result = await this.request(
+        'speak',
+        { text: segment },
+        signal,
+        (value) => {
+          const parsed = speech(value);
+          if (parsed.text !== segment) throw Error('Invalid native voice text');
+          return parsed;
+        },
+      );
+      if (chunks.length) chunks.push(Buffer.alloc(5760)); // 120ms between complete spans.
+      chunks.push(result.pcm);
+    }
+    return { text, pcm: Buffer.concat(chunks) };
   }
   close(): Promise<void> {
     if (this.closing) return this.closing;

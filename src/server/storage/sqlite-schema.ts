@@ -8,7 +8,7 @@ import { sqliteStorageSchema } from '../../shared/workspace-manifest.js';
 export { sqliteStorageSchema } from '../../shared/workspace-manifest.js';
 export function initializeSQLiteSchema(
   db: DatabaseSync,
-  targetVersion: 2 | 3 | 4 | 5 = sqliteStorageSchema,
+  targetVersion: 2 | 3 | 4 | 5 | 6 = sqliteStorageSchema,
 ) {
   const transaction = beginSQLiteTransaction(db);
   try {
@@ -133,6 +133,14 @@ export function initializeSQLiteSchema(
     if (version < 5 && targetVersion >= 5) {
       initializeAbilityManagementSchema(db);
       db.prepare('INSERT INTO workspace_storage_schema VALUES(5,?)').run(
+        Date.now(),
+      );
+    }
+    if (version < 6 && targetVersion >= 6) {
+      db.exec(`DROP INDEX voice_delegations_active_dot;
+        CREATE UNIQUE INDEX voice_delegations_active_dot ON voice_delegations(owner_id,dot_id) WHERE status IN ('running','approval');
+        CREATE TABLE voice_input_receipts(ownerId TEXT NOT NULL,id TEXT NOT NULL,dotId TEXT NOT NULL,callId TEXT NOT NULL,parentThreadId TEXT NOT NULL,caption TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('request','status','stop')),reply TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('received','interrupted')),createdAt INTEGER NOT NULL,deliveredAt INTEGER,PRIMARY KEY(ownerId,id),FOREIGN KEY(ownerId,parentThreadId) REFERENCES conversation_threads(owner_id,id),FOREIGN KEY(callId) REFERENCES calls(id));`);
+      db.prepare('INSERT INTO workspace_storage_schema VALUES(6,?)').run(
         Date.now(),
       );
     }

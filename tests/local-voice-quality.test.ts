@@ -326,12 +326,15 @@ it('snapshots Basic at startup and rejects a stale quality expectation without s
   await (await f.service.require(handle.id, handle.token)).end();
 });
 
-it.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
-  'offers High only with SQLite delegation, VAD and the pinned native assets; starts no subscription session',
-  async () => {
+it
+  .skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')
+  .each([false, true])(
+  'offers High with pinned assets and no inference session (speech only: %s)',
+  async (speechOnly) => {
     const { NativeVoiceWorker } =
       await import('../src/server/local-voice/native-worker.js');
     const f = await fixture();
+    if (speechOnly) f.platform.config.agentEngine = 'codex';
     const nativeManifest = join(f.root, 'native-models.json');
     const revision = 'a'.repeat(40);
     await mkdir(join(f.root, 'models', revision, 'audio_detokenizer'), {
@@ -348,10 +351,16 @@ it.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
           revision,
           files: [{ path: 'audio_detokenizer/model.safetensors', bytes: 3 }],
         },
-        router: {
-          revision,
-          files: [{ path: 'audio_detokenizer/model.safetensors', bytes: 3 }],
-        },
+        ...(!speechOnly
+          ? {
+              router: {
+                revision,
+                files: [
+                  { path: 'audio_detokenizer/model.safetensors', bytes: 3 },
+                ],
+              },
+            }
+          : {}),
       }),
     );
     const service = new LocalVoiceService(f.platform, {
@@ -384,6 +393,35 @@ it.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       .mockResolvedValue();
     vi.spyOn(LocalSpeechWorker.prototype, 'close').mockResolvedValue();
     const thread = await f.platform.createConversation(f.dot.id, 'Native');
+    const parentSnapshot = vi
+      .spyOn(f.platform.localConversations!, 'getSnapshot')
+      .mockResolvedValue({
+        messages: [],
+        state: {},
+        lastRun: {
+          runId: 'active-parent',
+          status: 'running',
+          input: {
+            threadId: thread.id,
+            runId: 'active-parent',
+            messages: [],
+            tools: [],
+            context: [],
+          },
+          events: [],
+        },
+      });
+    if (!speechOnly) {
+      await expect(
+        service.start(
+          thread.id,
+          f.dot.id,
+          new AbortController().signal,
+          'high',
+        ),
+      ).rejects.toThrow('Wait for the current response');
+      parentSnapshot.mockResolvedValue({ messages: [], state: {} });
+    }
     const listeners = vi.spyOn(f.platform.nativeVoice!, 'listen');
     const handle = await service.start(
       thread.id,
@@ -406,6 +444,10 @@ it.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       .spyOn(resumedCall, 'nativeUpdate')
       .mockImplementation(() => {});
     const notify = listeners.mock.calls.at(-1)![0];
+    const authorization = Promise.resolve(async () => true);
+    vi.spyOn(f.platform.nativeVoice!, 'receiptValidator').mockReturnValue(
+      authorization,
+    );
     const job = {
       id: 'finished-task',
       callId: handle.id,
@@ -423,6 +465,7 @@ it.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
     expect(update).toHaveBeenCalledWith(
       expect.any(String),
       expect.stringContaining('project notes'),
+      authorization,
     );
     await resumedCall.end();
   },

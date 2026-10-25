@@ -133,7 +133,7 @@ it('captures all core records and restores them without a PostgreSQL server', as
     version: 2,
     minimumReader: 2,
     workspaceId: f.workspaceId,
-    storage: { engine: 'sqlite', schema: 5 },
+    storage: { engine: 'sqlite', schema: 6 },
   });
   expect(manifest.entries.map((entry) => entry.path).sort()).toEqual([
     'core/workspace.sqlite',
@@ -178,7 +178,7 @@ it('captures all core records and restores them without a PostgreSQL server', as
   expect(identity).toMatchObject({
     storage: 'sqlite',
     ownerId: f.ownerId,
-    schema: 5,
+    schema: 6,
   });
   const env = parseEnv(await readFile(join(destination, '.env'), 'utf8'));
   expect(env.LOCAL_DATABASE_URL).toBeUndefined();

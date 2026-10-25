@@ -76,6 +76,7 @@ const editable = new Set([
   'COMPOSE_PROJECT_NAME',
   'LLM_BACKEND',
   'LLM_PROVIDER',
+  'DOTS_AGENT_ENGINE',
   'LLM_MODEL',
   'OPENAI_API_KEY',
   'OPENAI_MODEL',

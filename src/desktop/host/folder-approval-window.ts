@@ -119,7 +119,9 @@ export class FolderApprovalWindow {
     return this.requests.length;
   }
   get isOpen(): boolean {
-    return !!this.window?.isVisible() && !this.window.isDestroyed();
+    return (
+      !!this.window && !this.window.isDestroyed() && this.window.isVisible()
+    );
   }
 
   start(): void {
@@ -160,6 +162,9 @@ export class FolderApprovalWindow {
     if (this.disposed) return;
     this.reconcileConnection();
     if (this.pending) return this.pending.done;
+    // Keep the same review mounted while its native sheet owns the interaction.
+    // Selection and approval still validate the live request on the server.
+    if (this.folders.choosing) return;
     const connection = this.connection;
     const address = localAddress(connection);
     if (!connection || !address) {
@@ -189,7 +194,8 @@ export class FolderApprovalWindow {
         if (
           this.disposed ||
           controller.signal.aborted ||
-          this.getConnection() !== connection
+          this.getConnection() !== connection ||
+          this.folders.choosing
         )
           return;
         this.requests = requests;
@@ -203,7 +209,11 @@ export class FolderApprovalWindow {
             requests.find((request) => !this.dismissed.has(request.requestId))
               ?.requestId ?? null;
       } catch {
-        if (this.connection === connection && !controller.signal.aborted)
+        if (
+          this.connection === connection &&
+          !controller.signal.aborted &&
+          !this.folders.choosing
+        )
           this.healthy = false;
       } finally {
         if (this.pending === pending) this.pending = undefined;

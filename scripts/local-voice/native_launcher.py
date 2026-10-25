@@ -70,6 +70,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--runtime-root", type=Path, required=True)
     parser.add_argument("--python", type=Path)
+    parser.add_argument("--speech-only", action="store_true")
     args = parser.parse_args()
     if sys.platform != "darwin" or platform.machine() != "arm64":
         raise ValueError("Native voice requires Apple Silicon macOS")
@@ -97,8 +98,9 @@ def main():
         "/usr/bin/sandbox-exec", "-p", sandbox_profile(runtime, scripts, cache),
         str(python), "-B", str(scripts / "native_worker.py"),
         "--audio-model", str(runtime / "models" / manifest["audio"]["revision"]),
-        "--router-model", str(runtime / "models" / manifest["router"]["revision"]),
     ]
+    if not args.speech_only:
+        command += ["--router-model", str(runtime / "models" / manifest["router"]["revision"])]
     # Replace this process; parent cancellation targets the actual worker PID.
     # Libraries inspect cwd at startup; never broaden reads to the app workspace.
     os.chdir(cache)

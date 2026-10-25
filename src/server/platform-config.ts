@@ -12,6 +12,7 @@ export const DEFAULT_AGENT_RUN_TIMEOUT_MS = 90_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 export interface LocalAiConfig {
+  agentEngine?: 'legacy' | 'codex';
   conversationBackend?: 'local' | 'intelligence';
   localDatabaseUrl?: string;
   storageEngine?: 'legacy-postgres' | 'sqlite';
@@ -32,7 +33,19 @@ export function localAiConfigFromEnv(
     throw new Error('CONVERSATION_BACKEND must be local or intelligence.');
   if (!['subscription', 'openai'].includes(llmBackend))
     throw new Error('LLM_BACKEND must be subscription or openai.');
+  const agentEngine = env.DOTS_AGENT_ENGINE?.trim() || 'legacy';
+  if (!['legacy', 'codex'].includes(agentEngine))
+    throw new Error('DOTS_AGENT_ENGINE must be legacy or codex.');
+  if (
+    agentEngine === 'codex' &&
+    (llmBackend !== 'subscription' ||
+      (env.LLM_PROVIDER?.trim() || 'codex') !== 'codex')
+  )
+    throw new Error(
+      'Codex execution requires the Codex subscription provider.',
+    );
   return {
+    agentEngine: agentEngine as 'legacy' | 'codex',
     conversationBackend: conversationBackend as 'local' | 'intelligence',
     llmBackend: llmBackend as 'subscription' | 'openai',
     localDatabaseUrl: env.LOCAL_DATABASE_URL?.trim() || undefined,

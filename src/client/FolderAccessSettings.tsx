@@ -109,11 +109,7 @@ function FolderPermissions({ dotId }: { dotId: string }) {
               <div>
                 <strong>{grant.name}</strong>
                 <code>{grant.path}</code>
-                <small>
-                  {grant.access === 'readwrite'
-                    ? 'Read and write'
-                    : 'Read only'}
-                </small>
+                <small>{folderPermissionLabel(grant.access)}</small>
               </div>
               <button
                 type="button"
@@ -140,3 +136,4 @@ function FolderPermissions({ dotId }: { dotId: string }) {
     </section>
   );
 }
+import { folderPermissionLabel } from '../shared/folder-access';

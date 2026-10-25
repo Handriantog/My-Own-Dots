@@ -1,0 +1,16 @@
+{
+  "package": "myown-llm-integrator",
+  "version": "0.3.0-rc.1",
+  "upstream": "https://github.com/Handriantog/My-Own-LLM-Integrator",
+  "baseRevision": "f0f0c63833cddbb5b0bba9bf3eaeab411606c35b",
+  "sourcePatch": "myown-llm-integrator-0.3.0-rc.1.patch",
+  "sourcePatchSha256": "932f247d9cd7e7485134aef98487af20a12d88ab21329ee6b72860e0c15b7e98",
+  "archive": "myown-llm-integrator-0.3.0-rc.1.tgz",
+  "archiveSha256": "cda9da67a747eadd98f07fe70cdc20388b6450ef6f8e58a7d93c41480af334dd",
+  "reconstruction": {
+    "method": "git archive base, git apply source patch, node scripts/build.mjs, compare every regular archive member",
+    "matchedFiles": 32,
+    "tarMetadataCompared": false
+  },
+  "releaseStatus": "unpublished candidate; upstream source changes preserved as patch"
+}

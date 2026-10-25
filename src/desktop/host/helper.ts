@@ -26,6 +26,7 @@ interface Callbacks {
 }
 type Factory = (executable: string, args: string[]) => HelperProcess;
 export class HelperSupervisor implements ActivityPointerTransport {
+  private helperSession?: string;
   private activityGeneration: number | null = null;
   private requestId = 0;
   private retirement?: { generation: number; promise: Promise<void> };
@@ -33,6 +34,7 @@ export class HelperSupervisor implements ActivityPointerTransport {
     id: number;
     generation: number;
     session: string;
+    op: 'begin' | 'move' | 'end';
     resolve: (value: Record<string, unknown>) => void;
     reject: (error: Error) => void;
     timer: ReturnType<typeof setTimeout>;
@@ -114,7 +116,13 @@ export class HelperSupervisor implements ActivityPointerTransport {
   ): Promise<Record<string, unknown>> {
     if (this.pending)
       return Promise.reject(Error('Native pointer request pending.'));
-    const session = this.current(performance.now())?.helperSession;
+    // Retirement removes authority and needs only the current process identity.
+    // Requiring fresh geometry here kills a healthy helper precisely when a
+    // slow scene update caused the host to stop an activity.
+    const session =
+      op === 'end'
+        ? this.helperSession
+        : this.current(performance.now())?.helperSession;
     if (!session || !this.child?.stdin.writable)
       return Promise.reject(Error('Native pointer helper lost.'));
     const id = ++this.requestId,
@@ -125,7 +133,7 @@ export class HelperSupervisor implements ActivityPointerTransport {
         child.kill('SIGKILL');
         this.failed(child);
       }, 250);
-      this.pending = { id, generation, session, resolve, reject, timer };
+      this.pending = { id, generation, session, op, resolve, reject, timer };
       child.stdin.write(
         JSON.stringify({
           kind: 'activity',
@@ -155,10 +163,11 @@ export class HelperSupervisor implements ActivityPointerTransport {
     )
       return false;
     const message = value as Record<string, unknown>;
-    if (
-      message.helperSession !== this.current(performance.now())?.helperSession
-    )
-      return true;
+    const expectedSession =
+      message.kind === 'activity-ack' && this.pending?.op === 'end'
+        ? this.helperSession
+        : this.current(performance.now())?.helperSession;
+    if (message.helperSession !== expectedSession) return true;
     if (message.kind === 'activity-input') {
       const sample = physicalSchema.safeParse(message.physical);
       if (message.generation === this.activityGeneration && sample.success)
@@ -221,11 +230,13 @@ export class HelperSupervisor implements ActivityPointerTransport {
     const child = this.child;
     this.child = null;
     this.observations.resetSession();
+    this.helperSession = undefined;
     child?.kill('SIGKILL');
   }
   private launch(): void {
     if (this.stopped) return;
     this.observations.resetSession();
+    this.helperSession = undefined;
     let child: HelperProcess;
     try {
       child = this.factory(this.executable, [
@@ -288,7 +299,10 @@ export class HelperSupervisor implements ActivityPointerTransport {
           continue;
         }
         const snapshot = this.observations.accept(value, performance.now());
-        if (snapshot) this.callbacks.scene(snapshot);
+        if (snapshot) {
+          this.helperSession = snapshot.helperSession;
+          this.callbacks.scene(snapshot);
+        }
       }
     });
     child.once('error', () => this.failed(child));
@@ -300,6 +314,7 @@ export class HelperSupervisor implements ActivityPointerTransport {
     this.activityGeneration = null;
     this.rejectPending('Native pointer helper lost.');
     this.observations.resetSession();
+    this.helperSession = undefined;
     if (this.attempts >= 5) {
       this.callbacks.status(
         'Window tracking unavailable — Retry from the menu',

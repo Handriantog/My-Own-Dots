@@ -10,6 +10,7 @@ import type {
   ActivityDriver,
   ActivityStatus,
 } from '../../src/shared/abilities/activity';
+import { ActivityDriverFailure } from '../../src/shared/abilities/activity';
 import fixture from '../fixtures/abilities/manifest.json';
 import activity from '../fixtures/abilities/activity.json';
 const cleanups: (() => Promise<void>)[] = [];
@@ -136,6 +137,71 @@ it.each(['failure', 'cancel'])(
     if (reason === 'cancel') c.abort();
     await f.broker.finish(f.context.invocationId, false);
     expect(f.state()).toBe('inactive');
+  },
+);
+it('reports inactive after rolling back an unsuccessful provisional start', async () => {
+  const f = setup();
+  await f.request('start');
+  expect(await f.broker.finish(f.context.invocationId, false)).toEqual({
+    action: 'start',
+    status: 'inactive',
+  });
+});
+it('consumes a trusted refusal after retiring an in-flight start', async () => {
+  const f = setup();
+  let deny!: () => void;
+  f.starting(
+    new Promise<void>((_resolve, reject) => {
+      deny = () => reject(new ActivityDriverFailure('setup_needed'));
+    }),
+  );
+  const requested = f.request('start').catch((error: unknown) => error);
+  await vi.waitFor(() => expect(f.starts()).toBe(1));
+  const finished = f.broker.finish(f.context.invocationId, false);
+  deny();
+  expect(await requested).toMatchObject({ code: 'setup_needed' });
+  expect(await finished).toEqual({
+    action: 'start',
+    status: 'inactive',
+    reason: 'accessibility_required',
+  });
+  expect(f.state()).toBe('inactive');
+  expect(await f.broker.finish(f.context.invocationId, false)).toBeUndefined();
+  const later = { ...f.context, invocationId: randomUUID() };
+  await f.request('status', later);
+  expect(await f.broker.finish(later.invocationId, true)).toEqual({
+    action: 'status',
+    status: 'inactive',
+  });
+});
+it.each(['status', 'stop', 'start'] as const)(
+  'keeps a trusted start refusal through a later %s in the same invocation',
+  async (action) => {
+    const f = setup();
+    const start = f.driver.start;
+    f.driver.start = async () => {
+      throw new ActivityDriverFailure('setup_needed');
+    };
+    await expect(f.request('start')).rejects.toMatchObject({
+      code: 'setup_needed',
+    });
+    f.driver.start = start;
+    await f.request(action);
+    expect(await f.broker.finish(f.context.invocationId, true)).toEqual({
+      action: 'start',
+      status: 'inactive',
+      reason: 'accessibility_required',
+    });
+    expect(f.state()).toBe('inactive');
+    expect(
+      await f.broker.finish(f.context.invocationId, false),
+    ).toBeUndefined();
+    const later = { ...f.context, invocationId: randomUUID() };
+    await f.request('start', later);
+    expect(await f.broker.finish(later.invocationId, true)).toEqual({
+      action: 'start',
+      status: 'approaching',
+    });
   },
 );
 it('does not transfer ownership to a later failing query or duplicate start', async () => {
