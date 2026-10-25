@@ -1,1 +1,4 @@
 * text=auto eol=lf
+
+# Unified source patches contain intentional single-space context lines.
+vendor/*.patch whitespace=-blank-at-eol

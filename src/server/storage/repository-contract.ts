@@ -49,6 +49,10 @@ interface Repositories {
 // Explicit names are the wire protocol. Never dispatch arbitrary paths/prototype properties.
 export const repositoryMethods = {
   voiceDelegations: [
+    'receiveInput',
+    'pendingInputs',
+    'deliverInput',
+    'cancelInput',
     'threadContext',
     'interrupt',
     'enqueue',
@@ -242,6 +246,7 @@ export const repositoryMethods = {
   ],
   computers: ['permissions', 'patch', 'begin', 'finish', 'audit'],
   abilities: [
+    'recentReceipts',
     'installation',
     'installations',
     'approveInstallation',
@@ -282,6 +287,8 @@ export const repositoryMethods = {
     'finishAction',
   ],
   folders: [
+    'bindExecution',
+    'executionScope',
     'request',
     'getRequest',
     'reviewRequests',
@@ -306,6 +313,17 @@ type Method<G extends Group, N extends Name<G>> = Extract<
 >;
 export type RepositoryMethod = {
   [G in Group]: `${G}.${Name<G> & string}`;
+}[Group];
+/** Async methods must never run inside the worker's synchronous transaction path. */
+export type AsyncRepositoryMethod = {
+  [G in Group]: {
+    [N in Name<G>]: Extract<
+      ReturnType<Method<G, N>>,
+      Promise<unknown>
+    > extends never
+      ? never
+      : `${G}.${N & string}`;
+  }[Name<G>];
 }[Group];
 // AbortSignals stay in the calling process. Folder I/O receives a worker-local signal.
 type WireArgs<M extends RepositoryMethod> = M extends 'snapshot.capture'

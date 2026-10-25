@@ -2,6 +2,24 @@
 
 High now uses the owner-approved local hybrid repair below: Qwen chooses conversational wording from text, and LFM generates speech with access to the original audio. The original LFM-native conversation implementation passed plumbing checks but failed the owner's ordinary small talk. Enabling High requires an explicitly installed runtime, compatible Apple Silicon host and SQLite workspace. Physical listening and extended-call acceptance remain outstanding; installation alone does not establish audio quality or acceptable performance.
 
+## Physical-action routing repair — October 25, 2026
+
+The installed Qwen router classified “Hello Jane, can you move my mouse around?” and “Stop Mouse Mover.” as conversation. That bypassed delegation and its tool receipts. The routing prompt now explicitly covers computer/device actions, Abilities, starting/stopping/resuming activities, and greetings followed by an action request. Reported speech, quotations, hypotheticals and negation retain priority. No keyword override, task permission or model change is involved.
+
+Router-only evaluation used the existing verified Qwen4 runtime with network, Keychain and audio services denied. The original prompt passed 63/70 cases; the revised prompt passed 68/70, including all 13 new action/negative/context cases and every previously passing case. Two existing mismatches remain: a hypothetical file-permission question returns `clarify` instead of `chat`, and “Yes, go ahead” without history returns `chat` instead of `clarify`. Neither starts work. These are text-routing measurements, not microphone or live action acceptance.
+
+The free-form conversation branch is still a grounding limit. Forced-chat probes with a previous “Mouse Mover started” statement produced false restart/stop claims without execution. Additional conversation instructions did not reliably prevent this and were not shipped. Correct routing sends the tested action requests through governed task execution; it does not prove every future utterance is classified correctly.
+
+Run the retained silent evaluator after explicitly selecting an installed native runtime:
+
+```sh
+python3 -I -S -B scripts/local-voice/evaluate_routing.py \
+  --runtime-root "/absolute/native-voice-runtime" \
+  --output-dir "/new/evaluation-directory"
+```
+
+It verifies the existing wheel inventory and local Qwen assets, stages the current worker and fixtures, and writes `report.json`, raw results and stderr. It does not install, download, generate/play audio, invoke a provider, or execute a task. The command returns nonzero for any expected-route mismatch, including the two documented residual cases.
+
 ## Task-announcement voice repair — October 21, 2026
 
 The owner confirmed good conversation quality/speed but reported a female-to-male voice change on delegation. `speak()` used the upstream sequential TTS recipe with the explicit instruction **“Perform TTS. Use a UK male voice.”** Conversation used interleaved speech. This affected queued/busy announcements and later approval/result receipts, not the subscription agent's voice.

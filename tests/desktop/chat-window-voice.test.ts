@@ -263,7 +263,7 @@ it('attaches folder selection to chat lifecycle and removes its IPC on destroy',
   chat.hide();
   await chat.open(bounds);
   resolve({ canceled: false, filePaths: ['/chosen/folder'] });
-  await expect(pending).resolves.toBeNull();
+  await expect(pending).rejects.toThrow('Choose the folder again');
   chat.destroy();
   expect(host.handlers.has('dot:folders:choose')).toBe(false);
   expect(host.ipc!.listenerCount('dot:folders:context')).toBe(0);

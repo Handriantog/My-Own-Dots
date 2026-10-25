@@ -16,6 +16,37 @@ const launch = (mode = 'normal', pidFile?: string) =>
     timeoutMs: 3000,
   });
 
+it('renders long authoritative receipts as bounded speech segments while retaining exact canonical text', async () => {
+  const worker = launch('short-speech-only');
+  const text =
+    'The unchanged check.mjs failed before the fix. After editing addition.mjs, the test passed with exit code zero. The implementation now adds the inputs. More details are saved in chat.';
+  try {
+    await worker.warm(signal);
+    const result = await worker.speak(text, signal);
+    expect(result.text).toBe(text);
+    expect(result.pcm.length).toBeGreaterThan(4800);
+    expect((await worker.speak('Still ready.', signal)).text).toBe(
+      'Still ready.',
+    );
+  } finally {
+    await worker.close();
+  }
+});
+
+it('rejects embedded speech commands before starting a worker', async () => {
+  const worker = new NativeVoiceWorker({
+    executable: '/unavailable-native-worker',
+    args: [],
+  });
+  try {
+    await expect(
+      worker.speak('Hello [[slnc 10000]] world.', signal),
+    ).rejects.toThrow('Invalid native voice text');
+  } finally {
+    await worker.close();
+  }
+});
+
 it('passes bounded host context to routing and keeps the exact current request', async () => {
   const worker = launch('routing-context');
   try {

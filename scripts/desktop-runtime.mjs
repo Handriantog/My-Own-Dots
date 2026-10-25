@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 import { build } from 'esbuild';
+import { buildIdentity } from './build-identity.mjs';
 
 const excluded = new Set([
   'node_modules',
@@ -80,10 +81,16 @@ export async function stageProductionDependencies(root, output, names) {
         continue;
       }
       const relative = path.relative(canonicalModules, found);
+      // A linked worktree can own its node_modules directory while individual
+      // packages resolve to another checkout. Preserve the root installation
+      // topology rather than nesting every peer dependency (including cycles).
+      const rootPackage = resolvePackage(root, name);
       const target =
-        !relative.startsWith('..') && !path.isAbsolute(relative)
-          ? path.join(output, 'node_modules', relative)
-          : path.join(destination, 'node_modules', name);
+        rootPackage && realpathSync(rootPackage) === realpathSync(found)
+          ? path.join(output, 'node_modules', name)
+          : !relative.startsWith('..') && !path.isAbsolute(relative)
+            ? path.join(output, 'node_modules', relative)
+            : path.join(destination, 'node_modules', name);
       visit(found, target);
     }
   };
@@ -140,6 +147,10 @@ export async function compileDesktopRuntime(root, output) {
 }
 export async function buildDesktopRuntime(root, output) {
   const compilation = await compileDesktopRuntime(root, output);
+  writeFileSync(
+    path.join(output, 'build-identity.json'),
+    JSON.stringify(buildIdentity(root), null, 2) + '\n',
+  );
   const manifest = JSON.parse(
     readFileSync(path.join(root, 'package.json'), 'utf8'),
   );

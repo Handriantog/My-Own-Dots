@@ -1,0 +1,946 @@
+diff --git a/README.md b/README.md
+index 26956d3..f0ab6cd 100644
+--- a/README.md
++++ b/README.md
+@@ -114,6 +114,8 @@ The tarball includes the built JavaScript API/CLI, TypeScript declarations, Pyth
+ 
+ ## Use it in your app
+ 
++For explicitly authorized project commands and editing, see [scoped Codex execution sessions](docs/execution-sessions.md). This experimental API is separate from inference-only calls and requires the qualified CLI version and a host-owned execution grant.
++
+ ### JavaScript and TypeScript
+ 
+ Save this as an `.mjs` file in your consumer project, or use it in a project with `"type": "module"`:
+diff --git a/package-lock.json b/package-lock.json
+index 539232a..65731ef 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "myown-llm-integrator",
+-  "version": "0.2.0",
++  "version": "0.3.0-rc.1",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "myown-llm-integrator",
+-      "version": "0.2.0",
++      "version": "0.3.0-rc.1",
+       "license": "AGPL-3.0-only",
+       "bin": {
+         "myown-llm-integrator": "dist/cli.js"
+diff --git a/package.json b/package.json
+index 03c2034..75fa15c 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "myown-llm-integrator",
+-  "version": "0.2.0",
++  "version": "0.3.0-rc.1",
+   "description": "Use locally authenticated AI CLIs through a reusable subscription inference API",
+   "type": "module",
+   "license": "AGPL-3.0-only",
+diff --git a/src/index.d.ts b/src/index.d.ts
+index 5b36cc7..6869aa7 100644
+--- a/src/index.d.ts
++++ b/src/index.d.ts
+@@ -134,3 +134,34 @@ export interface ProviderSession {
+ }
+ /** Codex-only additive session; never share across application conversations/calls. */
+ export function createProviderSession(options?: AgentSessionOptions): ProviderSession;
++/** Native coding is opt-in and requires a host-approved canonical project. */
++export interface ExecutionScope { cwd: string; access: 'execute' }
++export interface ExecutionTool { name: string; description: string; inputSchema: Record<string, unknown> }
++export interface ExecutionEvidence {
++  kind: 'command' | 'file' | 'tool'; id: string; status: string;
++  name?: string; command?: string; exitCode?: number | null; output?: string | null;
++  changes?: unknown[];
++}
++export type ExecutionEvent =
++  | { type: 'text'; id: string; text: string }
++  | { type: 'message'; id: string; text: string; final: boolean }
++  | { type: 'execution'; evidence: ExecutionEvidence }
++  | { type: 'tool'; phase: 'started'; id: string; name: string; arguments: Record<string, unknown> }
++  | { type: 'tool'; phase: 'completed'; id: string; name: string; content: string; isError: boolean };
++export interface ExecutionResult {
++  status: 'completed' | 'failed' | 'cancelled' | 'paused' | 'uncertain';
++  text: string; evidence: ExecutionEvidence[]; threadId?: string; turnId?: string; error?: string;
++}
++export interface ExecutionSession {
++  warm(): Promise<{ version: string; nativeExecution: boolean }>;
++  run(options: { input: string; signal?: AbortSignal; timeoutMs?: number;
++    onEvent?: (event: ExecutionEvent) => void | Promise<void> }): Promise<ExecutionResult>;
++  interrupt(): Promise<void>;
++  close(): Promise<void>;
++}
++export function createExecutionSession(options?: {
++  executable?: string; env?: Record<string, string | undefined>; scope?: ExecutionScope;
++  instructions?: string; model?: string; timeoutMs?: number; tools?: ExecutionTool[];
++  onTool?: (call: { name: string; arguments: Record<string, unknown>; callId: string; signal: AbortSignal }) =>
++    Promise<{ content: string; isError?: boolean; pause?: boolean }>;
++}): ExecutionSession;
+diff --git a/src/index.js b/src/index.js
+index 43f8764..6ca07b0 100644
+--- a/src/index.js
++++ b/src/index.js
+@@ -86,3 +86,5 @@ export function validateProvider(provider, options) { return invoke({ operation:
+ export { createAgentSession } from './session.js';
+ 
+ export { createProviderSession } from './provider-session.js';
++
++export { createExecutionSession } from './execution-session.js';
+diff --git a/docs/execution-sessions.md b/docs/execution-sessions.md
+new file mode 100644
+index 0000000..47e3fb2
+--- /dev/null
++++ b/docs/execution-sessions.md
+@@ -0,0 +1,51 @@
++# Scoped Codex execution sessions
++
++`createExecutionSession` is an additive, experimental coding API for the qualified macOS arm64 Codex CLI `0.163.0`. Existing inference and restricted provider-session APIs retain their contracts. The host must own project approval, tool authorization, durable task state and result presentation.
++
++```js
++import { createExecutionSession } from 'myown-llm-integrator';
++
++// Obtain this canonical directory from an explicit owner execution grant.
++const session = createExecutionSession({
++  scope: { cwd: approvedCanonicalProject, access: 'execute' },
++  instructions: 'Complete the authorized task and report observed evidence.',
++});
++try {
++  await session.warm();
++  const result = await session.run({
++    input: authorizedConversation,
++    signal,
++    onEvent: event => persistExecutionEvent(event),
++  });
++  // completed means the model turn completed, not proof of an arbitrary goal.
++  // cancelled is confirmed interruption; uncertain must never be replayed blindly.
++  displayResult(result);
++} finally {
++  await session.close();
++}
++```
++
++Omitting `scope` removes native execution environments. Legacy read/edit access is insufficient to supply an execution scope. The exact project directory and its filesystem identity are checked at startup and before each turn. The host must also invalidate its grant during execution when permission changes.
++
++`warm()` checks the exact CLI version, subscription login, effective configuration and managed requirements before creating a thread. The executable is explicit `executable`, otherwise `env.CODEX_BIN`/`process.env.CODEX_BIN`, otherwise `codex` on PATH. Unsupported versions, API-key authentication and conflicting settings stop execution; there is no paid API or provider fallback.
++
++Each `run({ input, signal, timeoutMs, onEvent })` starts a fresh ephemeral thread, accepts at most 1 MiB of authorized text, and returns `completed`, `failed`, `paused`, `cancelled` or `uncertain`, plus bounded evidence and correlation IDs. Only one turn can be active on a session. A dispatched turn is never automatically replayed. A lost process or unconfirmed cancellation makes its effects uncertain. `interrupt()` requests cancellation; inspect the eventual run result for confirmation. `close()` also reaps the process.
++
++Host tools use `tools: [{ name, description, inputSchema }]` and `onTool({ name, arguments, callId, signal })`. Return `{ content: string, isError?: boolean, pause?: boolean }`. Validate arguments, check current authorization and persist admission before performing effects. A client approval request should return `pause: true` without claiming approval. The host can start a new session with the subsequently approved scope and canonical tool results; it must not repeat effects that already occurred. A callback that ignores cancellation can leave its own work uncertain; Integrator cannot undo external host effects.
++
++Native commands receive platform-minimal reads, writes inside the approved project, an explicit denial of canonical Codex credential storage and no network access. The explicit denial also prevents inherited `allow` command rules from bypassing the sandbox in the pinned engine. Project configuration is pinned untrusted before thread startup, inherited MCP servers are disabled, and effective restrictions are checked. Native plugins, hooks, host skills, browser/computer tools and Node REPL are disabled. The embedded V8 code-mode dispatcher is enabled because the qualified model requires it; its module loader rejects imports.
++
++The CLI itself uses its existing subscription credentials and network connection for inference. No credentials are copied, and owner configuration is not rewritten. Project commands cannot use that access. Native command evidence includes output/exit status when the engine supplies it; the pinned upstream engine does not emit a command item for every sandbox-rejected code-mode request. Do not treat absence of an event as success.
++
++Qualification commands (disposable fixtures):
++
++```sh
++npm test
++npm run test:python
++npm run test:pack
++node scripts/qualify-native-mcp.mjs "$PWD" /absolute/path/to/codex
++node scripts/qualify-native-rules.mjs "$PWD" /absolute/path/to/codex
++node scripts/qualify-execution.mjs --live
++```
++
++The first two native probes need no account or allowance; `--control` deliberately reproduces the prior unsafe configuration only inside their disposable fixture homes. The rule probe uses a loopback model-response fixture to exercise real native tool dispatch. Production sessions reject that endpoint override. The final live coding probe uses the existing subscription allowance. Qualification is specific to the tested version/platform; upgrading either requires repeating it.
+diff --git a/scripts/qualify-execution.mjs b/scripts/qualify-execution.mjs
+new file mode 100644
+index 0000000..ade09de
+--- /dev/null
++++ b/scripts/qualify-execution.mjs
+@@ -0,0 +1,28 @@
++// Explicit live qualification: disposable files; consumes existing ChatGPT allowance.
++import assert from 'node:assert/strict';
++import { mkdtemp, realpath, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { createExecutionSession } from '../src/index.js';
++if (!process.argv.includes('--live')) throw new Error('Pass --live to authorize a real subscription model request.');
++const root = await realpath(await mkdtemp(join(tmpdir(), 'dots-execution-qualification-')));
++const project = join(root, 'project'); await mkdir(project);
++await writeFile(join(project, 'math.cjs'), 'exports.add=(a,b)=>a-b;\n');
++await writeFile(join(project, 'test.cjs'), "require('node:assert/strict').equal(require('./math.cjs').add(2,3),5);console.log('TEST_PASSED');\n");
++await writeFile(join(root, 'outside.txt'), 'OUTSIDE_UNCHANGED');
++let toolCalls = 0;
++const session = createExecutionSession({ scope: { cwd: project, access: 'execute' }, timeoutMs: 180_000,
++  tools: [{ name: 'fixture_value', description: 'Read fixture value', inputSchema: { type: 'object', properties: {}, additionalProperties: false } }],
++  onTool: async () => { toolCalls++; return { content: '7' }; } });
++const started = performance.now();
++try {
++  const result = await session.run({ input: `Call fixture_value. Reproduce the failure using ${process.execPath} test.cjs, fix math.cjs, then run the test again. Stay inside this disposable project. Report observed results.`,
++    onEvent: event => { if (event.type !== 'text') console.log(JSON.stringify(event)); } });
++  console.log(JSON.stringify({ status: result.status, elapsedMs: performance.now() - started, toolCalls, source: await readFile(join(project, 'math.cjs'), 'utf8') }));
++  assert.equal(result.status, 'completed');
++  assert.equal(toolCalls, 1);
++  assert.ok(result.evidence.some(e => e.kind === 'command' && e.exitCode === 0 && /^TEST_PASSED$/m.test(e.output ?? '')), 'A real passing test is required; assistant claims and source listings are insufficient.');
++  assert.equal(await readFile(join(project, 'test.cjs'), 'utf8'), "require('node:assert/strict').equal(require('./math.cjs').add(2,3),5);console.log('TEST_PASSED');\n");
++  assert.ok(result.evidence.some(e => e.kind === 'command' && e.exitCode !== null && e.exitCode !== 0), 'The initial failure must be reproduced.');
++  assert.equal(await readFile(join(root, 'outside.txt'), 'utf8'), 'OUTSIDE_UNCHANGED');
++} finally { await session.close(); await rm(root, { recursive: true, force: true }); }
+diff --git a/scripts/qualify-native-mcp.mjs b/scripts/qualify-native-mcp.mjs
+new file mode 100644
+index 0000000..e72f57c
+--- /dev/null
++++ b/scripts/qualify-native-mcp.mjs
+@@ -0,0 +1,54 @@
++// Run: node native-mcp-probe.mjs /absolute/integrator/root /absolute/codex [--control]
++// Fresh HOME/CODEX_HOME; no login, account read, turn/start, or inference.
++import assert from 'node:assert/strict';
++import { spawn, execFileSync } from 'node:child_process';
++import { mkdtemp, mkdir, writeFile, readFile, rm, realpath } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { pathToFileURL } from 'node:url';
++import { createInterface } from 'node:readline';
++const [integrator, executable] = process.argv.slice(2);
++const control = process.argv.includes('--control');
++const { executionSettings, executionArguments, verifyExecutionConfig, EXECUTION_VERSION } = await import(pathToFileURL(join(integrator, 'src/execution-policy.js')));
++const root = await realpath(await mkdtemp(join(tmpdir(), 'mcp-boundary-probe-')));
++const project = join(root, 'project'), home = join(root, 'home'), credentialHome = join(home, '.codex');
++await mkdir(join(project, '.codex'), { recursive: true }); await mkdir(credentialHome, { recursive: true });
++await writeFile(join(credentialHome,'config.toml'), '[projects."/unrelated-review-fixture"]\ntrust_level = "trusted"\n');
++const marker = join(root, 'outside-mcp-marker');
++await writeFile(join(project, '.codex/config.toml'), `[mcp_servers.review_marker]\ncommand = "/bin/sh"\nargs = ["-c", "printf started > ${marker}"]\n`);
++const env = { HOME: home, CODEX_HOME: credentialHome, PATH: process.env.PATH };
++assert.equal(execFileSync(executable, ['--version'], { env, encoding: 'utf8' }).trim(), EXECUTION_VERSION);
++const settings = executionSettings({ cwd: project, access: 'execute' }, env, credentialHome);
++if (control) delete settings.projects; // Deliberately reproduce the old trust-transition bug.
++const child = spawn(executable, executionArguments(settings), { cwd: project, env, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
++child.stderr.resume(); const pending = new Map(); let id = 0;
++const send = m => child.stdin.write(JSON.stringify(m) + '\n');
++const rpc = (method, params) => new Promise((resolve, reject) => {
++  const n = ++id, timer = setTimeout(() => reject(Error(`RPC timeout: ${method}`)), 15000);
++  pending.set(n, { resolve, reject, timer }); send({ id: n, method, params });
++});
++createInterface({ input: child.stdout }).on('line', line => {
++  const m = JSON.parse(line), p = pending.get(m.id);
++  if (p && !m.method) { pending.delete(m.id); clearTimeout(p.timer); m.error ? p.reject(Error(`RPC rejected: ${m.error.code}`)) : p.resolve(m.result); }
++  else if (m.id !== undefined && m.method) send({ id: m.id, error: { code: -32000, message: 'Not approved' } });
++});
++try {
++  await rpc('initialize', { clientInfo: { name: 'native_boundary_review', version: '0.1.0' }, capabilities: { experimentalApi: true } });
++  send({ method: 'initialized', params: {} });
++  const before = await rpc('config/read', { includeLayers: true, cwd: project });
++  verifyExecutionConfig(before, settings);
++  assert.equal(Object.keys(before.config.mcp_servers ?? {}).length, 0);
++  await rpc('thread/start', { cwd: project, permissions: 'dots_execution', approvalPolicy: 'never', modelProvider: 'openai', ephemeral: true,
++    runtimeWorkspaceRoots: [project], selectedCapabilityRoots: [], baseInstructions: 'Startup-only boundary test. No inference.' });
++  await new Promise(resolve => setTimeout(resolve, 100));
++  const after = await rpc('config/read', { includeLayers: true, cwd: project });
++  const started = await readFile(marker, 'utf8').then(text => text === 'started', () => false);
++  if (!control) { verifyExecutionConfig(after, settings); assert.equal(started, false); assert.equal(Object.keys(after.config.mcp_servers ?? {}).length, 0); }
++  else assert.equal(started, true, 'Control must demonstrate that the fixture was capable of starting.');
++  console.log(JSON.stringify({ mode: control ? 'vulnerable-control' : 'hardened', unapprovedHostProcessStarted: started, passed: true }));
++} finally {
++  for (const p of pending.values()) clearTimeout(p.timer);
++  child.stdin.end(); try { process.kill(-child.pid, 'SIGTERM'); } catch {}
++  await new Promise(resolve => setTimeout(resolve, 400)); try { process.kill(-child.pid, 'SIGKILL'); } catch {}
++  await rm(root, { recursive: true, force: true });
++}
+diff --git a/scripts/qualify-native-rules.mjs b/scripts/qualify-native-rules.mjs
+new file mode 100644
+index 0000000..858f137
+--- /dev/null
++++ b/scripts/qualify-native-rules.mjs
+@@ -0,0 +1,53 @@
++// Native model-output/execpolicy probe. No login or owner configuration is used.
++// Run: node native-rule-probe.mjs /absolute/integrator/root /absolute/codex [--control]
++// A loopback Responses fixture emits one code-mode call. Production Integrator
++// intentionally rejects this provider; this harness qualifies the pinned engine.
++import assert from 'node:assert/strict';
++import { spawn, execFileSync } from 'node:child_process';
++import { createServer } from 'node:http';
++import { mkdtemp, mkdir, writeFile, rm, realpath } from 'node:fs/promises';
++import { tmpdir } from 'node:os'; import { join } from 'node:path';
++import { pathToFileURL } from 'node:url'; import { createInterface } from 'node:readline';
++const [integrator, executable] = process.argv.slice(2), control = process.argv.includes('--control');
++const { executionSettings, executionArguments, EXECUTION_VERSION } = await import(pathToFileURL(join(integrator,'src/execution-policy.js')));
++const root = await realpath(await mkdtemp(join(tmpdir(),'rule-boundary-probe-')));
++const project=join(root,'project'), home=join(root,'home'), credentialHome=join(home,'.codex'), outside=join(root,'outside.txt');
++await mkdir(project); await mkdir(join(credentialHome,'rules'),{recursive:true});
++const marker='OUTSIDE_READ_MARKER_REVIEW'; await writeFile(outside,marker); await writeFile(join(project,'inside.txt'),'INSIDE_READ_MARKER_REVIEW');
++await writeFile(join(credentialHome,'rules','review.rules'),'prefix_rule(pattern=["/bin/cat"], decision="allow")\n');
++const env={HOME:home,CODEX_HOME:credentialHome,PATH:process.env.PATH};
++assert.equal(execFileSync(executable,['--version'],{env,encoding:'utf8'}).trim(),EXECUTION_VERSION);
++let modelRequests=0, observedOutsideRead=false; const commandEvents=[], toolResults=[];
++const server=createServer(async (req,res)=>{
++  let body=''; for await(const chunk of req) body+=chunk;
++  if(req.method!=='POST'||!req.url.endsWith('/responses')) {res.writeHead(404);res.end();return;}
++  modelRequests++; if(body.includes(marker)) observedOutsideRead=true; if(modelRequests>1){for(const item of JSON.parse(body).input??[]){if(item.type!=='custom_tool_call_output')continue;for(const content of Array.isArray(item.output)?item.output:[]){try{const result=JSON.parse(content.text);if(typeof result.exit_code==='number')toolResults.push(result);}catch{}}}}
++  const id=`response-${modelRequests}`;
++  const tool={type:'response.output_item.done',item:{type:'custom_tool_call',name:'exec',call_id:'review-call',input:`for (const cmd of ${JSON.stringify([`/bin/cat ${JSON.stringify(join(project,'inside.txt'))}`,`/bin/cat ${JSON.stringify(outside)}`])}) text(JSON.stringify(await tools.exec_command({cmd,yield_time_ms:1000})));`}};
++  const message={type:'response.output_item.done',item:{type:'message',role:'assistant',id:'message-final',content:[{type:'output_text',text:'Fixture finished.'}]}};
++  const events=[{type:'response.created',response:{id}},modelRequests===1?tool:message,{type:'response.completed',response:{id,usage:{input_tokens:0,output_tokens:0,total_tokens:0}}}];
++  res.writeHead(200,{'content-type':'text/event-stream'});res.end(events.map(e=>`data: ${JSON.stringify(e)}\n\n`).join(''));
++});
++await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
++const settings=executionSettings({cwd:project,access:'execute'},env,credentialHome);
++if(control) delete settings['permissions.dots_execution.filesystem'][credentialHome];
++settings.model_provider='boundary_fixture'; settings['model_providers.boundary_fixture']={name:'Boundary fixture',base_url:`http://127.0.0.1:${server.address().port}/v1`,wire_api:'responses',requires_openai_auth:false,supports_websockets:false};
++const child=spawn(executable,executionArguments(settings),{cwd:project,env,stdio:['pipe','pipe','pipe'],detached:true});
++child.stderr.resume();let id=0;const pending=new Map();const send=m=>child.stdin.write(JSON.stringify(m)+'\n');
++const rpc=(method,params)=>new Promise((resolve,reject)=>{const n=++id,timer=setTimeout(()=>reject(Error(`RPC timeout ${method}`)),15000);pending.set(n,{resolve,reject,timer});send({id:n,method,params});});
++let finish;const completion=new Promise(resolve=>finish=resolve);const timeout=setTimeout(()=>finish({status:'timeout'}),30000);
++createInterface({input:child.stdout}).on('line',line=>{const m=JSON.parse(line),p=pending.get(m.id);if(p&&!m.method){pending.delete(m.id);clearTimeout(p.timer);m.error?p.reject(Error(`RPC rejected ${m.error.code}`)):p.resolve(m.result);}else if(m.id!==undefined&&m.method)send({id:m.id,error:{code:-32000,message:'Not approved'}});if(m.method==='item/completed'&&m.params.item.type==='commandExecution')commandEvents.push(m.params.item);if(m.method==='turn/completed')finish(m.params.turn);});
++try {
++  await rpc('initialize',{clientInfo:{name:'native_rule_boundary_review',version:'0.1.0'},capabilities:{experimentalApi:true}});send({method:'initialized',params:{}});
++  const thread=await rpc('thread/start',{cwd:project,permissions:'dots_execution',approvalPolicy:'never',modelProvider:'boundary_fixture',model:'gpt-5.2',ephemeral:true,runtimeWorkspaceRoots:[project],selectedCapabilityRoots:[],baseInstructions:'Run the supplied fixture tool call.'});
++  await rpc('turn/start',{threadId:thread.thread.id,input:[{type:'text',text:'Run the boundary fixture.',text_elements:[]}]});
++  const turn=await completion;
++  console.log(JSON.stringify({mode:control?'vulnerable-control':'hardened',status:turn.status,modelRequests,commandCount:commandEvents.length,exitCodes:toolResults.map(e=>e.exit_code),observedOutsideRead,deniedBySandbox:toolResults[1]?.output?.includes('Operation not permitted')??false}));
++  assert.equal(turn.status,'completed');assert.equal(toolResults.length,2);assert.equal(toolResults[0].exit_code,0);assert.match(toolResults[0].output,/INSIDE_READ_MARKER_REVIEW/);assert.equal(observedOutsideRead,control);
++  assert.equal(toolResults[1].exit_code===0,control);if(!control)assert.match(toolResults[1].output,/Operation not permitted/);
++} finally {
++  clearTimeout(timeout);for(const p of pending.values())clearTimeout(p.timer);
++  child.stdin.end();try{process.kill(-child.pid,'SIGTERM');}catch{}
++  await new Promise(resolve=>setTimeout(resolve,400));try{process.kill(-child.pid,'SIGKILL');}catch{}
++  server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await rm(root,{recursive:true,force:true});
++}
+diff --git a/src/execution-policy.js b/src/execution-policy.js
+new file mode 100644
+index 0000000..6a5353e
+--- /dev/null
++++ b/src/execution-policy.js
+@@ -0,0 +1,127 @@
++import { isAbsolute, parse, resolve, join } from 'node:path';
++import { homedir } from 'node:os';
++import { realpath, stat } from 'node:fs/promises';
++
++export const EXECUTION_VERSION = 'codex-cli 0.163.0';
++export const PROFILE = 'dots_execution';
++const disabled = ['apps', 'plugins', 'hooks', 'multi_agent', 'multi_agent_v2', 'browser_use',
++  'computer_use', 'image_generation', 'view_image', 'shell_snapshot', 'js_repl',
++  'remote_control', 'remote_plugin', 'tool_suggest', 'auth_elicitation', 'memories',
++  'api_key_model_discovery'];
++
++export function executionScope(scope) {
++  if (scope === undefined) return undefined;
++  if (!scope || scope.access !== 'execute' || typeof scope.cwd !== 'string' ||
++      !isAbsolute(scope.cwd) || scope.cwd === parse(scope.cwd).root ||
++      Object.keys(scope).some(key => !['cwd', 'access'].includes(key))) {
++    throw new Error('An explicit project execution scope is required; filesystem root is not a project.');
++  }
++  return { cwd: scope.cwd, access: 'execute' };
++}
++
++export async function scopeIdentity(scope) {
++  if (!scope) return undefined;
++  const path = await realpath(scope.cwd);
++  const info = await stat(path);
++  if (path !== scope.cwd || !info.isDirectory()) throw new Error('Execution scope must be a canonical project directory.');
++  return `${info.dev}:${info.ino}`;
++}
++
++export function executionEnvironment(env) {
++  return Object.fromEntries(['HOME', 'PATH', 'USER', 'LOGNAME', 'LANG', 'TMPDIR', 'CODEX_HOME']
++    .filter(key => typeof env[key] === 'string').map(key => [key, env[key]]));
++}
++
++export function executionSettings(scope, env, credentialHome = resolve(env.CODEX_HOME || join(env.HOME || homedir(), '.codex'))) {
++  return {
++    model_provider: 'openai', forced_login_method: 'chatgpt', approval_policy: 'never',
++    default_permissions: PROFILE,
++    // Explicit Deny is mandatory: upstream retains the sandbox for inherited
++    // exec-policy Allow rules only when the profile has a Deny entry.
++    [`permissions.${PROFILE}.filesystem`]: { ':minimal': 'read', ...(scope ? { [scope.cwd]: 'write' } : {}), [credentialHome]: 'deny' },
++    ...(scope ? { projects: { [scope.cwd]: { trust_level: 'untrusted' } } } : {}),
++    [`permissions.${PROFILE}.network.enabled`]: false,
++    project_doc_max_bytes: 0, web_search: 'disabled', notify: [], allow_login_shell: false,
++    developer_instructions: '',
++    include_apps_instructions: false, include_collaboration_mode_instructions: false,
++    'skills.include_instructions': false, 'skills.bundled.enabled': false,
++    'tools.experimental_request_user_input.enabled': false,
++    'history.persistence': 'none', 'analytics.enabled': false,
++    check_for_update_on_startup: false,
++    'features.skip_host_skill_discovery': true,
++    // Current models can require code-mode routing. This is the embedded V8
++    // tool dispatcher, not Node/js_repl; its native tools retain the profile.
++    'features.code_mode': true, 'features.code_mode_host': true,
++    'features.shell_tool': !!scope, 'features.unified_exec': !!scope,
++    'shell_environment_policy.inherit': 'none',
++    'shell_environment_policy.set': Object.fromEntries(['PATH', 'LANG'].filter(key => env[key]).map(key => [key, env[key]])),
++    ...Object.fromEntries(disabled.map(key => [`features.${key}`, false])),
++  };
++}
++
++function nested(value, key) { return key.split('.').reduce((v, part) => v?.[part], value); }
++function equal(a, b) {
++  if (a === b) return true;
++  return a && b && typeof a === 'object' && typeof b === 'object' &&
++    Object.keys(a).length === Object.keys(b).length && Object.keys(a).every(key => equal(a[key], b[key]));
++}
++export function verifyExecutionConfig(response, settings, checkMcp = true) {
++  const config = response?.config;
++  if (!config || typeof config !== 'object') throw new Error('Cannot verify execution configuration.');
++  for (const [key, expected] of Object.entries(settings)) {
++    let actual = nested(config, key);
++    // Some recognized options are only exposed in raw configuration layers.
++    if (actual === undefined) for (const layer of response.layers ?? []) {
++      if (!layer.disabledReason && nested(layer.config, key) !== undefined) { actual = nested(layer.config, key); break; }
++    }
++    // Filesystem profiles include this nullable parser option in ConfigV2.
++    if (key.endsWith('.filesystem') && actual?.glob_scan_max_depth === null) {
++      actual = { ...actual }; delete actual.glob_scan_max_depth;
++    }
++    if (!checkMcp && key === 'shell_environment_policy.set' && actual && typeof actual === 'object') {
++      actual = Object.fromEntries(Object.keys(expected).map(name => [name, actual[name]]));
++    }
++    if (key === 'projects' && actual && typeof actual === 'object') {
++      actual = Object.fromEntries(Object.keys(expected).map(path => [path, actual[path]]));
++    }
++    if (!equal(actual, expected)) throw new Error(key.startsWith('mcp_servers.') ? 'Cannot disable inherited MCP servers.' : `Cannot establish execution permissions: effective configuration differs (${key}).`);
++  }
++  const profile = config.permissions?.[PROFILE];
++  if ((response.layers ?? []).some(layer => layer.name?.type === 'project' && !layer.disabledReason)) throw new Error('Inherited project configuration is not isolated. Project integrations cannot start in a Dot execution session.');
++  if (config.model_providers?.openai) throw new Error('Custom OpenAI provider endpoints are not allowed in subscription execution sessions.');
++  if (config.model_instructions_file || config.model_catalog_json) throw new Error('Inherited model instruction files or catalogs are not supported in execution sessions.');
++  if (profile?.extends || profile?.workspace_roots || profile?.network?.dangerously_allow_all_unix_sockets ||
++      profile?.network?.dangerously_allow_non_loopback_proxy || profile?.network?.allow_upstream_proxy ||
++      profile?.network?.domains || profile?.network?.unix_sockets) throw new Error('Unexpected execution permission profile inheritance or network access.');
++  for (const [key, allowed] of [
++    ['openai_base_url', [undefined, null, 'https://api.openai.com/v1']],
++    ['chatgpt_base_url', [undefined, null, 'https://chatgpt.com/backend-api', 'https://chatgpt.com/backend-api/']],
++  ]) if (!allowed.includes(config[key])) throw new Error('Provider endpoint URL overrides are not allowed.');
++  const servers = config.mcp_servers ?? {};
++  if (!servers || Array.isArray(servers) || typeof servers !== 'object' || Object.keys(servers).length > 256 ||
++      Object.keys(servers).some(key => !/^[A-Za-z0-9_-]{1,128}$/.test(key))) throw new Error('Cannot isolate inherited MCP configuration.');
++  if (checkMcp && Object.values(servers).some(server => server?.enabled !== false)) throw new Error('Cannot disable inherited MCP servers.');
++  const environmentKeys = Object.keys(config.shell_environment_policy?.set ?? {});
++  if (environmentKeys.length > 256 || environmentKeys.some(key => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key))) throw new Error('Cannot isolate inherited command environment.');
++  return { servers: Object.keys(servers), environmentKeys };
++}
++
++export function verifyExecutionRequirements(response) {
++  const r = response?.requirements;
++  if (r == null) return;
++  if (typeof r !== 'object' || Array.isArray(r)) throw new Error('Cannot verify managed execution requirements.');
++  for (const [key, wanted] of [['allowedLoginMethods', 'chatgpt'], ['allowedApprovalPolicies', 'never'], ['allowedWebSearchModes', 'disabled']]) {
++    if (r[key] != null && (!Array.isArray(r[key]) || !r[key].includes(wanted))) throw new Error('Managed requirements conflict with execution restrictions.');
++  }
++  if (r.defaultPermissions || r.modelProviders || r.additionalDeveloperInstructions || r.modelCatalogJson ||
++      (r.modelProvider && r.modelProvider !== 'openai') || r.chatgptBaseUrl ||
++      Object.values(r.hooks ?? {}).some(Boolean) || disabled.some(key => r.featureRequirements?.[key] === true) ||
++      r.featureRequirements?.skip_host_skill_discovery === false) throw new Error('Managed requirements conflict with execution restrictions.');
++}
++
++export function executionArguments(settings) {
++  const toml = value => value && typeof value === 'object' && !Array.isArray(value)
++    ? `{${Object.entries(value).map(([key, v]) => `${JSON.stringify(key)}=${toml(v)}`).join(',')}}`
++    : JSON.stringify(value);
++  return ['--no-daemon', ...Object.entries(settings).flatMap(([key, value]) => ['-c', `${key}=${toml(value)}`]), 'app-server', '--listen', 'stdio://'];
++}
+diff --git a/src/execution-session.js b/src/execution-session.js
+new file mode 100644
+index 0000000..ba1f197
+--- /dev/null
++++ b/src/execution-session.js
+@@ -0,0 +1,297 @@
++import { spawn, execFile } from 'node:child_process';
++import { promisify } from 'node:util';
++import { mkdtemp, rm, realpath } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { EXECUTION_VERSION, PROFILE, executionScope, scopeIdentity, executionEnvironment,
++  executionSettings, executionArguments, verifyExecutionConfig, verifyExecutionRequirements } from './execution-policy.js';
++
++const exec = promisify(execFile);
++const FRAME_LIMIT = 1024 * 1024;
++const TOTAL_LIMIT = 32 * 1024 * 1024;
++const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
++function deferred() { let resolve; const promise = new Promise(yes => { resolve = yes; }); return { promise, resolve }; }
++function positive(value) { if (!Number.isFinite(value) || value <= 0) throw new Error('timeoutMs must be positive.'); return value; }
++function executionError(error) {
++  const info = error?.codexErrorInfo;
++  const code = typeof info === 'string' ? info : object(info) ? Object.keys(info)[0] : '';
++  const messages = {
++    usageLimitExceeded: 'Codex subscription usage limit reached. Wait for your allowance to reset; no paid API fallback was used.',
++    rateLimitExceeded: 'Codex subscription request rate limit reached. Wait before submitting a new request.',
++    sessionBudgetExceeded: 'The Codex session budget was exhausted. Review recorded work before continuing.',
++    unauthorized: 'Codex subscription login is unavailable. Sign in with Codex again; no API fallback was used.',
++    contextWindowExceeded: 'The Codex context limit was reached. Start a shorter follow-up using the saved task evidence.',
++    serverOverloaded: 'Codex is temporarily overloaded. Review recorded work before asking to retry.',
++    sandboxError: 'Codex could not establish the project sandbox. No broader access was granted.',
++    httpConnectionFailed: 'Codex could not connect to the subscription service. Check connectivity and recorded task evidence.',
++    responseStreamConnectionFailed: 'Codex could not open its response connection. Check connectivity and recorded task evidence.',
++    responseStreamDisconnected: 'Codex lost its response connection. Review recorded actions before retrying.',
++    responseTooManyFailedAttempts: 'Codex exhausted its connection attempts. Review recorded actions before retrying.',
++  };
++  return Object.hasOwn(messages, code) ? messages[code] : 'Codex could not complete the turn. Review recorded task evidence and subscription availability.';
++}
++
++/** A scoped, non-replaying coding engine. Its host owns grants, context and durable tasks. */
++export function createExecutionSession(options = {}) {
++  if (!object(options) || Object.keys(options).some(key => !['executable', 'env', 'scope', 'tools', 'onTool', 'instructions', 'model', 'timeoutMs'].includes(key))) throw new Error('Invalid execution session options.');
++  const { executable = (options.env ?? process.env).CODEX_BIN?.trim() || 'codex', instructions = '', model, tools = [], onTool, timeoutMs = 900_000 } = options;
++  if (typeof executable !== 'string' || !executable || typeof instructions !== 'string' ||
++      (model !== undefined && (typeof model !== 'string' || !model.trim()))) throw new Error('Invalid execution runtime or instructions.');
++  const scope = executionScope(options.scope);
++  const environment = executionEnvironment(options.env ?? process.env);
++  const settings = executionSettings(scope, environment);
++  const defaultTimeout = positive(timeoutMs);
++  if (!Array.isArray(tools) || tools.length > 256 || tools.some(tool => !object(tool) ||
++      !/^[A-Za-z0-9_-]{1,128}$/.test(tool.name) || typeof tool.description !== 'string' || !object(tool.inputSchema)) ||
++      new Set(tools.map(t => t.name)).size !== tools.length || (tools.length && typeof onTool !== 'function')) throw new Error('Invalid execution host tools.');
++  const definitions = structuredClone(tools);
++  let runtime, startup, active, closed = false, closing, scratch, identity;
++
++  function kill(state, signal) {
++    try { if (state.child.pid) process.kill(-state.child.pid, signal); } catch { try { state.child.kill(signal); } catch { /* Gone. */ } }
++  }
++  function send(state, message) { if (!state.failed) state.child.stdin.write(JSON.stringify(message) + '\n'); }
++  function fail(state, message) {
++    if (state.failed) return;
++    state.failed = new Error(message);
++    for (const p of state.pending.values()) { clearTimeout(p.timer); p.reject(state.failed); }
++    state.pending.clear();
++    if (active?.dispatched && runtime === state) { active.failure = message; active.done.resolve('uncertain'); }
++    kill(state, 'SIGTERM');
++    state.killTimer = setTimeout(() => kill(state, 'SIGKILL'), 500);
++  }
++  async function stop(state) {
++    if (!state) return;
++    fail(state, 'Execution runtime closed.');
++    await Promise.race([state.exited.promise, new Promise(resolve => setTimeout(resolve, 600))]);
++    kill(state, 'SIGKILL'); clearTimeout(state.killTimer);
++  }
++  function rpc(state, method, params) {
++    if (state.failed) return Promise.reject(state.failed);
++    const id = ++state.id;
++    return new Promise((resolve, reject) => {
++      const timer = setTimeout(() => { fail(state, `Execution protocol timeout (${method}).`); }, 15_000);
++      state.pending.set(id, { resolve, reject, timer }); send(state, { id, method, params });
++    });
++  }
++  async function emit(run, event) {
++    if (run !== active || run.ended || run.controller.signal.aborted) return;
++    await run.onEvent?.(event);
++  }
++  async function receiveEvent(state, m, run) {
++    if (run !== active || run.ended || state.failed) return;
++    const p = m.params;
++    if (m.id !== undefined && p?.threadId === run.threadId && typeof p.turnId !== 'string') {
++      send(state, { id: m.id, error: { code: -32000, message: 'Missing authorized turn identity.' } });
++      fail(state, 'Execution tool request omitted its turn identity. No host action was authorized.'); return;
++    }
++    if (!object(p) || p.threadId !== run.threadId || (p.turnId !== undefined && p.turnId !== run.turnId)) {
++      if (m.id !== undefined) send(state, { id: m.id, error: { code: -32000, message: 'No matching authorized turn.' } });
++      return;
++    }
++    if (m.id !== undefined) {
++      if (m.method !== 'item/tool/call' || !definitions.some(tool => tool.name === p.tool) ||
++          !object(p.arguments) || typeof p.callId !== 'string' || run.calls.has(p.callId) || run.controller.signal.aborted) {
++        send(state, { id: m.id, error: { code: -32000, message: 'Capability not authorized.' } }); return;
++      }
++      run.calls.add(p.callId);
++      const evidence = { kind: 'tool', id: p.callId, name: p.tool, status: 'running' };
++      run.evidence.push(evidence);
++      await emit(run, { type: 'tool', phase: 'started', id: p.callId, name: p.tool, arguments: p.arguments });
++      if (run !== active || run.ended || state.failed || run.controller.signal.aborted) return;
++      const result = await onTool({ name: p.tool, arguments: p.arguments, callId: p.callId, signal: run.controller.signal });
++      if (run !== active || run.ended || state.failed || run.controller.signal.aborted) return;
++      if (!object(result) || typeof result.content !== 'string' || Buffer.byteLength(result.content) > FRAME_LIMIT) throw new Error('Invalid host tool result.');
++      evidence.status = result.isError ? 'failed' : 'completed';
++      await emit(run, { type: 'tool', phase: 'completed', id: p.callId, name: p.tool, content: result.content, isError: !!result.isError });
++      if (result.pause) run.pause = true;
++      send(state, { id: m.id, result: { success: !result.isError, contentItems: [{ type: 'inputText', text: result.content }] } });
++      if (result.pause) void interrupt();
++      return;
++    }
++    if (m.method === 'item/agentMessage/delta') {
++      if (typeof p.delta !== 'string' || typeof p.itemId !== 'string') throw new Error('Invalid execution text event.');
++      await emit(run, { type: 'text', id: p.itemId, text: p.delta });
++    } else if (m.method === 'item/started' || m.method === 'item/completed') {
++      const item = p.item;
++      if (!object(item) || typeof item.id !== 'string') throw new Error('Invalid execution item.');
++      if (item.type === 'agentMessage' && m.method === 'item/completed') {
++        if (typeof item.text !== 'string') throw new Error('Invalid execution answer.');
++        run.messages.set(item.id, item.text);
++        if (item.phase === 'final_answer') run.finalText = item.text;
++        await emit(run, { type: 'message', id: item.id, text: item.text, final: item.phase === 'final_answer' });
++      } else if (['commandExecution', 'fileChange'].includes(item.type)) {
++        const evidence = { kind: item.type === 'commandExecution' ? 'command' : 'file', id: item.id,
++          status: m.method === 'item/started' ? 'running' : item.status,
++          ...(item.command !== undefined ? { command: item.command } : {}),
++          ...(item.exitCode !== undefined ? { exitCode: item.exitCode } : {}),
++          ...(item.aggregatedOutput !== undefined ? { output: item.aggregatedOutput } : {}),
++          ...(item.changes !== undefined ? { changes: item.changes } : {}) };
++        const index = run.evidence.findIndex(e => e.id === item.id);
++        if (index >= 0) run.evidence[index] = evidence; else run.evidence.push(evidence);
++        await emit(run, { type: 'execution', evidence });
++      }
++    } else if (m.method === 'turn/completed' && p.turn?.id === run.turnId) {
++      if (!['completed', 'failed', 'interrupted'].includes(p.turn.status)) throw new Error('Invalid execution completion.');
++      run.failure = p.turn.error ? executionError(p.turn.error) : undefined;
++      run.done.resolve(run.pause ? 'paused' : p.turn.status === 'interrupted' ? 'cancelled' : p.turn.status);
++    }
++  }
++  function receive(state, m) {
++    if (!object(m)) throw new Error('Invalid execution protocol.');
++    if (m.id !== undefined && !m.method) {
++      const p = state.pending.get(m.id);
++      if (!p) return;
++      state.pending.delete(m.id); clearTimeout(p.timer);
++      if (m.error) p.reject(new Error('Codex rejected an execution protocol request.'));
++      else p.resolve(m.result);
++      return;
++    }
++    if (typeof m.method !== 'string') throw new Error('Invalid execution protocol.');
++    const run = active;
++    if (!run || run.ended) {
++      if (m.id !== undefined) send(state, { id: m.id, error: { code: -32000, message: 'No authorized turn.' } });
++      return;
++    }
++    // turn/start may emit events before its response: drain only after binding its ID.
++    run.queue = run.queue.then(async () => { await run.admitted.promise; await receiveEvent(state, m, run); })
++      .catch(() => fail(state, 'Execution event or host tool handling failed; effects may be incomplete.'));
++  }
++  function start(cwd) {
++    const child = spawn(executable, executionArguments(settings), { cwd, env: environment, stdio: ['pipe', 'pipe', 'pipe'], detached: true });
++    const state = { child, id: 0, pending: new Map(), buffer: Buffer.alloc(0), total: 0, exited: deferred() };
++    child.stdout.on('data', chunk => {
++      if (state.failed) return;
++      state.total += chunk.length;
++      if (state.total > TOTAL_LIMIT) { fail(state, 'Execution output exceeded the session limit.'); return; }
++      state.buffer = Buffer.concat([state.buffer, chunk]);
++      while (state.buffer.length) {
++        const index = state.buffer.indexOf(10);
++        if ((index < 0 ? state.buffer.length : index) > FRAME_LIMIT) { fail(state, 'Execution record exceeded the output limit.'); return; }
++        if (index < 0) break;
++        const frame = state.buffer.subarray(0, index); state.buffer = state.buffer.subarray(index + 1);
++        try { receive(state, JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(frame))); }
++        catch { fail(state, 'Invalid execution protocol response.'); return; }
++      }
++    });
++    // Provider logs can contain account data; drain without retaining or surfacing them.
++    child.stderr.resume(); child.stderr.on('error', () => {});
++    child.stdin.on('error', () => fail(state, 'Execution process disconnected.'));
++    child.stdout.on('error', () => fail(state, 'Execution process disconnected.'));
++    child.once('error', () => fail(state, 'Cannot start Codex execution. Check the installed CLI.'));
++    child.once('exit', () => { state.exited.resolve(); fail(state, 'Execution process disconnected; previously dispatched effects are uncertain.'); });
++    return state;
++  }
++  async function initialize(state) {
++    await rpc(state, 'initialize', { clientInfo: { name: 'myown_execution', version: '0.1.0' }, capabilities: { experimentalApi: true } });
++    send(state, { method: 'initialized', params: {} });
++    const account = await rpc(state, 'account/read', { refreshToken: false });
++    if (account?.account?.type !== 'chatgpt') throw new Error('Codex execution requires ChatGPT subscription login. No API fallback is enabled.');
++    verifyExecutionRequirements(await rpc(state, 'configRequirements/read', {}));
++  }
++  async function warm() {
++    if (closed) throw new Error('Execution session is closed.');
++    if (startup) return startup;
++    startup = (async () => {
++      try {
++        const result = await exec(executable, ['--version'], { env: environment, timeout: 5000, maxBuffer: 16384 });
++        if (result.stdout.trim() !== EXECUTION_VERSION) throw new Error(`Unsupported Codex version. Execution requires ${EXECUTION_VERSION}.`);
++        identity = await scopeIdentity(scope);
++        const filesystem = settings[`permissions.${PROFILE}.filesystem`];
++        const originalHome = Object.keys(filesystem).find(path => filesystem[path] === 'deny');
++        const credentialHome = await realpath(originalHome).catch(error => { if (error.code === 'ENOENT') return originalHome; throw error; });
++        if (scope && (scope.cwd === credentialHome || scope.cwd.startsWith(credentialHome + '/'))) throw new Error('Codex credential storage cannot be used as an execution project.');
++        delete filesystem[originalHome]; filesystem[credentialHome] = 'deny';
++        scratch = await mkdtemp(join(tmpdir(), 'myown-execution-'));
++        // Probe configuration before any thread/capability startup. Then explicitly disable inherited MCPs.
++        runtime = start(scratch);
++        await initialize(runtime);
++        const inherited = verifyExecutionConfig(await rpc(runtime, 'config/read', { includeLayers: true }), settings, false);
++        await stop(runtime); runtime = undefined;
++        for (const name of inherited.servers) settings[`mcp_servers.${name}.enabled`] = false;
++        for (const key of inherited.environmentKeys) {
++          if (!Object.hasOwn(settings['shell_environment_policy.set'], key)) settings['shell_environment_policy.set'][key] = '';
++        }
++        runtime = start(scope?.cwd ?? scratch);
++        await initialize(runtime);
++        verifyExecutionConfig(await rpc(runtime, 'config/read', { includeLayers: true, cwd: scope?.cwd ?? scratch }), settings);
++        return { version: EXECUTION_VERSION, nativeExecution: !!scope };
++      } catch (error) { closed = true; await stop(runtime); if (scratch) await rm(scratch, { recursive: true, force: true }); throw error; }
++    })();
++    return startup;
++  }
++  async function interrupt() {
++    const run = active;
++    if (!run || run.ended) return;
++    run.controller.abort();
++    if (!run.turnId) {
++      // Before dispatch nothing could have run. After turn/start is sent, wait
++      // for its acknowledgement and then request/confirm the interruption.
++      if (!run.dispatched) run.done.resolve('cancelled');
++      return;
++    }
++    try {
++      await Promise.race([rpc(runtime, 'turn/interrupt', { threadId: run.threadId, turnId: run.turnId }),
++        new Promise((_, reject) => setTimeout(() => reject(new Error('Cancellation not confirmed.')), 1500))]);
++      setTimeout(() => { if (active === run && !run.ended) fail(runtime, 'Cancellation was not confirmed; effects are uncertain.'); }, 1500).unref();
++    } catch { fail(runtime, 'Cancellation was not confirmed; effects are uncertain.'); }
++  }
++  async function run(options) {
++    if (closed) throw new Error('Execution session is closed.');
++    if (active) throw new Error('An execution turn is already running.');
++    if (!object(options) || typeof options.input !== 'string' || Buffer.byteLength(options.input) > FRAME_LIMIT ||
++        Object.keys(options).some(key => !['input', 'signal', 'timeoutMs', 'onEvent'].includes(key))) throw new Error('Invalid execution input.');
++    if (options.signal?.aborted) throw new Error('Execution request cancelled before dispatch.');
++    const limit = positive(options.timeoutMs ?? defaultTimeout);
++    const state = { done: deferred(), admitted: deferred(), controller: new AbortController(), calls: new Set(),
++      evidence: [], messages: new Map(), queue: Promise.resolve(), onEvent: options.onEvent, ended: false };
++    active = state;
++    const abort = () => { void interrupt(); };
++    options.signal?.addEventListener('abort', abort, { once: true });
++    let timer;
++    try {
++      await warm();
++      if (state.controller.signal.aborted) return { status: 'cancelled', text: '', evidence: [] };
++      if (await scopeIdentity(scope) !== identity) throw new Error('Execution project identity changed; approve the project again.');
++      const thread = await rpc(runtime, 'thread/start', { cwd: scope?.cwd ?? scratch, permissions: PROFILE,
++        approvalPolicy: 'never', modelProvider: 'openai', ...(model ? { model } : {}), ephemeral: true,
++        ...(scope ? { runtimeWorkspaceRoots: [scope.cwd] } : { environments: [] }), selectedCapabilityRoots: [],
++        baseInstructions: instructions || 'Complete the owner request using only authorized tools. Report observed outcomes; never invent execution success.',
++        dynamicTools: definitions.map(tool => ({ type: 'function', ...tool })) });
++      if (typeof thread?.thread?.id !== 'string' || thread.activePermissionProfile?.id !== PROFILE || thread.activePermissionProfile?.extends) throw new Error('Cannot verify thread execution permissions.');
++      state.threadId = thread.thread.id;
++      verifyExecutionConfig(await rpc(runtime, 'config/read', { includeLayers: true, cwd: scope?.cwd ?? scratch }), settings);
++      if (state.controller.signal.aborted) return { status: 'cancelled', text: '', evidence: [] };
++      state.dispatched = true;
++      timer = setTimeout(() => { fail(runtime, 'Execution time limit reached; effects may be incomplete.'); }, limit);
++      const response = await rpc(runtime, 'turn/start', { threadId: state.threadId,
++        input: [{ type: 'text', text: options.input, text_elements: [] }], serviceTierForTurn: 'default' });
++      if (typeof response?.turn?.id !== 'string') throw new Error('Invalid execution turn acknowledgement.');
++      state.turnId = response.turn.id; state.admitted.resolve();
++      if (state.controller.signal.aborted) void interrupt();
++      const status = await state.done.promise;
++      state.ended = true;
++      return { status, text: state.finalText ?? [...state.messages.values()].at(-1) ?? '',
++        evidence: state.evidence, threadId: state.threadId, turnId: state.turnId, ...(state.failure ? { error: state.failure } : {}) };
++    } catch (error) {
++      if (state.dispatched) {
++        closed = true; await stop(runtime);
++        return { status: 'uncertain', text: '', evidence: state.evidence, threadId: state.threadId, turnId: state.turnId, error: 'Execution disconnected after dispatch; inspect effects before retrying.' };
++      }
++      throw error;
++    } finally {
++      clearTimeout(timer); state.ended = true; state.controller.abort(); state.admitted.resolve();
++      options.signal?.removeEventListener('abort', abort);
++      if (runtime?.failed) closed = true;
++      if (!closed && state.threadId) await rpc(runtime, 'thread/unsubscribe', { threadId: state.threadId }).catch(() => {});
++      if (active === state) active = undefined;
++    }
++  }
++  async function close() {
++    if (closing) return closing;
++    closed = true;
++    closing = (async () => { await interrupt(); await startup?.catch(() => {}); await stop(runtime); if (scratch) await rm(scratch, { recursive: true, force: true }); })();
++    return closing;
++  }
++  return { warm, run, interrupt, close };
++}
+diff --git a/tests/execution-session.test.mjs b/tests/execution-session.test.mjs
+new file mode 100644
+index 0000000..d9ce8bc
+--- /dev/null
++++ b/tests/execution-session.test.mjs
+@@ -0,0 +1,139 @@
++import test from 'node:test';
++import assert from 'node:assert/strict';
++import { mkdtemp, symlink, rm, chmod, readFile } from 'node:fs/promises';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { fileURLToPath } from 'node:url';
++import * as api from '../src/index.js';
++
++const fixture = fileURLToPath(new URL('./fixtures/execution-server.mjs', import.meta.url));
++async function session(t, mode = 'normal', options = {}, configured = false) {
++  const dir = await mkdtemp(join(tmpdir(), 'execution-test-'));
++  const executable = join(dir, mode);
++  await chmod(fixture, 0o755);
++  await symlink(fixture, executable);
++  const s = api.createExecutionSession({ ...(configured ? { env: { ...process.env, CODEX_BIN: executable } } : { executable }), timeoutMs: 3000, ...options });
++  t.after(async () => { await s.close(); await rm(dir, { recursive: true, force: true }); });
++  return s;
++}
++
++test('execution is additive and never enables native tools without an execution scope', async t => {
++  assert.equal(typeof api.createExecutionSession, 'function');
++  const s = await session(t);
++  const events = [];
++  const result = await s.run({ input: 'hello', onEvent: event => events.push(event) });
++  assert.equal(result.status, 'completed');
++  assert.equal(result.text, 'Hello.');
++  assert.ok(events.some(e => e.type === 'text' && e.text === 'Hello.'));
++  assert.equal(result.evidence.length, 0);
++});
++
++test('honors the host-configured Codex executable instead of silently using PATH', async t => {
++  const s = await session(t, 'wrong-version', {}, true);
++  await assert.rejects(s.warm(), /Unsupported Codex version/);
++});
++
++test('host tool calls are correlated and their results returned exactly once', async t => {
++  let count = 0;
++  const s = await session(t, 'tool', { tools: [{ name: 'fixture_tool', description: 'fixture', inputSchema: { type: 'object' } }], onTool: async call => { count++; assert.equal(call.arguments.value, 7); return { content: 'observed 7' }; } });
++  const result = await s.run({ input: 'use tool' });
++  assert.equal(result.status, 'completed');
++  assert.equal(count, 1);
++  assert.equal(result.evidence[0].kind, 'tool');
++  assert.equal(result.evidence[0].status, 'completed');
++});
++
++for (const [mode, expected] of [
++  ['wrong-version', /0\.163\.0/], ['api-auth', /ChatGPT/],
++  ['bad-profile', /permission|configuration/i], ['enabled-mcp', /MCP/],
++  ['bad-url', /URL|endpoint/i], ['bad-provider', /endpoint|provider/i], ['invalid-json', /protocol/i],
++  ['oversize', /limit/i],
++]) test(`blocks ${mode} before executing a task`, async t => {
++  const s = await session(t, mode);
++  await assert.rejects(s.run({ input: 'do work' }), expected);
++});
++
++test('process loss after command dispatch is uncertain and cannot replay on the same session', async t => {
++  const s = await session(t, 'crash');
++  const result = await s.run({ input: 'mutate' });
++  assert.equal(result.status, 'uncertain');
++  assert.equal(result.evidence[0].kind, 'command');
++  await assert.rejects(s.run({ input: 'mutate again' }), /closed|unavailable/i);
++});
++
++test('cancellation stops an active turn and rejects concurrent dispatch', async t => {
++  const s = await session(t, 'wait');
++  await s.warm();
++  const controller = new AbortController();
++  const result = s.run({ input: 'wait', signal: controller.signal });
++  await assert.rejects(s.run({ input: 'overlap' }), /active|running/i);
++  setTimeout(() => controller.abort(), 100);
++  assert.equal((await result).status, 'cancelled');
++});
++
++test('cancellation before a dispatched turn acknowledgement still requires a confirmed stop', async t => {
++  const s = await session(t, 'delayed-start');
++  await s.warm();
++  const controller = new AbortController();
++  const result = s.run({ input: 'work', signal: controller.signal });
++  setTimeout(() => controller.abort(), 100);
++  assert.equal((await result).status, 'uncertain');
++});
++
++test('cancellation during an awaited event callback prevents the host effect', async t => {
++  let effects = 0;
++  const s = await session(t, 'tool', { tools: [{ name: 'fixture_tool', description: 'fixture', inputSchema: { type: 'object' } }], onTool: async () => { effects++; return { content: 'done' }; } });
++  const controller = new AbortController();
++  await s.run({ input: 'work', signal: controller.signal, onEvent: async event => {
++    if (event.type === 'tool') { controller.abort(); await new Promise(resolve => setTimeout(resolve, 50)); }
++  } });
++  assert.equal(effects, 0);
++});
++
++test('a tool call without a matching turn identity cannot invoke the host', async t => {
++  let effects = 0;
++  const s = await session(t, 'missing-turn', { tools: [{ name: 'fixture_tool', description: 'fixture', inputSchema: { type: 'object' } }], onTool: async () => { effects++; return { content: 'done' }; } });
++  assert.equal((await s.run({ input: 'work' })).status, 'uncertain');
++  assert.equal(effects, 0);
++});
++
++test('timeouts never retry potentially dispatched work', async t => {
++  const s = await session(t, 'wait');
++  const result = await s.run({ input: 'wait', timeoutMs: 100 });
++  assert.equal(result.status, 'uncertain');
++});
++
++test('reports a subscription limit precisely without leaking provider diagnostic text or falling back', async t => {
++  const s = await session(t, 'quota');
++  const result = await s.run({ input: 'hello' });
++  assert.equal(result.status, 'failed');
++  assert.match(result.error, /subscription.*limit/i);
++  assert.doesNotMatch(result.error, /private provider/);
++});
++
++test('cancellation of a hung host callback stays uncertain and bounded', async t => {
++  let entered;
++  const ready = new Promise(resolve => { entered = resolve; });
++  const s = await session(t, 'tool', { tools: [{ name: 'fixture_tool', description: 'fixture', inputSchema: { type: 'object' } }], onTool: async () => { entered(); return new Promise(() => {}); } });
++  const controller = new AbortController();
++  const pending = s.run({ input: 'work', signal: controller.signal });
++  await ready; controller.abort();
++  assert.equal((await pending).status, 'uncertain');
++});
++
++test('foreign and late tool requests cannot invoke host capabilities', async t => {
++  let count = 0;
++  const s = await session(t, 'foreign', { tools: [{ name: 'fixture_tool', description: 'fixture', inputSchema: { type: 'object' } }], onTool: async () => { count++; return { content: 'no' }; } });
++  assert.equal((await s.run({ input: 'go' })).status, 'completed');
++  assert.equal(count, 0);
++});
++
++test('a host permission request pauses the turn without claiming completion', async t => {
++  const s = await session(t, 'tool', { tools: [{ name: 'fixture_tool', description: 'fixture', inputSchema: { type: 'object' } }], onTool: async () => ({ content: 'approval required', pause: true }) });
++  assert.equal((await s.run({ input: 'request' })).status, 'paused');
++});
++
++test('native project execution requires a canonical directory and explicit run authorization', async () => {
++  assert.throws(() => api.createExecutionSession({ scope: { cwd: '/tmp', access: 'readwrite' } }), /execution|execute|scope/i);
++  assert.throws(() => api.createExecutionSession({ scope: { cwd: '/', access: 'execute' } }), /root|scope/i);
++});
+diff --git a/tests/fixtures/execution-server.mjs b/tests/fixtures/execution-server.mjs
+new file mode 100755
+index 0000000..663565e
+--- /dev/null
++++ b/tests/fixtures/execution-server.mjs
+@@ -0,0 +1,56 @@
++#!/usr/bin/env node
++import { createInterface } from 'node:readline';
++import { basename } from 'node:path';
++const mode = basename(process.argv[1]);
++if (process.argv.includes('--version')) { console.log(mode === 'wrong-version' ? 'codex-cli 0.1.0' : 'codex-cli 0.163.0'); process.exit(0); }
++const config = { mcp_servers: { inherited: { enabled: true } }, shell_environment_policy: { set: { UNAPPROVED_SECRET: 'fixture-secret' } } };
++for (let i = 0; i < process.argv.length; i++) if (process.argv[i] === '-c') {
++  const value = process.argv[++i]; const eq = value.indexOf('=');
++  const keys = value.slice(0, eq).split('.'); let target = config;
++  while (keys.length > 1) { const key = keys.shift(); target = target[key] ??= {}; }
++  const raw = value.slice(eq + 1);
++  const parsed = JSON.parse(raw.startsWith('{') ? raw.replace(/"\s*=/g, '":') : raw);
++  target[keys[0]] = parsed && !Array.isArray(parsed) && typeof parsed === 'object' ? { ...target[keys[0]], ...parsed } : parsed;
++}
++const send = m => process.stdout.write(JSON.stringify(m) + '\n');
++const reply = (m, result) => send({ id: m.id, result });
++const event = (method, params) => send({ method, params: { threadId: 'thread-1', turnId: 'turn-1', ...params } });
++const done = status => event('turn/completed', { turn: { id: 'turn-1', status, error: null } });
++function finish() { event('item/agentMessage/delta', { itemId: 'message-1', delta: 'Hello.' }); event('item/completed', { item: { type: 'agentMessage', id: 'message-1', text: 'Hello.', phase: 'final_answer' } }); done('completed'); }
++createInterface({ input: process.stdin }).on('line', line => {
++  const m = JSON.parse(line);
++  if (m.id === 900 && !m.method) { if (!m.result?.contentItems?.[0]?.text) process.exit(3); finish(); return; }
++  if (m.id === 901 && !m.method) { finish(); return; }
++  switch (m.method) {
++    case 'initialize': reply(m, { userAgent: 'fixture' }); break;
++    case 'account/read': reply(m, { account: { type: mode === 'api-auth' ? 'apiKey' : 'chatgpt' } }); break;
++    case 'configRequirements/read': reply(m, { requirements: null }); break;
++    case 'config/read': {
++      const c = structuredClone(config);
++      if (mode === 'bad-profile') c.permissions.dots_execution.filesystem['/'] = 'write';
++      if (mode === 'enabled-mcp') c.mcp_servers.inherited.enabled = true;
++      if (mode === 'bad-url') c.chatgpt_base_url = 'https://example.invalid';
++      if (mode === 'bad-provider') c.model_providers = { openai: { base_url: 'https://example.invalid' } };
++      if (mode === 'invalid-json') { process.stdout.write('bad\n'); break; }
++      if (mode === 'oversize') { process.stdout.write('x'.repeat(2 * 1024 * 1024)); break; }
++      reply(m, { config: c }); break;
++    }
++    case 'thread/start':
++      if (!m.params.permissions || !m.params.ephemeral || !Array.isArray(m.params.environments)) process.exit(4);
++      if (config.shell_environment_policy.set.UNAPPROVED_SECRET !== '') process.exit(5);
++      reply(m, { thread: { id: 'thread-1' }, activePermissionProfile: { id: 'dots_execution', extends: null } }); break;
++    case 'turn/start':
++      if (mode === 'delayed-start') { setTimeout(() => reply(m, { turn: { id: 'turn-1', status: 'inProgress' } }), 300); break; }
++      reply(m, { turn: { id: 'turn-1', status: 'inProgress' } });
++      setTimeout(() => {
++        if (mode === 'quota') { event('turn/completed', { turn: { id: 'turn-1', status: 'failed', error: { codexErrorInfo: 'usageLimitExceeded', message: 'private provider diagnostic' } } }); return; }
++        if (mode === 'crash') { event('item/started', { item: { type: 'commandExecution', id: 'command-1', command: 'touch fixture', status: 'inProgress' } }); setTimeout(() => process.exit(1), 10); }
++        else if (mode === 'tool' && config.features.code_mode_host !== true) { event('item/completed', { item: { type: 'agentMessage', id: 'message-1', text: 'Blocked: code-mode host is disabled', phase: 'final_answer' } }); done('completed'); }
++        else if (['tool', 'missing-turn'].includes(mode)) send({ id: 900, method: 'item/tool/call', params: { threadId: 'thread-1', ...(mode === 'tool' ? { turnId: 'turn-1' } : {}), callId: 'call-1', tool: 'fixture_tool', arguments: { value: 7 } } });
++        else if (mode === 'foreign') send({ id: 901, method: 'item/tool/call', params: { threadId: 'foreign', turnId: 'turn-1', callId: 'call-1', tool: 'fixture_tool', arguments: {} } });
++        else if (mode !== 'wait') finish();
++      }, 10); break;
++    case 'turn/interrupt': reply(m, {}); if (mode !== 'delayed-start') done('interrupted'); break;
++    case 'thread/unsubscribe': reply(m, {}); break;
++  }
++});

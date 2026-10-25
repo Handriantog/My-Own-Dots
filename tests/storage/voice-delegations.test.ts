@@ -136,6 +136,47 @@ it('returns busy for another accepted task without creating a thread or job', as
   expect(await f.jobs.get('another')).toBeNull();
 });
 
+it('durably queues Codex voice requests without discarding the next request', async () => {
+  const f = await fixture();
+  await f.jobs.enqueue(f.input, true);
+  const next = {
+    ...f.input,
+    id: 'second',
+    utteranceId: 'second',
+    workerThreadId: 'second-worker',
+  };
+  expect(await f.jobs.enqueue(next, true)).toMatchObject({
+    kind: 'created',
+    job: { status: 'queued', id: 'second' },
+  });
+  expect((await f.jobs.list({ active: true })).map((job) => job.id)).toEqual([
+    'job',
+    'second',
+  ]);
+  expect((await f.jobs.enqueue(next, true)).kind).toBe('existing');
+});
+
+it('accepts historical schema-5 backups that do not contain execution bindings', async () => {
+  const f = await fixture();
+  const source = new DatabaseSync(f.database);
+  source.exec(
+    "DROP TABLE voice_input_receipts; DELETE FROM workspace_storage_schema WHERE version > 5; DROP INDEX voice_delegations_active_dot; CREATE UNIQUE INDEX voice_delegations_active_dot ON voice_delegations(owner_id,dot_id) WHERE status IN ('queued','running','approval');",
+  );
+  source.exec('DROP TABLE project_execution_bindings');
+  source.close();
+  const target = join(f.root, 'historical-copy.sqlite');
+  await expect(
+    copyValidatedSQLite(
+      f.database,
+      target,
+      f.ownerId,
+      new AbortController().signal,
+      'sqlite',
+      5,
+    ),
+  ).resolves.toBeUndefined();
+});
+
 async function awaitingFolder(
   f: Awaited<ReturnType<typeof fixture>>,
   otherApproval = false,
@@ -459,12 +500,12 @@ it('fails cleanly on the legacy backend without adding delegation schema', async
   db.close();
 });
 
-it('restores known schema-2 history into schema 5 without mutating the source', async () => {
+it('restores known schema-2 history into schema 6 without mutating the source', async () => {
   const f = await fixture();
   await f.storage.close();
   const old = new DatabaseSync(f.database);
   old.exec(
-    'DROP TABLE voice_delegations; DROP TRIGGER ability_deleted_dot; DROP TABLE ability_cleanup; DROP TABLE ability_receipts; DROP TABLE ability_bindings; DROP TABLE ability_installations; DROP TABLE ability_packages; DELETE FROM workspace_storage_schema WHERE version>=3',
+    'DROP TABLE voice_input_receipts; DROP TABLE voice_delegations; DROP TRIGGER ability_deleted_dot; DROP TABLE ability_cleanup; DROP TABLE ability_receipts; DROP TABLE ability_bindings; DROP TABLE ability_installations; DROP TABLE ability_packages; DELETE FROM workspace_storage_schema WHERE version>=3',
   );
   old.close();
   const destination = join(f.root, 'restored');
@@ -485,7 +526,7 @@ it('restores known schema-2 history into schema 5 without mutating the source', 
     restored
       .prepare('SELECT max(version) AS version FROM workspace_storage_schema')
       .get()!.version,
-  ).toBe(5);
+  ).toBe(6);
   expect(
     restored.prepare('SELECT count(*) AS n FROM voice_delegations').get()!.n,
   ).toBe(0);
@@ -508,7 +549,7 @@ it('rejects a schema-2 archive with an unknown table before upgrading it', async
   await f.storage.close();
   const db = new DatabaseSync(f.database);
   db.exec(
-    'DROP TABLE voice_delegations; DELETE FROM workspace_storage_schema WHERE version=3; CREATE TABLE unexpected(value TEXT)',
+    'DROP TABLE voice_input_receipts; DROP TABLE voice_delegations; DELETE FROM workspace_storage_schema WHERE version=3; CREATE TABLE unexpected(value TEXT)',
   );
   db.close();
   await expect(
@@ -593,7 +634,7 @@ it('atomically updates a known workspace manifest after runtime schema upgrade',
   await updateWorkspaceManifestSchema(f.root, f.ownerId);
   expect(await readWorkspaceManifest(f.root)).toEqual({
     ...identity,
-    schema: 5,
+    schema: 6,
   });
   await updateWorkspaceManifestSchema(f.root, f.ownerId);
   await expect(
@@ -878,4 +919,67 @@ it('withholds delegated context when a referenced page is deleted', async () => 
     available: false,
     messages: [],
   });
+});
+
+it('deduplicates busy voice input and interrupts unprocessed requests on restart', async () => {
+  const f = await fixture();
+  const input = {
+    id: 'busy',
+    dotId: f.input.dotId,
+    callId: f.input.callId,
+    parentThreadId: 'parent',
+    caption: 'Inspect the project',
+    kind: 'request' as const,
+    reply: 'Received.',
+  };
+  expect((await f.jobs.receiveInput(input)).created).toBe(true);
+  expect((await f.jobs.receiveInput(input)).created).toBe(false);
+  await expect(
+    f.jobs.receiveInput({ ...input, caption: 'Different task' }),
+  ).rejects.toThrow(/identity/);
+  await f.jobs.recover();
+  expect(await f.jobs.pendingInputs()).toEqual([
+    expect.objectContaining({
+      status: 'interrupted',
+      reply: expect.stringMatching(/restart/),
+    }),
+  ]);
+  await f.jobs.deliverInput(input.id);
+  expect(await f.jobs.pendingInputs()).toEqual([]);
+});
+
+it('atomically prevents conversion after input cancellation and cancels an already converted queued job', async () => {
+  for (const converted of [false, true]) {
+    const f = await fixture();
+    const input = {
+      id: f.input.utteranceId,
+      dotId: f.input.dotId,
+      callId: f.input.callId,
+      parentThreadId: 'parent',
+      caption: f.input.sourceText,
+      kind: 'request' as const,
+      reply: 'Received.',
+    };
+    await f.jobs.receiveInput(input);
+    if (converted) await f.jobs.enqueue(f.input, true);
+    const result = await f.jobs.cancelInput(input.id);
+    if (converted) expect(result?.status).toBe('cancelled');
+    await expect(f.jobs.enqueue(f.input, true)).rejects.toThrow(/cancelled/);
+    expect(await f.jobs.list({ active: true })).toEqual([]);
+  }
+});
+it('retires pending input atomically when its conversation moves to Trash', async () => {
+  const f = await fixture();
+  await f.jobs.receiveInput({
+    id: 'pending',
+    dotId: f.input.dotId,
+    callId: f.input.callId,
+    parentThreadId: 'parent',
+    caption: 'Hello',
+    kind: 'request',
+    reply: 'Received.',
+  });
+  await f.workspace.setCall(f.input.callId, 'ended', '');
+  await f.workspace.deleteConversation('parent');
+  expect(await f.jobs.pendingInputs()).toEqual([]);
 });

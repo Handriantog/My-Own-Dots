@@ -1,0 +1,136 @@
+{
+  "date": "2026-10-25",
+  "reportTimezone": "Asia/Singapore",
+  "scope": "Selected evidence for the agent reliability postmortem; not a production reliability benchmark.",
+  "baseCommit": "ea27e2a11bd552a905e83b4a606c8e89ba26d4d0",
+  "workingTree": "fix/dot-runtime-reliability; repairs uncommitted at report time",
+  "checks": {
+    "initialRepairFullSuiteBeforeShutdownFix": {
+      "passed": 2311,
+      "skipped": 96,
+      "source": "artifacts/runtime-reliability/full-final.log"
+    },
+    "initialRepairMacOSAbilitySuite": {
+      "passed": 626,
+      "skipped": 0,
+      "source": "artifacts/runtime-reliability/ability-acceptance-final.log"
+    },
+    "finalShutdownFixFocusedSuite": {
+      "passed": 134,
+      "skipped": 0,
+      "source": "artifacts/runtime-reliability/picker-shutdown-green.log"
+    },
+    "realElectronShutdownProbe": "Real Electron closed-window picker cleanup passed for destroy and replacement.",
+    "databaseCheckBlocker": "\u2717 Failed to start Docker Desktop\nDocker Desktop is still starting: context deadline exceeded",
+    "finalPackageSmoke": {
+      "verifiedRuntimes": ["native", "node", "python"],
+      "bundleFiles": [
+        "abilities",
+        "ability-runtime.cjs",
+        "app",
+        "approval-preload.cjs",
+        "archive-worker.cjs",
+        "chat-preload.cjs",
+        "icon.icns",
+        "main.cjs",
+        "menu-preload.cjs",
+        "native",
+        "package.json",
+        "preload.cjs",
+        "renderer",
+        "settings-preload.cjs"
+      ],
+      "copiedApp": true,
+      "transport": "offline-fixture",
+      "signing": "verified",
+      "spotifyHelper": "offline-validated"
+    }
+  },
+  "routerEvaluation": {
+    "baselinePassed": 63,
+    "candidatePassed": 68,
+    "total": 70,
+    "regressions": [],
+    "remainingFailures": [
+      {
+        "id": "hypothetical-file",
+        "utterance": "If I wanted to create a file, would that require permission?",
+        "route": "chat",
+        "history": [],
+        "taskStatus": "none",
+        "actual": "clarify",
+        "pass": false,
+        "seconds": 1.826
+      },
+      {
+        "id": "unclear-followup",
+        "utterance": "Yes, go ahead.",
+        "route": "clarify",
+        "history": [],
+        "taskStatus": "none",
+        "actual": "chat",
+        "pass": false,
+        "seconds": 1.844
+      }
+    ],
+    "shippedRouterMatchesEvaluation": true,
+    "conversationPromptUnchanged": true,
+    "routerPromptSha256": "860edabd1a188a7ba54e37ba472aa394afd3791466a841a240aba117eb3854e6"
+  },
+  "selectedDesktopHealth": [
+    {
+      "at": "2026-10-24T16:37:55.585Z",
+      "event": "status",
+      "details": {
+        "status": "Floor-only \u00b7 allow this app in Accessibility"
+      }
+    },
+    {
+      "at": "2026-10-24T16:38:00.542Z",
+      "event": "health",
+      "details": {
+        "status": "Floor-only \u00b7 allow this app in Accessibility",
+        "accessibility": false,
+        "rendererReady": true,
+        "restarts": 0
+      }
+    },
+    {
+      "at": "2026-10-24T16:57:57.143Z",
+      "event": "startup",
+      "details": {
+        "accessibility": true
+      }
+    },
+    {
+      "at": "2026-10-24T16:58:02.181Z",
+      "event": "health",
+      "details": {
+        "status": "Window playground active",
+        "accessibility": true,
+        "rendererReady": true,
+        "restarts": 0
+      }
+    }
+  ],
+  "preexistingShutdownCode": {
+    "revision": "HEAD before uncommitted reliability repairs",
+    "picker": {
+      "path": "src/desktop/host/folder-picker.ts",
+      "line": 155,
+      "code": "window.webContents.removeListener('did-start-navigation', navigating);"
+    },
+    "approvalWindow": {
+      "path": "src/desktop/host/folder-approval-window.ts",
+      "line": 122,
+      "code": "return !!this.window?.isVisible() && !this.window.isDestroyed();"
+    }
+  },
+  "evidenceLimits": [
+    "Earlier incidents are linked to their existing verification records; they were not replayed during postmortem writing.",
+    "Router fixtures were used during prompt development, so gains are regression evidence, not held-out accuracy.",
+    "The full suite was not rerun after the final three shutdown regressions were added; the focused suite and native/package checks cover that follow-up.",
+    "This session has not verified final live Mouse Mover behavior after permission renewal.",
+    "Raw artifacts are local ignored files. This selected summary preserves non-secret results without owner chat contents or workspace identifiers."
+  ]
+}

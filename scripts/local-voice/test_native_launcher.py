@@ -14,6 +14,20 @@ spec.loader.exec_module(launcher)
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS sandbox acceptance")
 class SandboxTests(unittest.TestCase):
+    def test_speech_only_launcher_does_not_require_a_router(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            scripts = root / "scripts"
+            scripts.mkdir()
+            (root / "venv/bin").mkdir(parents=True)
+            (root / "venv/bin/python").symlink_to(sys.executable)
+            shutil.copyfile(Path(__file__).with_name("native_launcher.py"), scripts / "native_launcher.py")
+            (scripts / "native-models.json").write_text(json.dumps({"audio": {"revision": "fixture"}}))
+            (scripts / "native_worker.py").write_text("import sys; print('speech-only' if '--router-model' not in sys.argv else 'router')\n")
+            result = subprocess.run([sys.executable, str(scripts / "native_launcher.py"), "--runtime-root", str(root), "--speech-only"], capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), b"speech-only")
+
     def test_worker_starts_from_private_cache_when_app_cwd_is_denied(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()

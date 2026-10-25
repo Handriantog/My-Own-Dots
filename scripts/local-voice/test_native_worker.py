@@ -3,10 +3,17 @@ import base64
 import hashlib
 import importlib.util
 import io
+import os
+import signal
+import sys
+import time
 import json
 from pathlib import Path
 import tempfile
 import unittest
+import subprocess
+import wave
+from unittest.mock import patch
 from types import SimpleNamespace
 
 spec = importlib.util.spec_from_file_location("native_worker", Path(__file__).with_name("native_worker.py"))
@@ -140,16 +147,34 @@ class NativeWorkerTests(unittest.TestCase):
             with self.subTest(raw=raw, ended=ended):
                 self.assertEqual(runtime.route("What is happening?", [], "none"), "clarify")
 
+    def test_speech_only_recognizes_without_loading_or_calling_a_router(self):
+        runtime = object.__new__(worker.LfmRuntime)
+        runtime.speech_only = True
+        runtime.np = SimpleNamespace(frombuffer=lambda *args, **kwargs: [1] * 1600, any=any)
+        runtime.mx = SimpleNamespace(eval=lambda value: None, clear_cache=lambda: None)
+        runtime.Modality = SimpleNamespace(TEXT="text")
+        runtime.text_eos = 7
+        runtime.audio = SimpleNamespace(generate_sequential=lambda **kwargs: iter([
+            (SimpleNamespace(item=lambda: 1), "text"), (SimpleNamespace(item=lambda: 7), "text"),
+        ]))
+        runtime.tokenizer = SimpleNamespace(decode=lambda *args, **kwargs: "Can you debug this project?")
+        runtime.chat = lambda *args, **kwargs: {}
+        self.assertEqual(runtime.interpret(b"original-audio", [], "none"),
+                         {"text": "Can you debug this project?", "route": "delegate"})
+
     def test_dense_history_is_trimmed_by_tokens_without_changing_current_caption(self):
         runtime = object.__new__(worker.LfmRuntime)
         runtime.router_tokenizer = SimpleNamespace(encode=lambda text, **kwargs: list(text.encode('utf8')))
-        history = [{'role': 'assistant', 'text': str(i) + 'é' * 1999} for i in range(4)]
+        history = [{'role': 'assistant', 'text': str(i) + 'é' * 1999} for i in range(3)]
+        # The latest turn fits beside the routing instructions; the full history
+        # still exceeds the byte-token fixture's budget and must trim old turns.
+        history.append({'role': 'assistant', 'text': '3' + 'é' * 999})
         worker.validate_history(history)
         prompts = []
         def generate(prompt, max_tokens, max_input):
             self.assertLessEqual(len(runtime.router_tokenizer.encode(prompt)), max_input)
             self.assertNotIn('0' + 'é' * 1999, prompt)
-            self.assertIn('3' + 'é' * 1999, prompt)
+            self.assertIn('3' + 'é' * 999, prompt)
             self.assertIn('What time is it?', prompt)
             prompts.append(prompt)
             return ('{"route":"clock"}' if max_tokens == 48 else 'Let me check.'), True
@@ -258,6 +283,129 @@ class NativeWorkerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             runtime.speak('Your task needs approval.')
         self.assertEqual(runtime.audio._sample_text_token(), [-1])
+
+    def system_speech_runtime(self):
+        runtime = object.__new__(worker.LfmRuntime)
+        runtime.speech_only = True
+        runtime.render_reply = lambda *args: self.fail("Speech-only TTS incorrectly entered conversational interleaving")
+        return runtime
+
+    def write_system_wav(self, command, **kwargs):
+        self.assertEqual(command[:5], ["/usr/bin/say", "-v", "Samantha", "-r", "180"])
+        self.assertEqual(command[5], "-o")
+        self.assertEqual(command[7:], ["--file-format=WAVE", "--data-format=LEI16@24000", "-f", "-"])
+        self.assertTrue(kwargs["check"])
+        self.assertLessEqual(kwargs["timeout"], 30)
+        self.assertEqual(kwargs["stdout"], subprocess.DEVNULL)
+        self.assertEqual(kwargs["stderr"], subprocess.DEVNULL)
+        with wave.open(command[6], "wb") as output:
+            output.setnchannels(1); output.setsampwidth(2); output.setframerate(24000)
+            output.writeframes(b"\1\0" * 240)
+
+    def test_speech_only_uses_file_synthesis_preserving_exact_authoritative_input(self):
+        runtime = self.system_speech_runtime()
+        for text, expected_input in (
+            ("Exact  check.mjs.", b"Exact  check.mjs."),
+            ('Brackets [x], "$PWD", $(touch NEVER), `code`, and a + b.',
+             b'Brackets [x], "$PWD", $(touch NEVER), `code`, and a + b.'),
+        ):
+            def synthesize(command, **kwargs):
+                self.assertEqual(kwargs["input"], expected_input)
+                self.write_system_wav(command, **kwargs)
+            with self.subTest(text=text), patch.object(subprocess, "run", synthesize):
+                self.assertEqual(runtime.speak(text),
+                                 {"text": text, "pcm": base64.b64encode(b"\1\0" * 240).decode()})
+
+    def test_speech_only_warm_rejects_missing_system_voice_before_model_loading(self):
+        for voices in (b"", b"SamanthaX en_US # unrelated\n", b"Samantha en_GB # wrong locale\n"):
+            with self.subTest(voices=voices), \
+                    patch.object(subprocess, "run", return_value=SimpleNamespace(stdout=voices)), \
+                    patch.object(worker, "verify_assets", side_effect=AssertionError("Model loaded before voice preflight")), \
+                    self.assertRaisesRegex(ValueError, "^Native system speech is not ready$"):
+                worker.LfmRuntime(Path("unused-before-preflight"))
+        failures = [
+            FileNotFoundError("say unavailable"),
+            subprocess.TimeoutExpired("say", 5),
+            [SimpleNamespace(stdout=b"Samantha en_US # installed\n"),
+             subprocess.CalledProcessError(1, "say")],
+        ]
+        for failure in failures:
+            with self.subTest(failure=failure), patch.object(subprocess, "run", side_effect=failure), \
+                    patch.object(worker, "verify_assets", side_effect=AssertionError("Model loaded before voice preflight")), \
+                    self.assertRaisesRegex(ValueError, "^Native system speech is not ready$"):
+                worker.LfmRuntime(Path("unused-before-preflight"))
+
+    @unittest.skipUnless(os.name == "posix", "Requires POSIX process signals")
+    def test_termination_reaps_file_synthesizer_and_removes_private_wav(self):
+        # Real subprocesses, synthetic bytes only. The replacement synthesizer
+        # writes a private WAV-shaped file, then waits until its parent cancels.
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "marker.json"
+            source = r'''import importlib.util,json,os,subprocess,sys
+from pathlib import Path
+spec=importlib.util.spec_from_file_location("worker",sys.argv[1]);worker=importlib.util.module_from_spec(spec);spec.loader.exec_module(worker)
+original=subprocess.run
+child_code="import json,os,sys,time; from pathlib import Path; p=Path(sys.argv[1]); p.write_bytes(b'synthetic-private-audio'); m=Path(sys.argv[2]); m.with_suffix('.tmp').write_text(json.dumps({'pid':os.getpid(),'wav':str(p)})); m.with_suffix('.tmp').replace(m); time.sleep(30)"
+def synthesize(command,**kwargs):
+    return original([sys.executable,"-c",child_code,command[6],sys.argv[2]],**kwargs)
+subprocess.run=synthesize
+worker.system_speech("Synthetic cancellation probe.")
+'''
+            parent = subprocess.Popen([sys.executable, "-c", source, worker.__file__, str(marker)],
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            child = None
+            try:
+                deadline = time.monotonic() + 5
+                while not marker.exists() and time.monotonic() < deadline and parent.poll() is None:
+                    time.sleep(0.01)
+                self.assertTrue(marker.exists(), "Synthetic child did not start")
+                state = json.loads(marker.read_text()); child = state["pid"]
+                parent.send_signal(signal.SIGTERM)
+                parent.wait(timeout=5)
+                self.assertFalse(Path(state["wav"]).parent.exists(), "Private WAV survived cancellation")
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(child, 0)
+            finally:
+                if parent.poll() is None:
+                    parent.kill(); parent.wait()
+                if child is not None:
+                    try:
+                        os.kill(child, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                if marker.exists():
+                    orphan = Path(json.loads(marker.read_text())["wav"])
+                    orphan.unlink(missing_ok=True)
+                    try:
+                        orphan.parent.rmdir()
+                    except FileNotFoundError:
+                        pass
+
+    def test_system_speech_rejects_bad_wav_and_never_falls_back_or_returns_silence(self):
+        runtime = self.system_speech_runtime()
+        for channels, width, rate, pcm in ((2, 2, 24000, b"\1\0" * 240),
+                                           (1, 1, 24000, b"\1" * 240),
+                                           (1, 2, 16000, b"\1\0" * 240),
+                                           (1, 2, 24000, b""),
+                                           (1, 2, 24000, b"\0" * 480),
+                                           (1, 2, 24000, b"\1\0" * 720001)):
+            def synthesize(command, **kwargs):
+                with wave.open(command[6], "wb") as output:
+                    output.setnchannels(channels); output.setsampwidth(width); output.setframerate(rate)
+                    output.writeframes(pcm)
+            with self.subTest(channels=channels, width=width, rate=rate, length=len(pcm)), \
+                    patch.object(subprocess, "run", synthesize), self.assertRaises(ValueError):
+                runtime.speak("Exact  check.mjs.")
+        for error in (subprocess.TimeoutExpired("say", 30), subprocess.CalledProcessError(1, "say")):
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(subprocess, "run", side_effect=error), self.assertRaises(type(error)):
+                runtime.speak("Exact  check.mjs.")
+
+    def test_system_speech_rejects_embedded_commands_before_execution(self):
+        runtime = self.system_speech_runtime()
+        with patch.object(subprocess, "run", side_effect=AssertionError("Unsafe text executed")):
+            with self.assertRaises(ValueError):
+                runtime.speak("Hello [[slnc 10000]] world.")
 
     def test_bounds_protocol_lines_and_rejects_truncation(self):
         for data in (b"x" * 2000001, b'{"id":1,"method":"warm"}'):

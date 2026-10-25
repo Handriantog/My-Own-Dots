@@ -3,6 +3,7 @@ import { ReviewDisclosure } from './ReviewDisclosure';
 import { Check, FolderOpen } from 'lucide-react';
 import {
   folderApprovalSchema,
+  folderPermissionLabel as permissionLabel,
   type FolderAccess,
   type FolderDecision,
   type FolderRequestDetail,
@@ -20,9 +21,6 @@ type FolderAccessCardProps = {
   toolCallId: string;
   compact?: boolean;
 };
-const permissionLabel = (access: FolderAccess) =>
-  access === 'readwrite' ? 'Read and write' : 'Read only';
-
 export function FolderAccessCard(props: FolderAccessCardProps) {
   const parsed = folderApprovalSchema.safeParse(props.args);
   if (!parsed.success)
@@ -56,6 +54,7 @@ function FolderAccessReview({
   const [attempt, setAttempt] = useState(0);
   const [resolving, setResolving] = useState(false);
   const resolutionRequested = useRef(false);
+  const proposedAccess = useRef(false);
   const pending = useRef(false);
   const revision = useRef(0);
   const mounted = useRef(true);
@@ -87,7 +86,14 @@ function FolderAccessReview({
       const version = revision.current;
       try {
         const value = validate(await api<FolderRequestDetail>(base));
-        if (active && version === revision.current) setDetail(value);
+        if (active && version === revision.current) {
+          if (!proposedAccess.current) {
+            proposedAccess.current = true;
+            if (value.request.requestedAccess === 'execute')
+              setAccess('execute');
+          }
+          setDetail(value);
+        }
       } catch (cause) {
         if (active && version === revision.current)
           setError(
@@ -269,6 +275,7 @@ function FolderAccessReview({
             >
               <option value="read">Read only</option>
               <option value="readwrite">Read and write</option>
+              <option value="execute">Read, edit and run commands</option>
             </select>
             <button
               type="button"
@@ -373,7 +380,7 @@ function FolderAccessReview({
         <div className="page-review-body">
           {detail && (
             <>
-              {detail.request.folderHint && (
+              {!selection && detail.request.folderHint && (
                 <p>Suggested folder: {detail.request.folderHint}</p>
               )}
               <p>
@@ -402,6 +409,7 @@ function FolderAccessReview({
                   >
                     <option value="read">Read only</option>
                     <option value="readwrite">Read and write</option>
+                    <option value="execute">Read, edit and run commands</option>
                   </select>
                 </label>
               )}

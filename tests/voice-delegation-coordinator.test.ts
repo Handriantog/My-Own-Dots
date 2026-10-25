@@ -46,6 +46,19 @@ function finishedSnapshot(
   };
 }
 
+it('preserves uncertainty even when the owner requested a stop', () => {
+  const snapshot = finishedSnapshot([], []);
+  snapshot.lastRun!.status = 'stopped';
+  snapshot.lastRun!.events = [
+    {
+      type: EventType.RUN_ERROR,
+      code: 'EXECUTION_UNCERTAIN',
+      message: 'Provider stop unconfirmed.',
+    },
+  ];
+  expect(delegatedOutcome(snapshot)).toMatchObject({ status: 'interrupted' });
+});
+
 it('returns the last current-run assistant answer even when tool results follow it', () => {
   const input: Message[] = [
     { id: 'request', role: 'user', content: 'List the project folder.' },

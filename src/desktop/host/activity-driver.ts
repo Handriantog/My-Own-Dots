@@ -4,6 +4,7 @@ import {
   type ActivityDefinition,
   type ActivityDriver,
   type ActivityStatus,
+  type ActivityStopReason,
 } from '../../shared/abilities/activity.js';
 import type {
   DesktopDisplay,
@@ -33,6 +34,7 @@ export interface ActivityEnvironment {
   now(): number;
   selectedDot(): string | undefined;
   available(): boolean;
+  unavailableReason?(): ActivityStopReason;
   accessibility(): boolean;
   display(point: Point): DesktopDisplay;
   frame(): SimulationFrame;
@@ -58,6 +60,7 @@ interface Session {
   last?: SimulationFrame;
   ready: boolean;
   pointerStarted: boolean;
+  moved: boolean;
   phase: number;
 }
 
@@ -66,6 +69,11 @@ export class DesktopActivityDriver implements ActivityDriver {
   private generation = 0;
   private retirement: Promise<void> = Promise.resolve();
   private session?: Session;
+  private lastStop?: {
+    bindingId: string;
+    activityId: string;
+    reason: ActivityStopReason;
+  };
   private painted = new WeakMap<
     SimulationFrame,
     {
@@ -85,9 +93,22 @@ export class DesktopActivityDriver implements ActivityDriver {
     return !!this.session;
   }
   status(bindingId: string): ActivityStatus {
-    return this.session?.owner.bindingId === bindingId
-      ? this.session.status
-      : 'inactive';
+    const session = this.session;
+    if (!session || session.owner.bindingId !== bindingId) return 'inactive';
+    return session.status === 'running' &&
+      session.definition.pointer &&
+      !session.moved
+      ? 'approaching'
+      : session.status;
+  }
+  reason(
+    bindingId: string,
+    activityId?: string,
+  ): ActivityStopReason | undefined {
+    return this.lastStop?.bindingId === bindingId &&
+      (!activityId || this.lastStop.activityId === activityId)
+      ? this.lastStop.reason
+      : undefined;
   }
   async start(
     owner: { bindingId: string; dotId: string },
@@ -110,9 +131,11 @@ export class DesktopActivityDriver implements ActivityDriver {
       from,
       ready: false,
       pointerStarted: false,
+      moved: false,
       phase: 0,
     };
     this.session = session;
+    this.lastStop = undefined;
     try {
       await retirement;
       if (this.session !== session)
@@ -150,11 +173,19 @@ export class DesktopActivityDriver implements ActivityDriver {
       throw error;
     }
   }
-  stop(bindingId?: string): Promise<void> {
+  stop(
+    bindingId?: string,
+    reason: ActivityStopReason = 'stopped',
+  ): Promise<void> {
     const s = this.session;
     if (!s || (bindingId && bindingId !== s.owner.bindingId))
       return this.retirement;
     this.session = undefined;
+    this.lastStop = {
+      bindingId: s.owner.bindingId,
+      activityId: s.definition.id,
+      reason,
+    };
     try {
       if (s.pointerStarted) {
         const native = this.env.pointer.end(s.generation);
@@ -169,11 +200,15 @@ export class DesktopActivityDriver implements ActivityDriver {
     return this.retirement;
   }
   private authorized(s: Session): boolean {
-    return (
-      this.env.available() &&
-      this.env.selectedDot() === s.owner.dotId &&
-      (!s.definition.pointer || this.env.accessibility())
-    );
+    return this.unavailable(s) === undefined;
+  }
+  private unavailable(s: Session): ActivityStopReason | undefined {
+    if (!this.env.available())
+      return this.env.unavailableReason?.() ?? 'desktop_unavailable';
+    if (this.env.selectedDot() !== s.owner.dotId) return 'selection_changed';
+    if (s.definition.pointer && !this.env.accessibility())
+      return 'permission_revoked';
+    return undefined;
   }
   physical(sample: PhysicalPointer): void {
     const s = this.session;
@@ -186,6 +221,7 @@ export class DesktopActivityDriver implements ActivityDriver {
   private pause(s: Session): void {
     if (s.status === 'paused') return;
     s.status = 'paused';
+    s.moved = false;
     s.phase++;
     if (s.last) {
       this.env.handoff(s.last);
@@ -196,8 +232,9 @@ export class DesktopActivityDriver implements ActivityDriver {
   frame(base: SimulationFrame, now: number): SimulationFrame {
     const s = this.session;
     if (!s) return base;
-    if (!this.authorized(s)) {
-      this.stop();
+    const unavailable = this.unavailable(s);
+    if (unavailable) {
+      this.stop(undefined, unavailable);
       return this.env.frame();
     }
     if (!s.ready) return base;
@@ -219,7 +256,7 @@ export class DesktopActivityDriver implements ActivityDriver {
       !s.definition.loop &&
       age > s.definition.approachMs + s.definition.durationMs
     ) {
-      this.stop();
+      this.stop(undefined, 'completed');
       return this.env.frame();
     }
     const elapsed = Math.max(0, age - s.definition.approachMs);
@@ -278,12 +315,13 @@ export class DesktopActivityDriver implements ActivityDriver {
     if (token?.session === s && s && this.animating) s.last = frame;
     if (!token?.sample || token.session !== s || !s || s.status !== 'running')
       return;
-    if (!this.authorized(s)) {
-      this.stop();
+    const unavailable = this.unavailable(s);
+    if (unavailable) {
+      this.stop(undefined, unavailable);
       return;
     }
     if (this.env.now() - token.createdAt > 250) {
-      this.stop();
+      this.stop(undefined, 'frame_stale');
       return;
     }
     try {
@@ -292,9 +330,12 @@ export class DesktopActivityDriver implements ActivityDriver {
         palmPosition(frame.root, frame.pose, s.definition.pointer!.hand),
         token.sample,
       );
-      if (this.session === s && !moved) this.pause(s);
+      if (this.session === s && token.phase === s.phase) {
+        if (!moved) this.pause(s);
+        else if (s.status === 'running') s.moved = true;
+      }
     } catch {
-      if (this.session === s) this.stop();
+      if (this.session === s) this.stop(undefined, 'pointer_unavailable');
     }
   }
 }

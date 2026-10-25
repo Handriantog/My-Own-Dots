@@ -26,24 +26,29 @@ import {
   storageLimits,
   type StorageRequest,
   type StorageResponse,
+  type AsyncRepositoryMethod,
+  type RepositoryMethod,
 } from './repository-contract.js';
 
-const asynchronous = new Set([
-  'snapshot.capture',
-  'jobs.publishDream',
-  'publication.review',
-  'publication.share',
-  'context.essentials',
-  'recall.search',
-  'recall.read',
-  'recall.readSource',
-  'folders.select',
-  'folders.resolve',
-  'folders.decide',
-  'folders.listDirectory',
-  'folders.readFile',
-  'folders.writeFile',
-]);
+const asynchronous = {
+  'snapshot.capture': true,
+  'jobs.publishDream': true,
+  'publication.review': true,
+  'publication.share': true,
+  'context.essentials': true,
+  'recall.search': true,
+  'recall.read': true,
+  'recall.readSource': true,
+  'folders.select': true,
+  'folders.resolve': true,
+  'folders.decide': true,
+  'folders.bindExecution': true,
+  'folders.executionScope': true,
+  'folders.listDirectory': true,
+  'folders.readFile': true,
+  'folders.writeFile': true,
+} satisfies Record<AsyncRepositoryMethod, true> &
+  Partial<Record<RepositoryMethod, true>>;
 interface Queued {
   request: StorageRequest;
   controller: AbortController;
@@ -85,7 +90,7 @@ export async function serveStorage(
         })
       : undefined;
   pg?.on('error', () => {});
-  const asyncMethods = new Set(asynchronous);
+  const asyncMethods = new Set(Object.keys(asynchronous));
   if (pg)
     for (const group of ['evidence', 'jobs'] as const)
       for (const name of repositoryMethods[group])

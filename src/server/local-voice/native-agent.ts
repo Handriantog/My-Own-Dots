@@ -17,7 +17,7 @@ export class NativeConversationAgent extends AbstractAgent {
       input: RunAgentInput,
       signal: AbortSignal,
       record: (guard: EvidenceGuard) => Promise<void>,
-    ) => Promise<{ id: string; text: string }>,
+    ) => Promise<{ id: string; text: string } | null>,
     readonly evidenceGuard: (
       threadId: string,
     ) => Promise<EvidenceGuard> = async () => ({
@@ -50,7 +50,10 @@ export class NativeConversationAgent extends AbstractAgent {
       })
         .then((answer) => {
           controller.signal.throwIfAborted();
-          if (!input.messages.some((message) => message.id === answer.id)) {
+          if (
+            answer &&
+            !input.messages.some((message) => message.id === answer.id)
+          ) {
             if (!answer.text.trim() || answer.text.length > 16000)
               throw Error('Native answer exceeds limits.');
             subscriber.next({

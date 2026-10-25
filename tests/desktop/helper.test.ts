@@ -168,6 +168,44 @@ describe('bounded native activity transport', () => {
     expect(stopped).toBe(true);
     f.helper.stop();
   });
+  it('retires a known native session after geometry expires without restarting the helper', async () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(1000);
+    const f = fixture();
+    let stopping: Promise<void> | undefined;
+    try {
+      const beginning = f.helper.begin(1);
+      const begin = f.commands.at(-1)!;
+      f.reply({
+        kind: 'activity-ack',
+        helperSession: 'a',
+        generation: 1,
+        requestId: begin.requestId,
+        ok: true,
+        physical: f.sample,
+      });
+      await beginning;
+      clock.mockReturnValue(3000);
+      expect(f.helper.current(performance.now())).toBeNull();
+      stopping = f.helper.end(1);
+      const end = f.commands.at(-1)!;
+      expect(end.op).toBe('end');
+      f.reply({
+        kind: 'activity-ack',
+        helperSession: 'a',
+        generation: 1,
+        requestId: end.requestId,
+        ok: true,
+      });
+      await stopping;
+      expect(f.c.kill).not.toHaveBeenCalled();
+      await expect(f.helper.begin(2)).rejects.toThrow(/helper lost/);
+    } finally {
+      f.c.emit('exit', 0);
+      await stopping;
+      f.helper.stop();
+      clock.mockRestore();
+    }
+  });
   it('waits for confirmed process exit if retirement acknowledgement times out', async () => {
     vi.useFakeTimers();
     const f = fixture();

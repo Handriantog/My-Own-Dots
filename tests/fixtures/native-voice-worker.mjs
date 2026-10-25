@@ -1,9 +1,10 @@
 import { createInterface } from 'node:readline';
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import process from 'node:process';
 import { Buffer } from 'node:buffer';
 import { setInterval } from 'node:timers';
-const [mode = 'normal', pidFile] = process.argv.slice(2);
+import { setTimeout as delay } from 'node:timers/promises';
+const [mode = 'normal', pidFile, speechReleaseFile] = process.argv.slice(2);
 if (pidFile) writeFileSync(pidFile, String(process.pid));
 if (mode === 'stubborn') {
   process.on('SIGTERM', () => {});
@@ -66,6 +67,12 @@ for await (const line of createInterface({ input: process.stdin })) {
       pcm: Buffer.alloc(4800, 2).toString('base64'),
     };
   } else if (request.method === 'speak') {
+    if (mode === 'delayed-speak') {
+      if (!speechReleaseFile) throw Error('Missing speech release file');
+      while (!existsSync(speechReleaseFile)) await delay(10);
+    }
+    if (mode === 'short-speech-only' && request.text.length > 80)
+      process.exit(1);
     result = {
       text: request.text,
       pcm: Buffer.alloc(4800, 2).toString('base64'),

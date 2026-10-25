@@ -587,5 +587,92 @@
     "route": "chat",
     "history": [],
     "taskStatus": "none"
+  },
+  {
+    "id": "owner-mouse-request",
+    "utterance": "Hello Jane, can you move my mouse around?",
+    "route": "delegate"
+  },
+  {
+    "id": "mouse-mover-start",
+    "utterance": "Start Mouse Mover.",
+    "route": "delegate"
+  },
+  {
+    "id": "cursor-move",
+    "utterance": "Please move my cursor around while I am away.",
+    "route": "delegate"
+  },
+  {
+    "id": "keep-awake",
+    "utterance": "Keep my computer awake.",
+    "route": "delegate"
+  },
+  {
+    "id": "mouse-stop",
+    "utterance": "Stop Mouse Mover.",
+    "route": "delegate"
+  },
+  {
+    "id": "mouse-resume",
+    "utterance": "Please start it again.",
+    "route": "delegate",
+    "history": [
+      {
+        "role": "user",
+        "text": "Start Mouse Mover."
+      },
+      {
+        "role": "assistant",
+        "text": "Mouse Mover stopped because the desktop changed."
+      }
+    ],
+    "taskStatus": "completed"
+  },
+  {
+    "id": "mouse-retry",
+    "utterance": "It is not moving. Can you try again?",
+    "route": "delegate",
+    "history": [
+      {
+        "role": "user",
+        "text": "Can you move my mouse around?"
+      },
+      {
+        "role": "assistant",
+        "text": "Mouse Mover stopped."
+      }
+    ],
+    "taskStatus": "completed"
+  },
+  {
+    "id": "mouse-negation",
+    "utterance": "Please do not move my mouse.",
+    "route": "chat"
+  },
+  {
+    "id": "mouse-quotation",
+    "utterance": "My friend said, start Mouse Mover, but I do not want that.",
+    "route": "chat"
+  },
+  {
+    "id": "mouse-reported",
+    "utterance": "My friend asked me to move the mouse around.",
+    "route": "chat"
+  },
+  {
+    "id": "mouse-hypothetical",
+    "utterance": "If I asked you to move my mouse, what would happen?",
+    "route": "chat"
+  },
+  {
+    "id": "mouse-background",
+    "utterance": "I moved my mouse earlier.",
+    "route": "chat"
+  },
+  {
+    "id": "plain-greeting",
+    "utterance": "Hello Jane, how are you?",
+    "route": "chat"
   }
 ]

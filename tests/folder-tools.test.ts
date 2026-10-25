@@ -55,11 +55,16 @@ it('offers requests and scoped file tools but no way for the model to approve or
     requestId: 'request-id',
     instruction: expect.stringContaining('review_local_folder_access'),
   });
-  expect(f.service.request).toHaveBeenCalledWith('dot', 'thread', {
-    reason: 'Read work notes',
-    folderHint: 'Work',
-    access: 'read',
-  });
+  expect(f.service.request).toHaveBeenCalledWith(
+    'dot',
+    'thread',
+    {
+      reason: 'Read work notes',
+      folderHint: 'Work',
+      access: 'read',
+    },
+    'thread',
+  );
   const grants = await f.execute('list_local_folders', {});
   expect(JSON.stringify(grants)).not.toContain('/private/');
   expect(grants).toEqual([{ id: 'grant-id', name: 'Work', access: 'read' }]);

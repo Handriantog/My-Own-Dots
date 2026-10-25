@@ -16,12 +16,13 @@ const compatibleAdapter = JSON.parse(
 
 type ModelConfig = Pick<
   PlatformConfig,
-  'llmBackend' | 'llmProvider' | 'subscriptionModel' | 'model'
+  'llmBackend' | 'llmProvider' | 'subscriptionModel' | 'model' | 'agentEngine'
 > & { baseUrl?: string };
 
 /** Describes this application's current seams, not a live-provider benchmark. */
 export function voiceModelCapabilities(config: ModelConfig) {
   const subscription = config.llmBackend === 'subscription';
+  const execution = subscription && config.agentEngine === 'codex';
   let loopbackEndpoint = false;
   try {
     const url = new URL(config.baseUrl ?? 'https://api.openai.com/v1');
@@ -47,14 +48,20 @@ export function voiceModelCapabilities(config: ModelConfig) {
       : null,
     execution: {
       backend: subscription ? 'subscription' : 'openai-compatible',
-      location: subscription ? 'provider-hosted' : 'unverified',
+      location: execution
+        ? 'local-codex-engine-remote-reasoning'
+        : subscription
+          ? 'provider-hosted'
+          : 'unverified',
       loopbackEndpoint: subscription ? false : loopbackEndpoint,
       localParityVerified: false,
     },
     text: {
-      adapter: subscription
-        ? 'buffered-complete-step'
-        : 'provider-dependent-unverified',
+      adapter: execution
+        ? 'codex-execution-events'
+        : subscription
+          ? 'buffered-complete-step'
+          : 'provider-dependent-unverified',
       headless: 'buffered-final-turn',
       incrementalSpeech: false,
     },
@@ -64,7 +71,7 @@ export function voiceModelCapabilities(config: ModelConfig) {
         ? 'abort-signal-and-process-group'
         : 'abort-signal',
       headless: 'scoped-stop-request',
-      acknowledgement: 'not-exposed',
+      acknowledgement: execution ? 'confirmed-or-uncertain' : 'not-exposed',
       measuredLatencyMs: null,
     },
     tools: {
@@ -73,7 +80,7 @@ export function voiceModelCapabilities(config: ModelConfig) {
         : 'provider-dependent',
       argumentValidation: 'application-executor',
       execution: 'existing-dot-runtime',
-      headlessApprovalTools: false,
+      headlessApprovalTools: execution,
     },
     timings: {
       available: subscription

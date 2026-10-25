@@ -13,6 +13,11 @@ export async function validateUnifiedGraph(
   schema = 3,
 ) {
   const checks = [
+    ...(schema >= 6
+      ? [
+          `SELECT 1 FROM voice_input_receipts r JOIN conversation_threads t ON t.owner_id=r.ownerId AND t.id=r.parentThreadId JOIN calls c ON c.id=r.callId WHERE t.agent_id<>r.dotId OR c.threadId<>r.parentThreadId LIMIT 1`,
+        ]
+      : []),
     ...(schema >= 3
       ? [
           `SELECT 1 FROM voice_delegations j JOIN conversation_threads p ON p.owner_id=j.owner_id AND p.id=j.parent_thread_id JOIN conversation_threads w ON w.owner_id=j.owner_id AND w.id=j.worker_thread_id JOIN calls c ON c.id=j.call_id WHERE p.agent_id<>j.dot_id OR w.agent_id<>j.dot_id OR c.threadId<>j.parent_thread_id LIMIT 1`,

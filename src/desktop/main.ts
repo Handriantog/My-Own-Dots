@@ -335,7 +335,7 @@ async function start(): Promise<void> {
         syncVisibility();
       },
       status: (message) => {
-        activity.driver?.stop();
+        activity.driver?.stop(undefined, 'helper_unavailable');
         setStatus(message);
         cancelCapture();
         refreshWorld(null);
@@ -367,6 +367,12 @@ async function start(): Promise<void> {
       !menuOpen &&
       !folderApprovals.isOpen &&
       !!helper.current(performance.now())?.sceneValid,
+    unavailableReason: () => {
+      const scene = helper.current(performance.now());
+      if (!scene) return 'scene_stale';
+      if (!scene.sceneValid) return 'scene_changed';
+      return 'desktop_unavailable';
+    },
     accessibility: () =>
       helper.current(performance.now())?.accessibility === true &&
       systemPreferences.isTrustedAccessibilityClient(false),

@@ -8,6 +8,7 @@ import { lastValueFrom, toArray } from 'rxjs';
 import type { Platform } from '../platform.js';
 import type { LocalAgentRunner } from '../local-runner.js';
 import { DotAgent } from '../dot-agent.js';
+import { codexCoordinator } from '../codex-runtime.js';
 import { NativeConversationAgent } from './native-agent.js';
 import {
   VoiceDelegationCoordinator,
@@ -18,6 +19,7 @@ import type {
   NativeHistoryMessage,
   NativeRoutingContext,
   NativeSpeech,
+  NativeTurnReply,
   NativeUnderstanding,
   NativeVoiceSession,
 } from './native-contract.js';
@@ -45,6 +47,27 @@ const clean = (text: string, limit = 4000) =>
     .replaceAll('<|', '< |')
     .replaceAll('|>', '| >')
     .slice(0, limit);
+/** Only task controls bypass the shared agent; ordinary intent is never classified locally. */
+export function voiceTaskControl(text: string): 'stop' | 'status' | undefined {
+  const control = text
+    .trim()
+    .toLowerCase()
+    .replace(/[.!?]+$/, '');
+  // The pinned recognizer sometimes hears "Cancel the" as "Canceled a".
+  if (
+    /^(?:please )?(?:stop|cancel|canceled|cancelled) (?:the |my |a )?(?:current )?(?:task|work)$/.test(
+      control,
+    )
+  )
+    return 'stop';
+  if (
+    /^(?:task status|what(?:'s| is) the (?:task )?status|are you (?:still )?(?:working|running))$/.test(
+      control,
+    )
+  )
+    return 'status';
+  return undefined;
+}
 function recentHistory(
   messages: { id: string; role: string; content?: unknown }[],
   excludeId?: string,
@@ -68,7 +91,7 @@ function recentHistory(
   }
   return history;
 }
-export function voiceJobReceipt(job: VoiceDelegation) {
+export function voiceJobReceipt(job: VoiceDelegation, sharedExecution = false) {
   const link = `[Open task conversation](#/chat/${encodeURIComponent(job.dotId)}/${encodeURIComponent(job.workerThreadId)})`;
   const label =
     job.status === 'approval'
@@ -86,6 +109,7 @@ export function voiceJobReceipt(job: VoiceDelegation) {
     job.status === 'completed' && job.result?.trim() ? job.result.trim() : '';
   const excerpt = clean(
     result
+      .replace(/```(?:text|txt|plaintext)[ \t]*\n([\s\S]*?)```/gi, '$1')
       .replace(/```[\s\S]*?```/g, ' Code is in the task conversation. ')
       .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
       .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
@@ -95,11 +119,11 @@ export function voiceJobReceipt(job: VoiceDelegation) {
   ).trim();
   const spoken =
     result && !/^[{[]|<(?:think|analysis|tool_call)\b/i.test(result)
-      ? `Your task finished. ${excerpt}${result.length > 280 ? ' More details are in chat.' : ''}`
+      ? `${sharedExecution ? '' : 'Your task finished. '}${excerpt}${result.length > 280 ? ' More details are in chat.' : ''}`
       : label;
   return {
     id: `voice-job:${job.id}:${job.leaseGeneration}:${job.status}`,
-    text: `${label}${result ? `\n\n${result.slice(0, 12000)}` : ''}\n\n${link}`,
+    text: `${sharedExecution && result ? result.slice(0, 12000) : `${label}${result ? `\n\n${result.slice(0, 12000)}` : ''}`}\n\n${link}`,
     spoken,
   };
 }
@@ -108,6 +132,11 @@ export class NativeVoiceRuntime {
   private timer?: ReturnType<typeof setInterval>;
   private delivering?: Promise<void>;
   private dispatches = new Set<Promise<void>>();
+  private dispatchingDots = new Set<string>();
+  private dispatchControllers = new Map<string, AbortController>();
+  private scheduling = false;
+  private inputDelivery?: Promise<void>;
+  private inputController = new AbortController();
   private readonly updates = new Set<(job: VoiceDelegation) => void>();
   constructor(
     private platform: Platform,
@@ -118,6 +147,8 @@ export class NativeVoiceRuntime {
     await this.coordinator.recover();
     this.timer = setInterval(() => {
       void this.deliverReceipts();
+      void this.dispatchQueued();
+      void this.deliverInputs();
     }, 1000);
     this.timer.unref?.();
   }
@@ -134,6 +165,13 @@ export class NativeVoiceRuntime {
   ) {
     const jobs = await this.coordinator.jobs.list();
     return (
+      (this.platform.config.agentEngine === 'codex'
+        ? jobs.find(
+            (job) =>
+              job.dotId === dotId &&
+              ['running', 'approval'].includes(job.status),
+          )
+        : undefined) ??
       jobs.findLast(
         (job) => job.dotId === dotId && job.parentThreadId === threadId,
       ) ??
@@ -171,6 +209,58 @@ export class NativeVoiceRuntime {
     return {
       ...job,
       result: outcome.status === 'completed' ? (outcome.result ?? null) : null,
+    };
+  }
+  /** Playback must remain authorized even while a reply is muted or synthesizing. */
+  async receiptValidator(
+    job: VoiceDelegation,
+  ): Promise<() => Promise<boolean>> {
+    const suppression =
+      await this.platform.workspace.memory.suppressionGeneration();
+    const scope = await this.platform.workspace.folders.executionScope(
+      job.dotId,
+      job.parentThreadId,
+    );
+    const expected = JSON.stringify({
+      status: job.status,
+      generation: job.leaseGeneration,
+      result: job.result,
+    });
+    return async () => {
+      try {
+        if (
+          this.closed ||
+          (await this.platform.workspace.memory.suppressionGeneration()) !==
+            suppression
+        )
+          return false;
+        const current = await this.coordinator.jobs.get(job.id);
+        if (!current) return false;
+        const context = await this.coordinator.jobs.threadContext(
+          current.workerThreadId,
+          current.dotId,
+        );
+        if (!context.available) return false;
+        const projected = await this.permittedReceipt(current, async () => {});
+        if (
+          JSON.stringify({
+            status: projected.status,
+            generation: projected.leaseGeneration,
+            result: projected.result,
+          }) !== expected
+        )
+          return false;
+        return (
+          JSON.stringify(
+            await this.platform.workspace.folders.executionScope(
+              job.dotId,
+              job.parentThreadId,
+            ),
+          ) === JSON.stringify(scope)
+        );
+      } catch {
+        return false;
+      }
     };
   }
   /** Routing receives only authorized canonical prose and host-owned lifecycle. */
@@ -221,17 +311,31 @@ export class NativeVoiceRuntime {
       signal?.removeEventListener('abort', stop);
     }
   }
-  async turn(
-    turn: NativeTurn,
-  ): Promise<
-    NativeSpeech & { assistantMessageId: string; reviewFolders?: boolean }
-  > {
+  async turn(turn: NativeTurn, admitted = false): Promise<NativeTurnReply> {
     if (this.closed) throw Error('Native voice is closed.');
     const { platform } = this;
     await platform.workspace.requireThread(turn.threadId, turn.dotId);
     if ((await platform.workspace.call(turn.callId)).threadId !== turn.threadId)
       throw Error('Native call scope mismatch.');
-    const understanding = turn.understanding;
+    const execution = platform.config.agentEngine === 'codex';
+    const control = execution
+      ? voiceTaskControl(turn.understanding.text)
+      : undefined;
+    const stopTask = control === 'stop';
+    const status = control === 'status';
+    const understanding: NativeUnderstanding =
+      execution && turn.understanding.text.trim()
+        ? status
+          ? { text: turn.understanding.text, route: 'status' }
+          : {
+              text: turn.understanding.text,
+              route: 'delegate',
+              tool: {
+                name: 'delegate_task',
+                arguments: { request: turn.understanding.text },
+              },
+            }
+        : turn.understanding;
     if (
       !understanding.text.trim() ||
       understanding.text.length > 4000 ||
@@ -244,7 +348,15 @@ export class NativeVoiceRuntime {
         understanding.tool.arguments.request !== understanding.text)
     )
       throw Error('Delegation request must match its caption.');
+    if (
+      execution &&
+      !admitted &&
+      (control || (await this.runner.isRunning({ threadId: turn.threadId })))
+    )
+      return this.receiveInput(turn, control ?? 'request');
+    let queueAccepted = true;
     let speech: NativeSpeech | undefined;
+    let awaitingReply = false;
     let reviewFolders = false;
     const assistantMessageId = randomUUID();
     const agent = new NativeConversationAgent(
@@ -285,29 +397,69 @@ export class NativeVoiceRuntime {
           )
             throw Error('Dot context changed. Please repeat your request.');
         };
-        if (understanding.route === 'delegate') {
+        if (stopTask) {
           await check();
-          const queued = await this.coordinator.jobs.enqueue({
-            id: randomUUID(),
-            dotId: dot.id,
-            callId: turn.callId,
-            parentThreadId: turn.threadId,
-            workerThreadId: randomUUID(),
-            utteranceId: turn.messageId,
-            sourceMessageId: turn.messageId,
-            sourceText: understanding.text,
-            request: understanding.tool!.arguments.request,
-          });
-          if (queued.kind === 'created') this.dispatch(queued.job);
-          reviewFolders = queued.job.status === 'approval';
+          const active = codexCoordinator(platform.workspace).status(dot.id);
+          const jobs = await this.coordinator.jobs.list({ active: true });
+          const job =
+            jobs.find(
+              (job) => job.dotId === dot.id && job.status !== 'queued',
+            ) ?? jobs.find((job) => job.dotId === dot.id);
+          if (active.activeThreadId && active.activeRunId) {
+            // Queue the stop without blocking local speech on the model process.
+            void this.runner
+              .stop({
+                threadId: active.activeThreadId,
+                runId: active.activeRunId,
+              })
+              .catch(() => {});
+          } else if (job) await this.cancel(job.id);
           speech = await turn.native.speak(
-            queued.kind === 'busy'
-              ? queued.job.status === 'approval'
-                ? 'Your earlier task is waiting for approval.'
-                : 'Your earlier task is still running.'
-              : "I'll work on that. You can keep talking while your task is queued or running.",
+            active.activeRunId || job
+              ? 'Stop requested. Review recorded actions in chat.'
+              : 'There is no active task to stop.',
             signal,
           );
+        } else if (understanding.route === 'delegate') {
+          await check();
+          const prior = (
+            await this.coordinator.jobs.list({ callId: turn.callId })
+          ).find((job) => job.utteranceId === turn.messageId);
+          const queued = await this.coordinator.jobs.enqueue(
+            {
+              id: prior?.id ?? randomUUID(),
+              dotId: dot.id,
+              callId: turn.callId,
+              parentThreadId: turn.threadId,
+              workerThreadId: prior?.workerThreadId ?? randomUUID(),
+              utteranceId: turn.messageId,
+              sourceMessageId: turn.messageId,
+              sourceText: understanding.text,
+              request: understanding.tool!.arguments.request,
+            },
+            execution,
+          );
+          queueAccepted = queued.kind !== 'busy';
+          if (queued.kind === 'created') {
+            if (execution) void this.dispatchQueued();
+            else this.dispatch(queued.job);
+          }
+          reviewFolders = queued.job.status === 'approval';
+          if (execution && queued.kind !== 'busy') {
+            // Admission is durable, but it is not a conversational answer.
+            awaitingReply = true;
+            speech = { text: '', pcm: Buffer.alloc(0) };
+          } else
+            speech = await turn.native.speak(
+              execution
+                ? 'The request queue is full. Please wait for the current work.'
+                : queued.kind === 'busy'
+                  ? queued.job.status === 'approval'
+                    ? 'Your earlier task is waiting for approval.'
+                    : 'Your earlier task is still running.'
+                  : "I'll work on that. You can keep talking while your task is queued or running.",
+              signal,
+            );
         } else if (understanding.route === 'clock') {
           const now = new Date();
           const time = new Intl.DateTimeFormat('en', {
@@ -333,13 +485,18 @@ export class NativeVoiceRuntime {
             });
           }
           reviewFolders = job?.status === 'approval';
-          const text = !job
-            ? 'There is no recent task in this conversation.'
-            : job.status === 'running'
-              ? 'Your task is still running.'
-              : job.status === 'queued'
-                ? 'Your task is queued.'
-                : voiceJobReceipt(job).spoken;
+          const active = execution
+            ? codexCoordinator(platform.workspace).status(dot.id)
+            : undefined;
+          const text = active?.activeRunId
+            ? 'Your task is still running.'
+            : !job
+              ? 'There is no recent task in this conversation.'
+              : job.status === 'running'
+                ? 'Your task is still running.'
+                : job.status === 'queued'
+                  ? 'Your task is queued.'
+                  : voiceJobReceipt(job, execution).spoken;
           await check();
           speech = await turn.native.speak(text, signal);
         } else {
@@ -383,7 +540,9 @@ export class NativeVoiceRuntime {
           );
         }
         await check();
-        return { id: assistantMessageId, text: speech.text };
+        return awaitingReply
+          ? null
+          : { id: assistantMessageId, text: speech.text };
       },
     );
     await this.run(
@@ -401,14 +560,180 @@ export class NativeVoiceRuntime {
       },
       turn.signal,
     );
+    if (admitted && !queueAccepted)
+      throw Error('Accepted voice input is waiting for queue capacity.');
     if (!speech) throw Error('Native response was not saved.');
     return {
       ...speech,
       assistantMessageId,
+      ...(awaitingReply ? { awaitingReply: true } : {}),
       ...(reviewFolders ? { reviewFolders } : {}),
     };
   }
+  private async receiveInput(
+    turn: NativeTurn,
+    kind: 'request' | 'status' | 'stop',
+  ): Promise<NativeTurnReply> {
+    turn.signal.throwIfAborted();
+    const initial = await runtimePolicy(
+      this.platform.store,
+      this.platform.workspace,
+    ).turnState(turn.dotId);
+    if (!initial.dot || (initial.settings.paused && kind !== 'stop'))
+      throw Error('Dot is unavailable.');
+    const active = codexCoordinator(this.platform.workspace).status(turn.dotId);
+    const parent = await this.platform.localConversations!.getSnapshot(
+      turn.threadId,
+    );
+    const typedRunning = await this.runner.isRunning({
+      threadId: turn.threadId,
+    });
+    const job = await this.currentJob(turn.dotId, turn.threadId, true);
+    const pending = (await this.coordinator.jobs.pendingInputs()).find(
+      (row) =>
+        row.dotId === turn.dotId &&
+        row.kind === 'request' &&
+        row.status === 'received',
+    );
+    const running = !!active.activeRunId || typedRunning;
+    const hasTask =
+      running ||
+      pending ||
+      (job && ['queued', 'running', 'approval'].includes(job.status));
+    const reply =
+      kind === 'request'
+        ? ''
+        : kind === 'stop'
+          ? hasTask
+            ? 'Stop requested. Review recorded actions in chat.'
+            : 'There is no active task to stop.'
+          : job?.status === 'approval'
+            ? 'Your task is waiting for approval.'
+            : running || job?.status === 'running'
+              ? 'Your task is still running.'
+              : pending || job?.status === 'queued'
+                ? 'Your task is queued.'
+                : 'There is no active task. Previous results are in chat.';
+    // The intent and acknowledgement must exist before a stop can affect work.
+    const accepted = await this.coordinator.jobs.receiveInput({
+      id: turn.messageId,
+      dotId: turn.dotId,
+      callId: turn.callId,
+      parentThreadId: turn.threadId,
+      caption: turn.understanding.text,
+      kind,
+      reply,
+    });
+    if (accepted.created && kind === 'stop') {
+      if (active.activeThreadId && active.activeRunId)
+        void this.runner
+          .stop({ threadId: active.activeThreadId, runId: active.activeRunId })
+          .catch(() => {});
+      else if (typedRunning && parent.lastRun)
+        void this.runner
+          .stop({ threadId: turn.threadId, runId: parent.lastRun.runId })
+          .catch(() => {});
+      else if (job && ['queued', 'running', 'approval'].includes(job.status))
+        void this.cancel(job.id).catch(() => {});
+      else if (pending) {
+        const converted = await this.coordinator.jobs.cancelInput(pending.id);
+        if (converted?.status === 'running')
+          void this.cancel(converted.id).catch(() => {});
+      }
+    }
+    const speech =
+      kind === 'request'
+        ? { text: '', pcm: Buffer.alloc(0) }
+        : await turn.native.speak(accepted.receipt.reply, turn.signal);
+    return {
+      ...speech,
+      assistantMessageId: `voice-input:${turn.messageId}`,
+      ...(kind === 'request' ? { awaitingReply: true } : {}),
+      ...(job?.status === 'approval' ? { reviewFolders: true } : {}),
+    };
+  }
+  private deliverInputs(): Promise<void> {
+    if (this.closed || this.platform.config.agentEngine !== 'codex')
+      return Promise.resolve();
+    if (this.inputDelivery) return this.inputDelivery;
+    const work = (async () => {
+      for (const receipt of await this.coordinator.jobs.pendingInputs()) {
+        if (this.closed) break;
+        if (await this.runner.isRunning({ threadId: receipt.parentThreadId }))
+          continue;
+        const input = {
+          threadId: receipt.parentThreadId,
+          runId: randomUUID(),
+          messages: [
+            { id: receipt.id, role: 'user' as const, content: receipt.caption },
+          ],
+          tools: [],
+          context: [],
+          state: {},
+          forwardedProps: {},
+        };
+        try {
+          if (receipt.kind === 'request' && receipt.status === 'received') {
+            // Mirror an accepted caption once the parent is free. This enqueues the
+            // ordinary durable job; it does not bypass the shared execution engine.
+            await this.turn(
+              {
+                callId: receipt.callId,
+                dotId: receipt.dotId,
+                threadId: receipt.parentThreadId,
+                messageId: receipt.id,
+                audio: Buffer.alloc(0),
+                understanding: { text: receipt.caption, route: 'chat' },
+                signal: this.inputController.signal,
+                native: {
+                  warm: async () => {},
+                  close: async () => {},
+                  interpret: async () => {
+                    throw Error('Unexpected ASR replay');
+                  },
+                  respond: async () => {
+                    throw Error('Unexpected local reply');
+                  },
+                  speak: async (text) => ({ text, pcm: Buffer.alloc(0) }),
+                },
+              },
+              true,
+            );
+          } else {
+            await this.run(
+              new NativeConversationAgent(receipt.dotId, async () =>
+                receipt.reply
+                  ? {
+                      id: `voice-input:${receipt.id}`,
+                      text: receipt.reply,
+                    }
+                  : null,
+              ),
+              input,
+              this.inputController.signal,
+            );
+          }
+          await this.coordinator.jobs.deliverInput(receipt.id);
+        } catch {
+          /* A racing parent run or temporary storage failure leaves the receipt durable. */
+        }
+      }
+    })()
+      .catch(() => {})
+      .finally(() => {
+        if (this.inputDelivery === work) this.inputDelivery = undefined;
+      });
+    this.inputDelivery = work;
+    return work;
+  }
   private dispatch(job: VoiceDelegation) {
+    if (this.closed) return;
+    const execution = this.platform.config.agentEngine === 'codex';
+    if (execution && this.dispatchingDots.has(job.dotId)) return;
+    if (execution) this.dispatchingDots.add(job.dotId);
+    const runId = randomUUID();
+    const controller = new AbortController();
+    this.dispatchControllers.set(job.id, controller);
     const agent = new DotAgent(
       this.platform.store,
       this.platform.workspace,
@@ -420,23 +745,85 @@ export class NativeVoiceRuntime {
       this.coordinator.jobs,
       this.platform.openWebsite,
       this.platform.abilities,
+      execution ? runId : undefined,
     );
-    const work = this.run(agent, {
-      threadId: job.workerThreadId,
-      runId: randomUUID(),
-      messages: [
-        { id: `voice-task:${job.id}`, role: 'user', content: job.request },
-      ],
-      tools: delegatedApprovalTools,
-      context: [],
-      state: {},
-      forwardedProps: {},
-    })
+    const run = () =>
+      this.run(
+        agent,
+        {
+          threadId: job.workerThreadId,
+          runId,
+          messages: [
+            { id: `voice-task:${job.id}`, role: 'user', content: job.request },
+          ],
+          tools: delegatedApprovalTools,
+          context: [],
+          state: {},
+          forwardedProps: {},
+        },
+        controller.signal,
+      );
+    const work = (
+      execution
+        ? codexCoordinator(this.platform.workspace).run(
+            job.dotId,
+            runId,
+            controller.signal,
+            run,
+            job.workerThreadId,
+          )
+        : run()
+    )
       .catch(() => {})
-      .finally(() => {
+      .finally(async () => {
         this.dispatches.delete(work);
+        this.dispatchControllers.delete(job.id);
+        if (execution) {
+          await this.deliverReceipts();
+          this.dispatchingDots.delete(job.dotId);
+          void this.dispatchQueued();
+        }
       });
     this.dispatches.add(work);
+  }
+  private async dispatchQueued() {
+    if (
+      this.closed ||
+      this.scheduling ||
+      this.platform.config.agentEngine !== 'codex'
+    )
+      return;
+    this.scheduling = true;
+    try {
+      const jobs = await this.coordinator.jobs.list();
+      const occupied = new Set(
+        jobs
+          .filter((job) => ['running', 'approval'].includes(job.status))
+          .map((job) => job.dotId),
+      );
+      for (const job of jobs) {
+        if (this.closed) break;
+        if (
+          job.status === 'queued' &&
+          !jobs.some(
+            (prior) =>
+              prior.id !== job.id &&
+              prior.parentThreadId === job.parentThreadId &&
+              !['queued', 'running'].includes(prior.status) &&
+              !prior.receiptMessageId,
+          ) &&
+          !occupied.has(job.dotId) &&
+          !this.dispatchingDots.has(job.dotId)
+        ) {
+          occupied.add(job.dotId);
+          this.dispatch(job);
+        }
+      }
+    } catch {
+      /* Durable queued requests remain available after a transient read failure. */
+    } finally {
+      this.scheduling = false;
+    }
   }
   async cancel(id: string) {
     const job = await this.coordinator.jobs.get(id);
@@ -445,12 +832,21 @@ export class NativeVoiceRuntime {
     return await this.platform.maintenance.runWrite(
       new AbortController().signal,
       async () => {
-        const cancelled = await this.coordinator.jobs.cancel(id);
+        if (['queued', 'approval'].includes(job.status)) {
+          await this.coordinator.jobs.cancel(id, true);
+          this.dispatchControllers.get(id)?.abort();
+        }
         await this.runner.stop({
           threadId: job.workerThreadId,
           ...(job.runId ? { runId: job.runId } : {}),
         });
-        return cancelled;
+        this.dispatchControllers.get(id)?.abort();
+        // Active tasks settle from the persisted provider outcome. Only work
+        // that never started, or an idle approval, can be cancelled directly.
+        const settled = await this.coordinator.jobs.get(id);
+        return settled && ['queued', 'approval'].includes(settled.status)
+          ? this.coordinator.jobs.cancel(id, true)
+          : settled;
       },
     );
   }
@@ -484,7 +880,10 @@ export class NativeVoiceRuntime {
                 job.dotId,
                 async (_input, _signal, record) => {
                   delivered = await this.permittedReceipt(job, record);
-                  return voiceJobReceipt(delivered);
+                  return voiceJobReceipt(
+                    delivered,
+                    this.platform.config.agentEngine === 'codex',
+                  );
                 },
               ),
               {
@@ -521,8 +920,12 @@ export class NativeVoiceRuntime {
   }
   async close() {
     this.closed = true;
+    this.inputController.abort();
+    for (const controller of this.dispatchControllers.values())
+      controller.abort();
     clearInterval(this.timer);
     this.updates.clear();
     await this.delivering;
+    await this.inputDelivery;
   }
 }

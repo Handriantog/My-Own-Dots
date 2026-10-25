@@ -4,6 +4,25 @@ import {
   setupStatus,
 } from '../src/server/platform-config.js';
 
+it('requires explicit opt-in to Codex execution and rejects incompatible providers', () => {
+  expect(localAiConfigFromEnv({}).agentEngine).toBe('legacy');
+  expect(localAiConfigFromEnv({ DOTS_AGENT_ENGINE: 'codex' }).agentEngine).toBe(
+    'codex',
+  );
+  expect(() =>
+    localAiConfigFromEnv({
+      DOTS_AGENT_ENGINE: 'codex',
+      LLM_PROVIDER: 'claude',
+    }),
+  ).toThrow(/Codex|codex/);
+  expect(() =>
+    localAiConfigFromEnv({ DOTS_AGENT_ENGINE: 'codex', LLM_BACKEND: 'openai' }),
+  ).toThrow(/subscription/);
+  expect(() => localAiConfigFromEnv({ DOTS_AGENT_ENGINE: 'typo' })).toThrow(
+    /DOTS_AGENT_ENGINE/,
+  );
+});
+
 it('defaults to local storage and subscription inference with no hosted fallback', () => {
   expect(
     localAiConfigFromEnv({

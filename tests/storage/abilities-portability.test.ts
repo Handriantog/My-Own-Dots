@@ -183,7 +183,7 @@ it('restores records with every binding disabled and requires fresh reviewed con
     destination = join(f.home, 'restored/data/workspace.sqlite');
   await mkdir(join(f.home, 'restored/data'), { recursive: true });
   await mkdir(join(f.home, 'restored/recovery'));
-  await restoreSQLite(f.source, destination, f.owner, signal(), 'sqlite', 5);
+  await restoreSQLite(f.source, destination, f.owner, signal(), 'sqlite', 6);
   const restored = new WorkspaceStore(destination, f.owner);
   cleanups.push(() => restored.close());
   const restoredBindings = restored.abilities.list(f.dot.id);
@@ -251,7 +251,7 @@ it('round-trips the decoded versioned archive while excluding credentials and ex
     version: 3,
     minimumReader: 3,
     abilities: { version: 1 },
-    storage: { engine: 'sqlite', schema: 5 },
+    storage: { engine: 'sqlite', schema: 6 },
   });
   const expectedNonsecretPaths = [
     `abilities/state/${key}/private.json`,
@@ -394,7 +394,7 @@ it('keeps interrupted invocation IDs consumed after restore and fresh consent', 
   const destination = join(f.home, 'restored/data/workspace.sqlite');
   await mkdir(join(f.home, 'restored/data'), { recursive: true });
   await mkdir(join(f.home, 'restored/recovery'));
-  await restoreSQLite(f.source, destination, f.owner, signal(), 'sqlite', 5);
+  await restoreSQLite(f.source, destination, f.owner, signal(), 'sqlite', 6);
   const restored = new WorkspaceStore(destination, f.owner);
   cleanups.push(() => restored.close());
   expect(restored.abilities.receipt(context.invocationId)).toMatchObject({
@@ -419,7 +419,7 @@ it('migrates an actual schema-4 backup and leaves its package and Dot authority 
   const f = await database();
   const old = new DatabaseSync(f.source);
   old.exec(
-    'DROP TABLE ability_installations; DELETE FROM workspace_storage_schema WHERE version=5',
+    "DROP TABLE voice_input_receipts; DROP TABLE ability_installations; DELETE FROM workspace_storage_schema WHERE version>=5; DROP TABLE project_execution_bindings; DROP INDEX voice_delegations_active_dot; CREATE UNIQUE INDEX voice_delegations_active_dot ON voice_delegations(owner_id,dot_id) WHERE status IN ('queued','running','approval');",
   );
   old.close();
   const destination = join(f.home, 'historical/data/workspace.sqlite');

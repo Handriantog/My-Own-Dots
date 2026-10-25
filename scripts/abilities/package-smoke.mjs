@@ -22,7 +22,12 @@ const { values } = parseArgs({
 });
 const root = fileURLToPath(new URL('../..', import.meta.url));
 const source = resolve(
-  values.app || join(root, 'release/My Own Dots-darwin-arm64/My Own Dots.app'),
+  values.app ||
+    join(
+      root,
+      process.env.DOTS_DESKTOP_RELEASE_DIR || 'release',
+      'My Own Dots-darwin-arm64/My Own Dots.app',
+    ),
 );
 const pythonCommand =
   values.python || process.env.DOTS_ABILITY_TEST_PYTHON || 'python3';

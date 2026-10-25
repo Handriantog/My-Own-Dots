@@ -1,4 +1,5 @@
 import { invalidateAbilityTrust } from './ability-snapshot.js';
+import { initializeProjectExecutionSchema } from '../folder-access.js';
 import { copyFile, open, rm, chmod, mkdtemp } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
@@ -25,7 +26,7 @@ export async function copyValidatedSQLite(
   ownerId: string,
   signal: AbortSignal,
   engine: 'legacy-postgres' | 'sqlite' = 'legacy-postgres',
-  expectedSchema?: 2 | 3 | 4 | 5,
+  expectedSchema?: 2 | 3 | 4 | 5 | 6,
 ) {
   const baselineDirectory = await mkdtemp(
     join(dirname(destination), '.schema-'),
@@ -46,6 +47,8 @@ export async function copyValidatedSQLite(
         supported.set(3, inventory(schema));
         initializeSQLiteSchema(schema, 4);
         supported.set(4, inventory(schema));
+        initializeSQLiteSchema(schema, 5);
+        supported.set(5, inventory(schema));
         initializeSQLiteSchema(schema);
         supported.set(sqliteStorageSchema, inventory(schema));
       } finally {
@@ -67,22 +70,35 @@ export async function copyValidatedSQLite(
     const actual = JSON.stringify(inventory(original));
     // The additive customization migration is also absent in older supported
     // backups. Match that exact known schema; never execute archived DDL.
-    const variants = [...supported.entries()].flatMap(([version, schema]) => [
-      [version, schema] as const,
-      [
-        version,
-        schema
-          .filter((row) => row.name !== 'desktop_dot')
-          .map((row) =>
-            row.name === 'dots'
-              ? {
-                  ...row,
-                  sql: String(row.sql).replace(', customization TEXT', ''),
-                }
-              : row,
-          ),
-      ] as const,
-    ]);
+    const baseVariants = [...supported.entries()].flatMap(
+      ([version, schema]) => [
+        [version, schema] as const,
+        [
+          version,
+          schema
+            .filter((row) => row.name !== 'desktop_dot')
+            .map((row) =>
+              row.name === 'dots'
+                ? {
+                    ...row,
+                    sql: String(row.sql).replace(', customization TEXT', ''),
+                  }
+                : row,
+            ),
+        ] as const,
+      ],
+    );
+    const variants = baseVariants.flatMap(([version, schema]) =>
+      version < 6
+        ? [
+            [version, schema] as const,
+            [
+              version,
+              schema.filter((row) => row.name !== 'project_execution_bindings'),
+            ] as const,
+          ]
+        : [[version, schema] as const],
+    );
     // Ability metadata is absent in historical schema 2/3 and legacy backups.
     // Only exact known inventories are accepted; archived DDL is never executed.
     const managementVariants = variants.flatMap(([version, schema]) =>
@@ -166,7 +182,7 @@ export async function restoreSQLite(
   ownerId: string,
   signal: AbortSignal,
   engine: 'legacy-postgres' | 'sqlite' = 'legacy-postgres',
-  expectedSchema?: 2 | 3 | 4 | 5,
+  expectedSchema?: 2 | 3 | 4 | 5 | 6,
 ) {
   await copyValidatedSQLite(
     source,
@@ -180,6 +196,7 @@ export async function restoreSQLite(
   const counts: Record<string, number> = {};
   try {
     if (engine === 'sqlite') initializeSQLiteSchema(db);
+    initializeProjectExecutionSchema(db);
     db.exec(
       'PRAGMA trusted_schema=OFF; PRAGMA synchronous=FULL; BEGIN IMMEDIATE',
     );
@@ -203,6 +220,7 @@ export async function restoreSQLite(
             'memory_evidence',
             'memory_checkpoints',
             'voice_delegations',
+            'voice_input_receipts',
           ]
         : []),
     ])
@@ -227,11 +245,14 @@ export async function restoreSQLite(
         'computer_permissions',
         'folder_grants',
         'folder_requests',
+        'project_execution_bindings',
         'memory_pending_operations',
         'memory_restore_previews',
         'memory_settings',
         'setup_telemetry',
-        ...(engine === 'sqlite' ? ['memory_jobs', 'voice_delegations'] : []),
+        ...(engine === 'sqlite'
+          ? ['memory_jobs', 'voice_delegations', 'voice_input_receipts']
+          : []),
       ])
         for (const row of db.prepare(`SELECT * FROM "${table}"`).iterate()) {
           signal.throwIfAborted();
@@ -266,7 +287,7 @@ export async function restoreSQLite(
       UPDATE thread_bindings SET learningContainerId=NULL;
       UPDATE page_threads SET leaseUntil=0;
       DELETE FROM mcp_connections; DELETE FROM mcp_approvals;
-      DELETE FROM computer_permissions; DELETE FROM folder_grants; DELETE FROM folder_requests;
+      DELETE FROM computer_permissions; DELETE FROM folder_grants; DELETE FROM folder_requests; DELETE FROM project_execution_bindings;
       DELETE FROM memory_pending_operations; DELETE FROM memory_restore_previews; DELETE FROM setup_telemetry;`);
     db.prepare(
       "UPDATE mcp_actions SET status='done',result=? WHERE status='running'",
@@ -283,7 +304,8 @@ export async function restoreSQLite(
       UPDATE memory_evidence SET workflow_complete=0 WHERE EXISTS(SELECT 1 FROM conversation_runs r WHERE r.owner_id=memory_evidence.owner_id AND r.thread_id=memory_evidence.thread_id AND r.run_id=memory_evidence.run_id AND r.status='running');
       UPDATE conversation_runs SET status='interrupted' WHERE status='running';
       UPDATE memory_jobs SET state='cancelled',error='Interrupted by workspace recovery',lease_token=NULL,lease_until=NULL,call_started_at=NULL WHERE state IN ('queued','running');
-      UPDATE voice_delegations SET status='interrupted',error='Interrupted by workspace recovery; approve a fresh task to retry.',lease_token=NULL,lease_until=NULL,lease_generation=lease_generation+1,receipt_message_id=NULL,delivered_at=NULL,updated_at=${Date.now()} WHERE status IN ('queued','running','approval');
+      UPDATE voice_input_receipts SET status='interrupted',reply='Workspace recovered; request was not resumed.' WHERE deliveredAt IS NULL;
+    UPDATE voice_delegations SET status='interrupted',error='Interrupted by workspace recovery; approve a fresh task to retry.',lease_token=NULL,lease_until=NULL,lease_generation=lease_generation+1,receipt_message_id=NULL,delivered_at=NULL,updated_at=${Date.now()} WHERE status IN ('queued','running','approval');
     `);
     for (const row of db
       .prepare('SELECT ownerId,dotId,value FROM memory_settings')

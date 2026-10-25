@@ -188,6 +188,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
           },
           installer,
           activityDriver: () => driver,
+          renewActivity: (context) => service.get(context.bindingId),
           storage: {
             isEncryptionAvailable: () => false,
             encryptString: () => {
@@ -258,6 +259,9 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         desktop,
         backend,
         driver,
+        setMode: (next: typeof mode) => {
+          mode = next;
+        },
         effects: () => ({ awake, begins, ends, moves }),
         render: async (at: number) => {
           now = at;
@@ -291,15 +295,32 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
       expect(f.effects()).toMatchObject({ awake: 0, ends: 1 });
     });
     it.each([
-      ['accessibility', 'setup_needed'],
-      ['hidden', 'host_unavailable'],
-      ['selection', 'host_unavailable'],
+      ['accessibility', 'setup_needed', 'accessibility_required'],
+      ['hidden', 'host_unavailable', 'desktop_unavailable'],
+      ['selection', 'host_unavailable', 'desktop_unavailable'],
     ] as const)(
       'preserves %s refusal across the separately bundled host and sealed worker',
-      async (mode, code) => {
+      async (mode, code, reason) => {
         const f = await fixture(mode);
-        expect(await f.invoke('start')).toEqual({ status: 'error', code });
+        expect(await f.invoke('start')).toEqual({
+          status: 'error',
+          code,
+          activity: { action: 'start', status: 'inactive', reason },
+        });
         expect(f.effects()).toEqual({ awake: 0, begins: 0, ends: 0, moves: 0 });
+        expect(await f.invoke('status')).toHaveProperty('activity', {
+          action: 'status',
+          status: 'inactive',
+        });
+        f.setMode('normal');
+        const started = await f.invoke('start');
+        expect(started.status).toBe('success');
+        expect(started).toHaveProperty('activity', {
+          action: 'start',
+          status: 'approaching',
+        });
+        expect(await f.invoke('stop')).toMatchObject({ status: 'success' });
+        expect(f.effects()).toEqual({ awake: 0, begins: 1, ends: 1, moves: 0 });
       },
     );
     it('installs disabled, admits explicit text/voice, reports pause, stops twice, and revokes persistent ownership', async () => {
@@ -333,6 +354,10 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         { toolCallId: randomUUID(), emitCustomEvent: () => {} },
       );
       expect(result).toMatchObject({ status: 'success' });
+      expect(result).toHaveProperty('activity', {
+        action: 'start',
+        status: 'approaching',
+      });
       expect(f.driver.active).toBe(true);
       expect(f.effects()).toMatchObject({ awake: 1, begins: 1, moves: 0 });
       f.driver.physical({
@@ -343,7 +368,14 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         idleMs: 0,
       });
       const paused = await f.invoke('status');
-      expect(paused).toMatchObject({ status: 'success' });
+      expect(paused).toMatchObject({
+        status: 'success',
+        activity: {
+          action: 'status',
+          status: 'paused',
+          resumeAfterIdleMs: 5000,
+        },
+      });
       if (!('resultRef' in paused) || !paused.resultRef)
         throw Error('Missing private status');
       expect(await f.host.readResult(f.dot.id, paused.resultRef)).toEqual({

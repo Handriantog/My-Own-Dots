@@ -33,6 +33,12 @@ export interface NativeSpeech {
   /** Signed 16-bit little endian, 24 kHz, mono. */
   pcm: Buffer;
 }
+/** An admitted shared-engine turn can wait silently for its actual answer. */
+export interface NativeTurnReply extends NativeSpeech {
+  assistantMessageId: string;
+  reviewFolders?: boolean;
+  awaitingReply?: boolean;
+}
 export interface NativeVoiceSession {
   warm(signal: AbortSignal): Promise<void>;
   /** Input has already passed the call's speech detector; 16 kHz mono PCM. */

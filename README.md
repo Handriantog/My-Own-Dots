@@ -150,11 +150,21 @@ The package includes Electron and the production Node backend/dependencies. It s
 
 ## Architecture
 
+See the [runtime diagrams and failure analysis](docs/architecture/dot-runtime.html) for the pre-Codex/legacy text/voice flow and the original Mouse Mover, folder permission and execution-limit investigation. The approved Codex design below documents the implemented execution flow.
+
+The [agent reliability postmortem](docs/postmortems/2026-10-25-agent-reliability.md) examines recurring failures across conversation, tools, permissions and delivery, with evidence and proposed mitigations for discussion.
+
+For ongoing work, follow the [reliability requirements and verification rules](docs/development/agent-reliability.md). High voice, correct folder permission, dependable Abilities and full project debugging define the stabilization baseline.
+
+The approved [Codex-first voice design](docs/architecture/2026-10-25-codex-voice-design.md) is implemented as an explicit `DOTS_AGENT_ENGINE=codex` candidate for local SQLite on macOS arm64. High voice uses local LFM recognition and installed macOS Samantha speech; text and voice share scoped Codex execution through the existing subscription. See the [qualification and handoff record](docs/development/codex-execution-qualification.md) for exact evidence, configuration and limits. The default engine remains legacy until explicitly selected.
+
 ### AG-UI connects the agent to the interface
 
 [AG-UI](https://docs.ag-ui.com/introduction) carries streamed messages, tool calls, and agent state between the backend and CopilotKit components. Computer activity appears inline as the agent works; human-in-the-loop cards pause a tool call for your decision before it continues.
 
-TanStack AI owns the tool loop and validation. A subscription adapter sends each model step to MyOwnLlmIntegrator, which invokes your logged-in CLI and returns a structured result. CopilotKit's open-source SSE runtime uses a local durable runner backed by PostgreSQL. SQLite holds pages, application metadata and background-work state. The integrator returns complete steps rather than token streaming.
+The following diagram describes the legacy engine. The approved Codex candidate replaces its model decision loop with a scoped execution session while retaining Dot's permissions, tools and durable runner.
+
+TanStack AI owns the legacy tool loop and validation. A subscription adapter sends each model step to MyOwnLlmIntegrator, which invokes your logged-in CLI and returns a structured result. CopilotKit's open-source SSE runtime uses a local durable runner backed by PostgreSQL. SQLite holds pages, application metadata and background-work state. The integrator returns complete steps rather than token streaming.
 
 ```mermaid
 flowchart TB
@@ -174,9 +184,9 @@ Provider selection and credentials stay server-side. Browser requests cannot cho
 
 ### How subscription AI works
 
-The default path uses your **Codex CLI signed in with ChatGPT**. My Own Dots calls the installed `myown-llm-integrator@0.2.0` npm package, which runs its bundled Python engine and invokes that CLI. The CLI uses your existing account session; the app does not need an OpenAI API key or a CopilotKit Intelligence subscription. Subscription usage limits and model access still apply.
+The default path uses your **Codex CLI signed in with ChatGPT**. This candidate installs the vendored `myown-llm-integrator@0.3.0-rc.1` tarball with lockfile integrity. Its legacy inference API runs the bundled Python engine; the explicitly selected Codex execution API talks to the qualified `0.163.0` app server directly. The CLI uses your existing account session; the app does not need an OpenAI API key or a CopilotKit Intelligence subscription. Subscription usage limits and model access still apply.
 
-Each conversation turn follows this flow:
+Each legacy conversation turn follows this flow:
 
 1. The server loads saved conversation history from PostgreSQL and combines it with the Dot's instructions, permitted context, and tool definitions.
 2. The subscription adapter sends the current model step to Integrator's `runAgent`, with a JSON schema describing an answer and proposed tool calls. Integrator handles the provider process, timeouts, cancellation, and structured-output validation.
@@ -302,3 +312,5 @@ Queries, requested URLs, a stable session identifier and the research objective 
 ### Local memory verification
 
 The local memory extension adds bounded essentials, on-demand recall, manual/automatic Compact and Dream, revision review and restore. See [MEMORY.md](docs/MEMORY.md) for defaults, storage, commands, measured latency and the distinction between deterministic fixture tests and the live Codex smoke. Voice changes are deferred.
+
+The Codex reliability candidate has an [owner test and recovery guide](docs/development/codex-test-handoff.md), with exact build identity and acceptance boundaries.

@@ -9,7 +9,7 @@ import { RecognitionInputError } from './worker.js';
 import { playSpeechOutput } from './speech-output.js';
 import { VoiceTurnTiming } from './timing.js';
 import type {
-  NativeSpeech,
+  NativeTurnReply,
   NativeRoutingContext,
   NativeUnderstanding,
   NativeVoiceSession,
@@ -151,9 +151,7 @@ export interface VoiceCallPort {
     audio: Buffer;
     understanding: NativeUnderstanding;
     signal: AbortSignal;
-  }): Promise<
-    NativeSpeech & { assistantMessageId: string; reviewFolders?: boolean }
-  >;
+  }): Promise<NativeTurnReply>;
   voiceTurn?(utterance?: {
     messageId: string;
     text: string;
@@ -224,7 +222,12 @@ export class LiveVoiceCall {
   private startedAt = Date.now();
   private lastSeen = Date.now();
   private timer?: ReturnType<typeof setInterval>;
-  private update?: { id: string; text: string };
+  private update?: {
+    id: string;
+    text: string;
+    generation: number;
+    authorization: Promise<() => Promise<boolean>>;
+  };
   constructor(
     readonly scope: {
       id: string;
@@ -325,6 +328,7 @@ export class LiveVoiceCall {
       this.lastSeen = Date.now();
       await this.port.receipt('active', '');
       this.emit({ type: 'phase', phase: 'listening' });
+      this.announceUpdate();
       this.timer = setInterval(async () => {
         try {
           await this.check();
@@ -482,15 +486,20 @@ export class LiveVoiceCall {
           if (this.ended || generation !== this.recognitionGeneration) return;
           utterance.answered = true;
           await this.checkpoint(`You: ${text}`);
-          await this.checkpoint(`Dot (generated): ${reply.text}`);
           this.emit({
             type: 'native-transcript',
             messageId,
             text,
             generation: utterance.generation,
           });
-          this.emit({ type: 'caption', text: reply.text });
           if (reply.reviewFolders) this.emit({ type: 'review-folders' });
+          if (reply.awaitingReply) {
+            timing.mark('run_requested');
+            this.emit({ type: 'phase', phase: 'thinking' });
+            return;
+          }
+          await this.checkpoint(`Dot (generated): ${reply.text}`);
+          this.emit({ type: 'caption', text: reply.text });
           if (this.speakerMuted)
             this.emit({ type: 'phase', phase: 'listening' });
           else {
@@ -514,6 +523,7 @@ export class LiveVoiceCall {
                 if (utterance.generation === this.generation) {
                   this.outputActive = false;
                   this.emit({ type: 'phase', phase: 'listening' });
+                  this.announceUpdate();
                 }
               });
           }
@@ -557,6 +567,7 @@ export class LiveVoiceCall {
           if (this.recognizingTiming === timing)
             this.recognizingTiming = undefined;
           if (this.recognizing === work) this.recognizing = undefined;
+          if (!this.ended) this.announceUpdate();
         });
     }
   }
@@ -646,15 +657,26 @@ export class LiveVoiceCall {
     }
   }
   /** A durable host receipt has already been saved. Do not interrupt an utterance. */
-  nativeUpdate(id: string, text: string) {
+  nativeUpdate(
+    id: string,
+    text: string,
+    authorization: Promise<() => Promise<boolean>> | (() => Promise<boolean>),
+  ) {
     if (!this.workers.native || this.ended) return;
-    this.update = { id, text };
-    this.emit({ type: 'saved', text });
+    this.update = {
+      id,
+      text,
+      generation: this.generation,
+      authorization: Promise.resolve(authorization).catch(
+        () => async () => false,
+      ),
+    };
     this.announceUpdate();
   }
   private announceUpdate() {
     if (
       !this.update ||
+      !this.ready ||
       !this.workers.native ||
       this.ended ||
       this.recognizing ||
@@ -665,13 +687,38 @@ export class LiveVoiceCall {
       return;
     const update = this.update;
     this.update = undefined;
-    const generation = this.generation;
+    const generation = update.generation;
+    const signal = AbortSignal.any([
+      this.controller.signal,
+      this.outputController.signal,
+    ]);
+    const authorized = async () => {
+      if (this.ended || generation !== this.generation) return false;
+      try {
+        const validate = await waitForVoiceOperation(
+          update.authorization,
+          signal,
+        );
+        await this.check();
+        const valid = await waitForVoiceOperation(validate(), signal);
+        return valid && !this.ended && generation === this.generation;
+      } catch {
+        return false;
+      }
+    };
     const work = (async () => {
-      const reply = await this.workers.native!.speak(
-        update.text,
+      if (!(await authorized())) return;
+      this.emit({ type: 'saved', text: update.text });
+      // ASR and TTS share a serial worker. Aborting its request permanently
+      // closes that worker, so drain stale synthesis before the next recognition.
+      // Call shutdown still owns cancellation; the generation gates playback.
+      const reply = await waitForVoiceOperation(
+        this.workers.native!.speak(update.text, this.controller.signal),
         this.controller.signal,
       );
-      if (this.ended || generation !== this.generation) return;
+      if (!(await authorized())) return;
+      await this.checkpoint(`Dot (generated): ${reply.text}`);
+      if (!(await authorized())) return;
       const utterance: Utterance = {
         messageId: update.id,
         text: '',
@@ -687,14 +734,38 @@ export class LiveVoiceCall {
       this.utterance = utterance;
       this.emit({ type: 'caption', text: reply.text });
       this.outputActive = true;
+      // Also revoke audio already queued while playback awaits acknowledgements.
+      let monitoring = true;
+      let checking = false;
+      const monitor = setInterval(() => {
+        if (checking) return;
+        checking = true;
+        void authorized()
+          .then((valid) => {
+            if (
+              monitoring &&
+              !valid &&
+              !this.ended &&
+              generation === this.generation
+            )
+              void this.interrupt(false);
+          })
+          .finally(() => {
+            checking = false;
+          });
+      }, 100);
+      monitor.unref?.();
       try {
         await this.speak(
           reply.text,
           utterance,
           { assistantMessageId: update.id, segmentSequence: 0 },
           reply.pcm,
+          authorized,
         );
       } finally {
+        monitoring = false;
+        clearInterval(monitor);
         if (generation === this.generation) this.outputActive = false;
       }
     })();
@@ -710,6 +781,7 @@ export class LiveVoiceCall {
         if (this.recognizing === work) this.recognizing = undefined;
         if (!this.ended && generation === this.generation)
           this.emit({ type: 'phase', phase: 'listening' });
+        if (!this.ended) this.announceUpdate();
       });
   }
   private resetInput() {
@@ -748,6 +820,7 @@ export class LiveVoiceCall {
     if (!this.speechOutput) return;
     this.speakerMuted = value;
     if (value) await this.interrupt(false, 'speaker_muted');
+    else this.announceUpdate();
   }
   async interrupt(
     stopRun = true,
@@ -761,6 +834,10 @@ export class LiveVoiceCall {
     if (stopRun) this.recognizingTiming?.mark('interrupted');
     if (utterance?.output) utterance.output.queue = [];
     this.generation++;
+    if (this.update) {
+      if (reason === 'speaker_muted') this.update.generation = this.generation;
+      else this.update = undefined;
+    }
     if (stopRun) this.port.voiceTurn?.();
     if (stopRun) this.recognitionGeneration++;
     this.utterance = stopRun
@@ -1047,6 +1124,7 @@ export class LiveVoiceCall {
     utterance: Utterance,
     span?: { assistantMessageId: string; segmentSequence: number },
     preparedPCM?: Buffer,
+    authorized?: () => Promise<boolean>,
   ) {
     if (!this.speechOutput) return;
     const signal = AbortSignal.any([
@@ -1055,6 +1133,17 @@ export class LiveVoiceCall {
     ]);
     await this.stopping;
     signal.throwIfAborted();
+    const checkAuthorization = async () => {
+      if (authorized && !(await authorized())) {
+        if (!this.ended && utterance.generation === this.generation)
+          await this.interrupt(false);
+        throw new DOMException('Speech authorization changed', 'AbortError');
+      }
+      if (utterance.generation !== this.generation)
+        throw new DOMException('Speech was interrupted', 'AbortError');
+      signal.throwIfAborted();
+    };
+    await checkAuthorization();
     if (this.synthesisClosed) this.startSynthesisRecovery(utterance.timing);
     if (this.synthesisWarming) {
       utterance.timing.mark('synthesis_wait_started');
@@ -1098,6 +1187,7 @@ export class LiveVoiceCall {
         for (let offset = 0; offset < pcm.length; offset += 1920) {
           chunkSignal.throwIfAborted();
           if (inflight.length >= 4) await inflight.shift();
+          await checkAuthorization();
           chunkSignal.throwIfAborted();
           const frame = pcm.subarray(
             offset,

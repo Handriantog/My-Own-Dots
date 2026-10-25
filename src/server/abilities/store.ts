@@ -6,7 +6,14 @@ import {
   parseReleaseDescriptor,
   validateValue,
 } from '../../shared/abilities/manifest.js';
-import { parseOutcome } from '../../shared/abilities/protocol.js';
+import {
+  parseOutcome,
+  errorCodeSchema,
+} from '../../shared/abilities/protocol.js';
+import {
+  activityFeedbackSchema,
+  type ActivityFeedback,
+} from '../../shared/abilities/activity.js';
 import { canonicalJson } from '../../shared/abilities/permissions.js';
 import type {
   Binding,
@@ -53,6 +60,12 @@ export function initializeAbilityManagementSchema(db: DatabaseSync): void {
       FROM ability_packages p;`);
 }
 const boundedId = z.string().min(1).max(256);
+// Stored receipts deliberately omit private result references and values.
+const receiptOutcomeSchema = z.strictObject({
+  status: z.enum(['success', 'selection_needed', 'uncertain', 'error']),
+  code: errorCodeSchema.optional(),
+  activity: activityFeedbackSchema.optional(),
+});
 const contextSchema = z.strictObject({
   workspaceId: boundedId,
   sessionId: boundedId,
@@ -70,7 +83,11 @@ export type PackageRecord = Omit<VerifiedPackage, 'root'>;
 export type AbilityReceipt = {
   context: InvocationContext;
   state: 'running' | 'settled';
-  outcome?: { status: InvocationOutcome['status']; code?: string };
+  outcome?: {
+    status: InvocationOutcome['status'];
+    code?: string;
+    activity?: ActivityFeedback;
+  };
 };
 
 export class AbilityStore {
@@ -457,10 +474,16 @@ export class AbilityStore {
   }
   settleInvocation(invocationId: string, input: InvocationOutcome): void {
     const outcome = parseOutcome(input);
-    const generic =
+    const status =
       outcome.status === 'error'
         ? { status: outcome.status, code: outcome.code }
         : { status: outcome.status };
+    const generic = {
+      ...status,
+      ...('activity' in outcome && outcome.activity
+        ? { activity: outcome.activity }
+        : {}),
+    };
     this.db
       .prepare(
         "UPDATE ability_receipts SET state='settled',outcome=?,settledAt=? WHERE invocationId=? AND (state='running' OR (? AND json_extract(outcome,'$.status')='success'))",
@@ -484,5 +507,44 @@ export class AbilityStore {
       state: row.state as AbilityReceipt['state'],
       ...(row.outcome ? { outcome: JSON.parse(String(row.outcome)) } : {}),
     };
+  }
+  /** Only safe execution receipts from this owner's current conversation. */
+  recentReceipts(dotId: string, threadId: string) {
+    const rows = this.db
+      .prepare(
+        `
+      SELECT r.context,r.state,r.outcome,r.createdAt,r.settledAt
+      FROM ability_receipts r JOIN thread_bindings t
+      ON t.id=json_extract(r.context,'$.threadId')
+      WHERE t.ownerId=? AND t.dotId=? AND t.id=? AND t.deletedAt IS NULL
+      AND json_extract(r.context,'$.dotId')=?
+      ORDER BY r.createdAt DESC,r.rowid DESC LIMIT 20
+    `,
+      )
+      .all(this.ownerId, dotId, threadId, dotId);
+    return rows.map((row) => {
+      const context = contextSchema.parse(JSON.parse(String(row.context)));
+      const outcome = row.outcome
+        ? receiptOutcomeSchema.parse(JSON.parse(String(row.outcome)))
+        : undefined;
+      return {
+        tool: context.tool,
+        bindingId: context.bindingId,
+        state: row.state as AbilityReceipt['state'],
+        createdAt: Number(row.createdAt),
+        settledAt: row.settledAt == null ? null : Number(row.settledAt),
+        ...(outcome
+          ? {
+              outcome: {
+                status: outcome.status,
+                ...(outcome.status === 'error' ? { code: outcome.code } : {}),
+                ...('activity' in outcome && outcome.activity
+                  ? { activity: outcome.activity }
+                  : {}),
+              },
+            }
+          : {}),
+      };
+    });
   }
 }

@@ -266,7 +266,7 @@ export const VOICE_QUALITIES = [
     id: 'high',
     name: 'High',
     description:
-      'Conversation and speech run locally. Requires more memory and processing.',
+      'Local speech with the full task agent. Requires more memory and processing.',
   },
 ] as const;
 export function usesSpeechOutput(quality: VoiceQuality): boolean {

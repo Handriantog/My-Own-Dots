@@ -562,3 +562,129 @@ it.each([
     );
   },
 );
+
+describe('Dot runtime diagnostics', () => {
+  it('reports disabled and disconnected abilities without invoking them or exposing private content', async () => {
+    const f = fixture();
+    const invocationId = randomUUID();
+    await f.service.invoke(
+      {
+        dotId: f.dot.id,
+        bindingId: f.binding.id,
+        threadId: 'thread',
+        tool: 'search',
+        invocationId,
+        arguments: { query: 'private search' },
+      },
+      new AbortController().signal,
+    );
+    await f.service.disable(f.binding.id);
+    f.detach();
+    const report = await f.service.diagnose(f.dot.id, 'thread');
+    expect(report.hostConnected).toBe(false);
+    expect(report.abilities).toContainEqual(
+      expect.objectContaining({
+        id: 'fixture',
+        enabledForDot: false,
+        available: false,
+      }),
+    );
+    expect(report.recentInvocations).toEqual([
+      expect.objectContaining({
+        tool: 'search',
+        state: 'settled',
+        outcome: { status: 'success' },
+      }),
+    ]);
+    expect(JSON.stringify(report)).not.toMatch(
+      /private search|resultRef|clientId|sessionId|settings|grantRevision/,
+    );
+    expect(f.invoke).toHaveBeenCalledTimes(1);
+  });
+  it('keeps diagnostic receipts within the current Dot and conversation', async () => {
+    const f = fixture();
+    f.workspace.bindThread('other-thread', f.dot.id, 'Other thread');
+    await f.service.invoke(
+      {
+        dotId: f.dot.id,
+        bindingId: f.binding.id,
+        threadId: 'other-thread',
+        tool: 'search',
+        invocationId: randomUUID(),
+        arguments: { query: 'other thread' },
+      },
+      new AbortController().signal,
+    );
+    expect(
+      (await f.service.diagnose(f.dot.id, 'thread')).recentInvocations,
+    ).toEqual([]);
+    await expect(f.service.diagnose(f.other.id, 'thread')).rejects.toThrow();
+  });
+  it('gives the model a read-only diagnostic tool even when the Ability host is disconnected', async () => {
+    const f = fixture();
+    f.detach();
+    let calls = 0;
+    let report: unknown;
+    engine.runAgent.mockImplementation(async (request) => {
+      const payload = JSON.parse(
+        request.prompt.slice(request.prompt.indexOf('{')),
+      );
+      if (++calls === 1) {
+        expect(
+          payload.availableTools.some(
+            (tool: { name: string }) => tool.name === 'inspect_dot_runtime',
+          ),
+        ).toBe(true);
+        return {
+          result: {
+            text: '',
+            toolCalls: [{ name: 'inspect_dot_runtime', argumentsJson: '{}' }],
+          },
+          usage: {},
+        };
+      }
+      report = payload.messages.findLast(
+        (message: { role: string }) => message.role === 'tool',
+      )?.content;
+      return {
+        result: { text: 'The desktop host is disconnected.', toolCalls: [] },
+        usage: {},
+      };
+    });
+    const events = await lastValueFrom(f.agent.run(f.input).pipe(toArray()));
+    expect(events.some((event) => event.type === 'RUN_ERROR')).toBe(false);
+    expect(calls).toBe(2);
+    expect(JSON.stringify(report)).toContain('hostConnected');
+    expect(JSON.stringify(report)).toContain('false');
+    expect(f.invoke).not.toHaveBeenCalled();
+  });
+});
+
+it('diagnoses channel and interactive restrictions instead of reporting every enabled tool available', async () => {
+  const typed = fixture(false, true);
+  expect(
+    (await typed.service.diagnose(typed.dot.id, 'thread', 'voice', true))
+      .abilities[0],
+  ).toMatchObject({ available: false, eligibleToolCount: 0 });
+  const interactive = fixture(false, false, true);
+  expect(
+    (
+      await interactive.service.diagnose(
+        interactive.dot.id,
+        'thread',
+        'text',
+        false,
+      )
+    ).abilities[0],
+  ).toMatchObject({ available: false, eligibleToolCount: 0 });
+  expect(
+    (
+      await interactive.service.diagnose(
+        interactive.dot.id,
+        'thread',
+        'text',
+        true,
+      )
+    ).abilities[0],
+  ).toMatchObject({ available: true, eligibleToolCount: 1 });
+});

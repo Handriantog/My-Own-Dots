@@ -702,3 +702,96 @@ it('denies a terminal delegated thread before provider invocation', async () => 
   });
   expect(store.snapshot.lastRun).toBeUndefined();
 });
+
+it('binds pending approvals to the host engine across restart, ignoring client engine claims', async () => {
+  const store = new MemoryStore();
+  const first = Object.assign(
+    new TestAgent((i) =>
+      of<BaseEvent[]>(
+        { type: EventType.RUN_STARTED, threadId: i.threadId, runId: i.runId },
+        {
+          type: EventType.TOOL_CALL_START,
+          toolCallId: 'approval',
+          toolCallName: 'review_local_folder_access',
+          parentMessageId: 'a',
+        },
+        { type: EventType.TOOL_CALL_ARGS, toolCallId: 'approval', delta: '{}' },
+        { type: EventType.TOOL_CALL_END, toolCallId: 'approval' },
+        { type: EventType.RUN_FINISHED, threadId: i.threadId, runId: i.runId },
+      ),
+    ),
+    { executionIdentity: () => 'codex:0.163.0' },
+  );
+  await collect(
+    new LocalAgentRunner(store).run({
+      threadId: 'thread',
+      agent: first,
+      input: { ...input(), forwardedProps: { executionEngine: 'legacy' } },
+    }),
+  );
+  expect(
+    (store.snapshot.lastRun!.input.forwardedProps as Record<string, unknown>)
+      .executionEngine,
+  ).toBe('codex:0.163.0');
+  await collect(
+    new LocalAgentRunner(store).run({
+      threadId: 'thread',
+      agent: new TestAgent(answer),
+      input: { ...input('host-receipt'), messages: [] },
+    }),
+  );
+  expect(
+    (store.snapshot.lastRun!.input.forwardedProps as Record<string, unknown>)
+      .executionEngine,
+  ).toBe('codex:0.163.0');
+  const next = Object.assign(new TestAgent(answer), {
+    executionIdentity: () => 'legacy',
+  });
+  const events = await collect(
+    new LocalAgentRunner(store).run({
+      threadId: 'thread',
+      agent: next,
+      input: {
+        ...input('resume'),
+        messages: [
+          {
+            id: 'result',
+            role: 'tool',
+            toolCallId: 'approval',
+            content: '{"approved":true}',
+          },
+        ],
+        forwardedProps: { executionEngine: 'codex:0.163.0' },
+      },
+    }),
+  );
+  expect(next.calls).toHaveLength(0);
+  expect(events).toContainEqual(
+    expect.objectContaining({
+      type: EventType.RUN_ERROR,
+      message: expect.stringMatching(/engine changed/),
+    }),
+  );
+  expect(store.snapshot.lastRun!.runId).toBe('host-receipt');
+  const same = Object.assign(new TestAgent(answer), {
+    executionIdentity: () => 'codex:0.163.0',
+  });
+  await collect(
+    new LocalAgentRunner(store).run({
+      threadId: 'thread',
+      agent: same,
+      input: {
+        ...input('same-engine'),
+        messages: [
+          {
+            id: 'result',
+            role: 'tool',
+            toolCallId: 'approval',
+            content: '{"approved":true}',
+          },
+        ],
+      },
+    }),
+  );
+  expect(same.calls).toHaveLength(1);
+});

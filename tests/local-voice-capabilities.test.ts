@@ -13,7 +13,7 @@ it('reports subscription buffering without claiming incremental speech or headle
   expect(capabilities).toMatchObject({
     provider: 'codex',
     model: 'chosen-model',
-    integrator: { name: 'myown-llm-integrator', version: '0.2.0' },
+    integrator: { name: 'myown-llm-integrator', version: '0.3.0-rc.1' },
     execution: { backend: 'subscription', location: 'provider-hosted' },
     text: {
       adapter: 'buffered-complete-step',
@@ -71,7 +71,7 @@ it.skipIf(
     expect(stderr).toBe('');
     expect(report).toMatchObject({
       mode: 'fixture-only',
-      integratorVersion: '0.2.0',
+      integratorVersion: '0.3.0-rc.1',
       liveProviderInvoked: false,
       valid: {
         textBeforeSuffix: 0,
@@ -96,3 +96,18 @@ it.skipIf(
   },
   35000,
 );
+
+it('identifies Codex execution and confirmed-or-uncertain cancellation separately from legacy inference', () => {
+  expect(
+    voiceModelCapabilities({
+      llmBackend: 'subscription',
+      llmProvider: 'codex',
+      agentEngine: 'codex',
+    }),
+  ).toMatchObject({
+    execution: { location: 'local-codex-engine-remote-reasoning' },
+    text: { adapter: 'codex-execution-events' },
+    cancellation: { acknowledgement: 'confirmed-or-uncertain' },
+    tools: { headlessApprovalTools: true },
+  });
+});

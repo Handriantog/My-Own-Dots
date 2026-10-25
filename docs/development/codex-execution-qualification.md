@@ -1,0 +1,118 @@
+# Codex execution qualification
+
+25 October 2026. The approved design is implemented in the reliability worktree. The final packaged candidate is open for owner acceptance after automated and live fixture qualification. This is a local test candidate, not a public release.
+
+## Reviewed candidate
+
+- Existing executable: the configured `CODEX_BIN` executable, resolving to the standalone Apple Silicon release `0.163.0` under the owner's Codex installation. No CLI installation, downgrade, login change or credential copying was performed.
+- Upstream: OpenAI's `openai/codex`, Apache-2.0, tag `rust-v0.163.0`, commit `83086188ae0614bd882818ff1aa23f3194962012`. Review used a disposable source checkout. The executable was not rebuilt from that checkout; source/binary equivalence was not independently established.
+- Reviewed interfaces: experimental named permission profiles, `thread/start`, `turn/start`, `turn/interrupt`, dynamic host tools, standalone `command/exec`, process cleanup, configuration and account reads. The stable generated TypeScript interface omits some experimental fields; the pinned Rust protocol definitions are the qualification reference.
+- Reviewed build/dependency material: upstream Cargo manifests/lockfile, CLI wrapper and build scripts, embedded V8 tool dispatcher and module loader. No upstream build, dependency installation or precompiled download was needed. This was a targeted integration review, not a complete audit of every transitive dependency or binary component.
+- Published advisory checked: [GHSA-w5fx-fh39-j5rw](https://github.com/openai/codex/security/advisories/GHSA-w5fx-fh39-j5rw), covering older npm releases through 0.38.0 and fixed in 0.39.0. Its version range does not establish that the candidate is free of other defects.
+
+## Admitted configuration
+
+The additive Integrator execution API accepts exactly `codex-cli 0.163.0` and requires ChatGPT subscription authentication. It honors the host's configured `CODEX_BIN`; it does not silently choose another CLI after a failure. There is no API fallback.
+
+Native commands and edits require a host-approved canonical project with explicit execution access. The profile permits platform-minimal reads and writes inside that project, with command network access disabled. Without an execution grant, native environment tools are absent. Read and read/write folder grants retain their previous meanings.
+
+Before creating a thread, the adapter probes inherited configuration without inference, disables inherited MCP integrations, clears unapproved command environment values and verifies effective restrictions. Provider endpoint overrides, inherited instruction files, conflicting managed requirements and broadened permission profiles fail closed. Project document discovery, plugins, hooks, host skills, browser/computer tools and external integrations are disabled in the native engine; Dot supplies its own scoped host tools.
+
+Dynamic app-server tools were selected instead of a separate MCP subprocess. They call the same Dot executors and approval checks. This is a transport choice within the approved architecture.
+
+The current model requires Codex's embedded V8 tool dispatcher. Disabling its host prevented all tool calls in the first production-adapter attempt. The dispatcher is enabled; Node-style `js_repl` remains disabled. The reviewed module loader rejects imports, and dispatched commands still use the scoped native permission profile. Regression coverage retains the failed configuration case.
+
+## Implemented behavior
+
+Text and High voice use the same Codex execution adapter, Dot tools, folder authority and per-Dot coordinator. Ordinary voice input no longer depends on a local intent classifier. Accepted voice input is durable while a typed turn holds the parent conversation. Status and task-stop controls stay available; speaking interruption is separate from task cancellation. Queued follow-ups resolve authorized predecessor context when execution begins.
+
+Folder approval shows the actual selected path and access. Choosing a replacement makes that folder the target. Execute access is explicit and separately bound to the conversation. Revocation or identity changes stop affected execution; stale pending approvals cannot silently switch engines. Read/write host file tools retain their grants even without native command access.
+
+The host persists admission and dispatch evidence before effects. Lost execution is uncertain, never automatically replayed. Speech uses the canonical stored answer; audio failure does not resubmit a task. Interrupted/muted/revoked output is suppressed and revalidated. A synthesis in flight drains safely before the same speech worker accepts its next request.
+
+High Codex speech uses the pinned local LFM recognition model and the installed macOS Samantha voice. Both run in the existing network-denied speech sandbox; no cloud speech or additional subscription was added. Samantha readiness includes an installed-voice check and file-only synthesis. Generative LFM synthesis was replaced after repeated missed audio termination on technical text, including after segmentation and alternate decoding. Basic/Medium and legacy High retain separate contracts.
+
+## Dependency and build identity
+
+The candidate consumes the installed **myown-llm-integrator 0.3.0-rc.1** from `vendor/myown-llm-integrator-0.3.0-rc.1.tgz`, pinned by the lockfile SHA-512. The npm publishing session returned HTTP 401; this version is not publicly published. No sibling source import stands in for the package.
+
+`build-identity.json` records source SHA-256, base commit, modification state, build time, dependency version/integrity and qualified CLI. Runtime diagnostics expose that identity. Owner-test packages were built from uncommitted source; their recorded source hashes identify those historical candidates independently of the later PR commit. Engine upgrades require requalification.
+
+## Verified boundaries and regressions
+
+All fixtures use disposable projects/storage. No owner application data was used for tests.
+
+| Check                                              | Observed result                                                                                                                                                                          |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Approved native project read/write                 | Succeeded                                                                                                                                                                                |
+| Sibling file read/write and project symlink escape | Denied; outside sentinel unchanged                                                                                                                                                       |
+| Command connection to local listening server       | Denied; server received zero requests                                                                                                                                                    |
+| Inherited command allow rule                       | Prior profile reproduced access; explicit canonical credential-directory denial kept the fixed native command sandboxed                                                                  |
+| Project MCP configuration                          | Prior trusted project launched a marker process; fixed untrusted startup did not                                                                                                         |
+| Native cancellation                                | Standalone command termination confirmed exit 137                                                                                                                                        |
+| Real execution-process loss                        | Killed only the qualification process's app-server child after one host call; result uncertain, one call, no automatic replay                                                            |
+| Actual Dot coding journey                          | Text and finalized voice transcript reproduced failure, edited implementation and passed unchanged test                                                                                  |
+| Real storage worker RPC                            | Async method omission reproduced and fixed; exhaustive TypeScript registry prevents recurrence                                                                                           |
+| Voice queue and cross-channel follow-up            | Durable busy-parent admission, atomic conversion/cancel, approval ordering, predecessor context and restart-no-replay covered                                                            |
+| Actual speech child interruption                   | Mute/interrupt suppress stale audio; subsequent recognition uses the same healthy call worker                                                                                            |
+| Offline speech stress                              | 34 final synthesis/recognition cases passed, including three repetitions of each historical failure sequence and varied technical/Unicode text; markup rejected then worker reuse passed |
+| Dependency suite                                   | 71 JavaScript and 137 Python tests passed; packed Node/provider/Python/CLI smoke passed                                                                                                  |
+| Final candidate core                               | 260 files, 2,487 tests passed, one existing signing-identity skip; 77 Python tests, format, lint, types and build passed                                                                 |
+| macOS native acceptance                            | 635 Vitest tests and two 14-probe Python profiles passed                                                                                                                                 |
+| Linked dependency packaging                        | Cyclic root symlinks reproduced runaway nesting; canonical-root placement fixed it, 14 packaging regressions passed, independent scoped review clean                                     |
+
+Independent reviews covered Integrator execution enforcement and the Dot runtime/lifecycle changes. All actionable findings were fixed and rechecked. The final packaging review was read-only; its test result above was run by the implementer.
+
+The pinned upstream engine sometimes omits `commandExecution` events for rejected code-mode commands. Native event absence is not proof of success. The debugging matrix uses an immutable check file with an independent observation audit to require a real failing value followed by the corrected value.
+
+## Behavioral qualification
+
+`scripts/qualify-codex-journeys.mjs` exercises 10 folder cases, 10 Ability lifecycle cases and five coding cases through the real repositories, runner, Dot adapter and existing subscription. Both typed and synthetic local speech inputs run three times. Ability admission uses the actual service with a deterministic host; this does not prove physical mouse motion or Spotify playback. Separate native acceptance covers host boundaries.
+
+The first matrix exposed a false read-only blocker for granted host file writes in two voice attempts. Dot instructions now distinguish native command scope from independently approved host tools. The targeted text/voice regression passed six of six attempts; the original failed attempts remain in the report. The speech recognizer also heard “Cedar” as “Seeder” in an ambiguous folder request. Approval still requires selecting and showing the actual folder; this is not a claim of perfect recognition.
+
+Folder replacement initially caused unnecessary confirmation, and plaintext code-block labels were omitted from spoken receipts. Both were corrected and retained as regressions. Cases used for these repairs are tuning/regression cases, not independent quality estimates. The packaged matrix recorded 149/150 passing attempts. The remaining attempt stalled in the synthetic input generator before recognition or a Dot task; its specific file-output `say` process was terminated. This is a retained test-harness failure, not a completed Dot request. Input generation is now serialized with receipt synthesis and bounded to 30 seconds. The product speech worker already had its own 30-second bound. Concurrency as the cause of that stall is an inference, not established evidence.
+
+An independent semantic review found a weak debugging oracle: an empty-list implementation passed a single example while failing the intended contract. All 30 coding runs were therefore replaced for acceptance by an explicit-contract dataset with positive, negative and boundary inputs. Those 30/30 runs reproduced failing values, changed the implementation and passed unchanged checks; independent inspection found no superficial fixes. Original weak results remain in the artifacts and do not establish coding acceptance. Six fresh voice write/folder-replacement paraphrases also passed. These bounded fixture results do not estimate success on arbitrary tasks.
+
+Owner startup exposed a missing Accessibility grant. The final change preserves a fixed host-owned `accessibility_required` reason through error outcomes. A refusal is latched per invocation so a later status/stop reply or dishonest worker success cannot erase it. A real confined-worker regression first reproduced the overwrite, then passed after the fix; scoped review is clean. The final package completed 18 affected prerequisite runs: 17 passed mechanically, and one correct Accessibility answer was rejected because the inherited generic predicate required “setup” or “configur”. The answer explicitly stated that the activity did not start and gave the complete Accessibility Settings path. Independent review adjudicates this as a test-oracle false negative; the original failing row remains. A corrected predicate admitted the specific Accessibility explanation and passed three new text repetitions. All six unsupported-platform repetitions in this final dataset passed, including the previously stalled voice case.
+
+A preceding final-test attempt placed an assertion before the answer variable existed: 12 rows failed before reaching the provider, while six unsupported-platform rows passed. This harness error was fixed without a product change. A dedicated test-database restart initially used the wrong port, and a post-launch health assertion expected null rather than the healthy empty-string asset error. Corrected full-core and read-only startup checks passed. These failed attempts remain visible instead of being folded into the success counts.
+
+## Owner-discovered desktop schema regression
+
+After handoff, the owner reported `Transforms cannot be represented in JSON Schema`. The exact handoff binary reproduced the error while registering the desktop website tool, before any provider request. The adapter used the schema library's output mode, which cannot serialize that tool's URL transform. [Zod documents input-mode export](https://zod.dev/json-schema#io); the corrected adapter exports input schemas and still runs the original strict validator and normalization before host execution.
+
+The original task qualification omitted the desktop `openWebsite` callback, so it never registered this schema. Package startup checks alone did not catch agent-request construction. This was an implementation and test-configuration gap. Three new regressions failed before the fix, then passed: the actual website-tool adapter with unsafe URL rejection/normalization, ordinary text through real storage, and ordinary High-voice task dispatch through real storage. The live task harness now includes the desktop browser catalog while refusing external browser effects. Independent focused source review found no actionable issue.
+
+The corrected build `50b3ed149c6f7f340f64adae47c1537a650c59ad11e7d20492ca2e06dd600923` passed 2,490 core tests (one signing-identity skip), 77 Python tests, native acceptance and six affected text/local-voice task cases. The unchanged Spotify helper failed the first package probe without a numeric exit status; the same assertions and deadline passed on retry. Two desktop lifecycle cycles passed. Owner launch had one immediate frame-timeout recovery, followed by stable healthy rendering. Independent review corroborated all six intended outcomes, while the text coding trace lacks the initial command event; its failing-value audit remains available. Final evidence for the corrected package is recorded in `artifacts/codex-execution/schema-fix-handoff.json`; earlier records remain as historical evidence and do not establish desktop-catalog acceptance for the original handoff.
+
+## Natural voice correction
+
+The owner reported that both speech and transcript said only “Received.” The runtime synthesized that admission acknowledgement for every ordinary Codex voice turn, while asynchronous answers were absent from the call transcript. Accepted ordinary and queued requests now wait silently for the actual answer. Explicit status, stop and actionable blocker replies remain spoken. The actual generated answer is added to the call transcript, and updates arriving during native warmup wait until the worker is ready.
+
+Focused review caught an interruption race introduced by awaiting the transcript write: old-generation audio could be emitted after interruption and its ignored acknowledgements could end the call. Three new tests first failed for interrupt, speaker mute and revocation, then passed after authorization was rechecked after saving and stale playback was made to fail closed. The subsequent reply succeeds in each case. The final focused review found no remaining important issue in these changes.
+
+Candidate source `42628d354b4462c4194376eb82339659dc012ff3a8f66d0629ae0bd23004ab4d` passes 2,497 core tests (one existing signing-identity skip), 77 Python tests, the full macOS profile and two packaged lifecycle cycles. The exact package passed a three-turn synthetic local call through the desktop tool catalog, real local recognition/synthesis and Codex. It produced the requested two-word replies and “You’re welcome!” for thanks, with no admission caption/audio, real answers in the persisted transcript, and a successful follow-up after output interruption and microphone mute/unmute.
+
+Transcript-to-first-audio time in these three turns was 4.5–5.9 seconds; native warmup was 7.8 seconds. A timed software playback simulation observed no frame gaps in this small isolated workspace. This is not physical speaker acceptance or an owner-workspace latency measurement. A separate injected-delay probe demonstrated that slow per-frame authorization can underfeed playback while all software sample counters still succeed; its privacy checks remain intact. Samantha remains less expressive than the earlier generative speech path, and inherited Codex model/effort settings still affect response latency.
+
+Evidence is in `artifacts/codex-execution/natural-voice-core-2.log`, `natural-voice-macos.log`, `natural-voice-desktop-smoke.log`, `natural-voice-review.json`, `voice-audio-diagnosis/audit.json` and `packaged-live-call-natural-1/report.json`. Earlier failures and prior candidate records are retained.
+
+## Performance and limits
+
+Offline speech warmup was 4.8 seconds in the final stress run; short acknowledgements were about 0.7 seconds and the longest tested receipt synthesis was 3.05 seconds. These are file-based synthesis timings, not microphone-to-speaker latency. The provisionally proposed 300 ms interruption and five-second substantive-answer targets have not been established. Existing Codex model/effort settings are inherited; remote reasoning latency and subscription allowance still apply.
+
+No arbitrary Ability, project, dependency installation or OS permission flow is guaranteed. Native project commands have no network access and limited system reads; missing build prerequisites can block a task. The test app is locally signed, not notarized. Other providers and the legacy local conversational model have no new reliability qualification.
+
+## Candidate acceptance and recovery
+
+The exact packaged app passed strict deep signature verification after relocation, native/Node/Python Ability smoke, offline Spotify-helper validation, bundled backend smoke, and two clean startup/shutdown cycles with SQLite persistence. A live packaged cross-channel check passed ordinary voice, typed recall, status during a typed run, durable queued voice input, confirmed typed cancellation, queued continuation and its typed follow-up. The complete pre-upgrade owner workspace, profile settings and old app are preserved in a private recovery directory; the backup database passed a read-only integrity check. The owner workspace has migrated to schema 6 with its selected Dot and installed Ability bindings preserved. The initial handoff app at `release-codex-20261025-handoff/My Own Dots-darwin-arm64/My Own Dots.app` has source SHA-256 `25b69e55a81eaf95a23259380557645357b843cc486ac8f91c10c4088cbfd813`, matching that earlier candidate’s source inputs. Its exact relocated Ability/signature check and two desktop lifecycle cycles passed. A new actual LocalVoiceService/LiveVoiceCall test on this final package passed two synthetic utterances, first-result-audio interruption, mute/unmute, subsequent recognition and new result audio. Software playback acknowledgements do not establish physical playback quality. The final owner launch verified High Codex readiness, both Ability bindings, a healthy renderer and the connected workspace window. Accessibility remains false and requires the owner's OS consent. Exact checksums and evidence paths are recorded in `artifacts/codex-execution/handoff-manifest.json`. The old app remains available as the recovery build. Schema 6 adds durable voice state, so returning to the old app requires its pre-upgrade workspace backup rather than opening the upgraded database.
+
+Live microphone/speaker experience, physical Mouse Mover and Spotify effects, and OS permission attribution are owner acceptance items. No microphone recording or external account mutation occurred in these automated checks. Public package publication and GitHub Actions verification remain release work; the owner-test checkpoint preceded PR publication; consult the PR for exact-head CI status.
+
+## Portable evidence and owner feedback
+
+On 25 October 2026 the owner reported the natural-voice correction working in their own test, then asked why High is fixed to Samantha. That report is qualitative acceptance of the observed session; it does not independently establish every physical Ability effect or a general latency/voice-quality threshold. High voice selection and expression remain deferred until after this PR.
+
+Paths under `artifacts/` are ignored local evidence and are unavailable in a clean checkout. This document preserves their non-secret conclusions and limits; use the committed `verify:core`, `verify:macos`, `scripts/qualify-codex-dot.mjs`, `scripts/qualify-codex-journeys.mjs` and `scripts/qualify-local-speech.mjs` to produce fresh evidence with disposable data and the stated prerequisites. The source and packaged integration regressions are in `tests/`. No owner recovery copy, conversation database or raw owner trace is part of the PR.

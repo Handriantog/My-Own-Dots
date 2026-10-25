@@ -223,7 +223,7 @@ describe('native folder selection boundary', () => {
       const pending = pendingSelection();
       window.emit(event);
       pending.finish();
-      await expect(pending.pending).resolves.toBeNull();
+      await expect(pending.pending).rejects.toThrow('Choose the folder again');
     },
   );
 
@@ -236,7 +236,7 @@ describe('native folder selection boundary', () => {
     const pending = pendingSelection();
     window.webContents.emit(event);
     pending.finish();
-    await expect(pending.pending).resolves.toBeNull();
+    await expect(pending.pending).rejects.toThrow('Choose the folder again');
   });
 
   it('invalidates even a main-frame navigation that has not yet committed', async () => {
@@ -249,7 +249,7 @@ describe('native folder selection boundary', () => {
       true,
     );
     pending.finish();
-    await expect(pending.pending).resolves.toBeNull();
+    await expect(pending.pending).rejects.toThrow('Choose the folder again');
   });
 
   it('does not discard selection for an unrelated subframe navigation', async () => {
@@ -284,7 +284,7 @@ describe('native folder selection boundary', () => {
     if (changed === 'minimized') window.minimized = true;
     if (changed === 'destroyed') window.destroyed = true;
     pending.finish();
-    await expect(pending.pending).resolves.toBeNull();
+    await expect(pending.pending).rejects.toThrow('Choose the folder again');
   });
 
   it('removes IPC and event listeners and drops any pending result on destroy', async () => {
@@ -295,6 +295,34 @@ describe('native folder selection boundary', () => {
     expect(window.eventNames()).toEqual([]);
     expect(window.webContents.eventNames()).toEqual([]);
     pending.finish();
-    await expect(pending.pending).resolves.toBeNull();
+    await expect(pending.pending).rejects.toThrow('Choose the folder again');
   });
+
+  it.each(['destroy', 'replace'] as const)(
+    'cleans up a closed window when the picker is asked to %s',
+    (action) => {
+      const closedWindow = window;
+      const contents = window.webContents;
+      closedWindow.destroyed = true;
+      contents.emit('destroyed');
+      closedWindow.emit('closed');
+      // Electron's BrowserWindow accessor throws once its native window is gone.
+      Object.defineProperty(closedWindow, 'webContents', {
+        get() {
+          throw new TypeError('Object has been destroyed');
+        },
+      });
+      expect(() => {
+        if (action === 'replace') {
+          window = windowDouble();
+          picker.attach(window as unknown as BrowserWindow);
+        } else picker.destroy();
+      }).not.toThrow();
+      expect(closedWindow.eventNames()).toEqual([]);
+      expect(contents.eventNames()).toEqual([]);
+      picker.destroy();
+      expect(host.handlers.size).toBe(0);
+      expect(host.ipc!.listenerCount('dot:folders:context')).toBe(0);
+    },
+  );
 });

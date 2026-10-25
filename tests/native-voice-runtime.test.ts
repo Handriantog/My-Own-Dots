@@ -6,10 +6,16 @@ import { existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, expect, it, vi } from 'vitest';
 import { EventType, type BaseEvent } from '@ag-ui/client';
-import { Subject, of } from 'rxjs';
+import { Subject, of, lastValueFrom, toArray } from 'rxjs';
 import { StorageClient } from '../src/server/storage/storage-client.js';
 import { Platform } from '../src/server/platform.js';
+import { CodexAgent } from '../src/server/codex-agent.js';
 import { DotAgent } from '../src/server/dot-agent.js';
+import { codexCoordinator } from '../src/server/codex-runtime.js';
+import {
+  voiceJobReceipt,
+  voiceTaskControl,
+} from '../src/server/local-voice/native-runtime.js';
 import { evidenceHash } from '../src/server/conversation-memory.js';
 import type { NativeVoiceSession } from '../src/server/local-voice/native-contract.js';
 const cleanup: (() => Promise<unknown>)[] = [];
@@ -87,6 +93,332 @@ async function fixture() {
     database: join(root, 'workspace.sqlite'),
   };
 }
+it('sends ordinary High voice conversation through the same task agent in Codex mode', async () => {
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  f.platform.config.llmProvider = 'codex';
+  const executed = vi
+    .spyOn(DotAgent.prototype, 'run')
+    .mockImplementation((input) =>
+      of(
+        {
+          type: EventType.RUN_STARTED,
+          threadId: input.threadId,
+          runId: input.runId,
+        },
+        {
+          type: EventType.TEXT_MESSAGE_START,
+          messageId: 'answer',
+          role: 'assistant',
+        },
+        {
+          type: EventType.TEXT_MESSAGE_CONTENT,
+          messageId: 'answer',
+          delta: 'Hello from the shared engine.',
+        },
+        { type: EventType.TEXT_MESSAGE_END, messageId: 'answer' },
+        {
+          type: EventType.RUN_FINISHED,
+          threadId: input.threadId,
+          runId: input.runId,
+        },
+      ),
+    );
+  const admission = await f.platform.nativeVoice!.turn(f.turn);
+  expect(admission).toMatchObject({
+    awaitingReply: true,
+    text: '',
+    pcm: Buffer.alloc(0),
+  });
+  expect(f.native.speak).not.toHaveBeenCalled();
+  await vi.waitFor(() => expect(executed).toHaveBeenCalledTimes(1));
+  expect(f.native.respond).not.toHaveBeenCalled();
+  const jobs = await f.platform.nativeVoice!.list(f.thread.id);
+  expect(jobs[0].request).toBe('Hello');
+  await vi.waitFor(async () =>
+    expect((await f.platform.nativeVoice!.list(f.thread.id))[0]).toMatchObject({
+      status: 'completed',
+      result: 'Hello from the shared engine.',
+    }),
+  );
+});
+
+it('keeps the next voice request queued durably until the first task releases execution', async () => {
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  f.platform.config.llmProvider = 'codex';
+  const first = new Subject<BaseEvent>();
+  let preceding: Promise<unknown> | undefined;
+  const executed = vi
+    .spyOn(DotAgent.prototype, 'run')
+    .mockImplementation((input) => {
+      preceding = f.platform.localConversations!.getSnapshot(f.thread.id);
+      return of(
+        {
+          type: EventType.RUN_STARTED,
+          threadId: input.threadId,
+          runId: input.runId,
+        },
+        {
+          type: EventType.RUN_FINISHED,
+          threadId: input.threadId,
+          runId: input.runId,
+        },
+      );
+    })
+    .mockImplementationOnce((input) => {
+      queueMicrotask(() =>
+        first.next({
+          type: EventType.RUN_STARTED,
+          threadId: input.threadId,
+          runId: input.runId,
+        }),
+      );
+      return first;
+    });
+  await f.platform.nativeVoice!.turn(f.turn);
+  await vi.waitFor(() => expect(executed).toHaveBeenCalledTimes(1));
+  await f.platform.nativeVoice!.turn({
+    ...f.turn,
+    messageId: randomUUID(),
+    understanding: { route: 'chat', text: 'Then inspect the second test.' },
+  });
+  const jobs = await f.platform.nativeVoice!.list(f.thread.id);
+  expect(jobs).toHaveLength(2);
+  expect(jobs[1]).toMatchObject({
+    status: 'queued',
+    request: 'Then inspect the second test.',
+  });
+  expect(executed).toHaveBeenCalledTimes(1);
+  const run = executed.mock.calls[0][0];
+  first.next({
+    type: EventType.TEXT_MESSAGE_START,
+    messageId: 'prior-answer',
+    role: 'assistant',
+  });
+  first.next({
+    type: EventType.TEXT_MESSAGE_CONTENT,
+    messageId: 'prior-answer',
+    delta: 'The first result is amber fox.',
+  });
+  first.next({ type: EventType.TEXT_MESSAGE_END, messageId: 'prior-answer' });
+  first.next({
+    type: EventType.RUN_FINISHED,
+    threadId: run.threadId,
+    runId: run.runId,
+  });
+  first.complete();
+  await vi.waitFor(() => expect(executed).toHaveBeenCalledTimes(2));
+  expect(JSON.stringify(await preceding)).toContain(
+    'The first result is amber fox.',
+  );
+});
+it('answers status locally and cancels a queued voice request without dispatching it', async () => {
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  f.platform.config.llmProvider = 'codex';
+  const executed = vi.spyOn(DotAgent.prototype, 'run');
+  let release!: () => void;
+  const active = codexCoordinator(f.platform.workspace).run(
+    f.dot.id,
+    'typed-run',
+    new AbortController().signal,
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    'typed-thread',
+  );
+  try {
+    await f.platform.nativeVoice!.turn(f.turn);
+    await f.platform.nativeVoice!.turn({
+      ...f.turn,
+      messageId: randomUUID(),
+      understanding: { route: 'chat', text: 'Task status.' },
+    });
+    expect(f.native.speak).toHaveBeenLastCalledWith(
+      expect.stringMatching(/running/i),
+      expect.any(AbortSignal),
+    );
+    const jobs = await f.platform.nativeVoice!.list(f.thread.id);
+    expect(jobs).toHaveLength(1);
+    await f.platform.nativeVoice!.cancel(jobs[0].id);
+    await vi.waitFor(() =>
+      expect(
+        codexCoordinator(f.platform.workspace).status(f.dot.id).queued,
+      ).toBe(0),
+    );
+    expect(executed).not.toHaveBeenCalled();
+  } finally {
+    release();
+    await active;
+  }
+});
+
+it('speaks the authoritative answer without claiming a blocked task succeeded', () => {
+  const job = {
+    id: 'job',
+    dotId: 'dot',
+    workerThreadId: 'thread',
+    status: 'completed',
+    leaseGeneration: 1,
+    result: 'I could not start the mouse mover because setup is required.',
+  } as Parameters<typeof voiceJobReceipt>[0];
+  expect(voiceJobReceipt(job, true).spoken).toBe(job.result);
+  expect(voiceJobReceipt(job, true).text).not.toMatch(/task.*finished/);
+});
+
+it('recognizes the observed local ASR stop phrasing without treating stop-speaking as task cancellation', () => {
+  expect(voiceTaskControl('Canceled a current task.')).toBe('stop');
+  expect(voiceTaskControl('Cancel the current task.')).toBe('stop');
+  expect(voiceTaskControl('Stop speaking.')).toBeUndefined();
+  expect(voiceTaskControl('Explain how to cancel a task.')).toBeUndefined();
+});
+
+it('persists and answers voice status/stop while a typed run owns the same conversation', async () => {
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  f.platform.config.llmProvider = 'codex';
+  const events = new Subject<BaseEvent>();
+  vi.spyOn(DotAgent.prototype, 'run').mockImplementation((input) => {
+    queueMicrotask(() =>
+      events.next({
+        type: EventType.RUN_STARTED,
+        runId: input.runId,
+        threadId: input.threadId,
+      }),
+    );
+    return events;
+  });
+  const input = {
+    threadId: f.thread.id,
+    runId: randomUUID(),
+    messages: [
+      { id: randomUUID(), role: 'user' as const, content: 'Long typed task' },
+    ],
+    tools: [],
+    context: [],
+    state: {},
+    forwardedProps: {},
+  };
+  const typed = lastValueFrom(
+    f.platform['localRunner']!.run({
+      threadId: f.thread.id,
+      agent: new DotAgent(
+        f.platform.store,
+        f.platform.workspace,
+        f.platform.config,
+        f.dot.id,
+      ),
+      input,
+    }).pipe(toArray()),
+  );
+  await vi.waitFor(async () =>
+    expect(
+      (await f.platform.localConversations!.getSnapshot(f.thread.id)).lastRun
+        ?.status,
+    ).toBe('running'),
+  );
+  const status = await f.platform.nativeVoice!.turn({
+    ...f.turn,
+    messageId: randomUUID(),
+    understanding: { route: 'chat', text: 'Task status.' },
+  });
+  expect(status.text).toMatch(/running/);
+  const stopped = await f.platform.nativeVoice!.turn({
+    ...f.turn,
+    messageId: randomUUID(),
+    understanding: { route: 'chat', text: 'Cancel the current task.' },
+  });
+  expect(stopped.text).toMatch(/Stop requested/);
+  await typed;
+  expect(
+    (await f.platform.localConversations!.getSnapshot(f.thread.id)).lastRun
+      ?.status,
+  ).toBe('stopped');
+  expect(
+    (await f.storage.repositories.voiceDelegations.pendingInputs()).map(
+      (row) => row.kind,
+    ),
+  ).toEqual(['status', 'stop']);
+});
+
+it('durably receives ordinary voice while typed work owns the parent, then dispatches it after release', async () => {
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  f.platform.config.llmProvider = 'codex';
+  const first = new Subject<BaseEvent>();
+  const executed = vi
+    .spyOn(DotAgent.prototype, 'run')
+    .mockImplementation((input) =>
+      of(
+        {
+          type: EventType.RUN_STARTED,
+          runId: input.runId,
+          threadId: input.threadId,
+        },
+        {
+          type: EventType.RUN_FINISHED,
+          runId: input.runId,
+          threadId: input.threadId,
+        },
+      ),
+    )
+    .mockImplementationOnce((input) => {
+      queueMicrotask(() =>
+        first.next({
+          type: EventType.RUN_STARTED,
+          runId: input.runId,
+          threadId: input.threadId,
+        }),
+      );
+      return first;
+    });
+  const input = {
+    threadId: f.thread.id,
+    runId: randomUUID(),
+    messages: [
+      { id: randomUUID(), role: 'user' as const, content: 'Typed work' },
+    ],
+    tools: [],
+    context: [],
+    state: {},
+    forwardedProps: {},
+  };
+  const typed = lastValueFrom(
+    f.platform['localRunner']!.run({
+      threadId: f.thread.id,
+      agent: new DotAgent(
+        f.platform.store,
+        f.platform.workspace,
+        f.platform.config,
+        f.dot.id,
+      ),
+      input,
+    }).pipe(toArray()),
+  );
+  await vi.waitFor(() => expect(executed).toHaveBeenCalledTimes(1));
+  const received = await f.platform.nativeVoice!.turn(f.turn);
+  expect(received).toMatchObject({
+    awaitingReply: true,
+    text: '',
+    pcm: Buffer.alloc(0),
+  });
+  expect(f.native.speak).not.toHaveBeenCalled();
+  expect(await f.storage.repositories.voiceDelegations.pendingInputs()).toEqual(
+    [expect.objectContaining({ kind: 'request', caption: 'Hello' })],
+  );
+  first.next({
+    type: EventType.RUN_FINISHED,
+    runId: input.runId,
+    threadId: input.threadId,
+  });
+  first.complete();
+  await typed;
+  await vi.waitFor(() => expect(executed).toHaveBeenCalledTimes(2), {
+    timeout: 3500,
+  });
+});
 it('keeps casual conversation local, sends the original waveform and persists canonical text', async () => {
   const provider = vi.spyOn(DotAgent.prototype, 'run');
   const f = await fixture();
@@ -616,4 +948,100 @@ it('speaks a bounded actual result and keeps code in the task conversation', asy
   expect(receipt.spoken).toContain('amber fox');
   expect(receipt.spoken).not.toContain('const hidden');
   expect(receipt.spoken.length).toBeLessThanOrEqual(400);
+});
+
+it('keeps the outer Dot run open through timeout until native cancellation is confirmed', async () => {
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  f.platform.config.llmProvider = 'codex';
+  f.platform.config.storageEngine = 'sqlite';
+  f.platform.config.agentRunTimeoutMs = 700;
+  const native = new Subject<BaseEvent>();
+  let current!: Parameters<CodexAgent['run']>[0];
+  const executed = vi
+    .spyOn(CodexAgent.prototype, 'run')
+    .mockImplementation((input) => {
+      current = input;
+      queueMicrotask(() =>
+        native.next({
+          type: EventType.RUN_STARTED,
+          threadId: input.threadId,
+          runId: input.runId,
+        }),
+      );
+      return native;
+    });
+  const aborted = vi
+    .spyOn(CodexAgent.prototype, 'abortRun')
+    .mockImplementation(() => {});
+  const input = {
+    threadId: f.thread.id,
+    runId: randomUUID(),
+    messages: [
+      {
+        id: randomUUID(),
+        role: 'user' as const,
+        content: 'Inspect runtime status',
+      },
+    ],
+    tools: [],
+    context: [],
+    state: {},
+    forwardedProps: {},
+  };
+  let done = false;
+  const run = lastValueFrom(
+    f.platform['localRunner']!.run({
+      threadId: f.thread.id,
+      agent: new DotAgent(
+        f.platform.store,
+        f.platform.workspace,
+        f.platform.config,
+        f.dot.id,
+      ),
+      input,
+    }).pipe(toArray()),
+  ).then((events) => {
+    done = true;
+    return events;
+  });
+  await vi.waitFor(() => expect(executed).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(aborted).toHaveBeenCalled(), { timeout: 1500 });
+  expect(done).toBe(false);
+  expect(
+    (await f.platform.localConversations!.getSnapshot(f.thread.id)).lastRun
+      ?.status,
+  ).toBe('running');
+  native.next({
+    type: EventType.RUN_ERROR,
+    code: 'EXECUTION_UNCERTAIN',
+    message: 'Native process ended without confirmed cancellation.',
+  });
+  native.complete();
+  const events = await run;
+  expect(events.at(-1)).toMatchObject({
+    type: EventType.RUN_ERROR,
+    code: 'EXECUTION_UNCERTAIN',
+  });
+  expect(
+    (await f.platform.localConversations!.getSnapshot(f.thread.id)).lastRun
+      ?.status,
+  ).toBe('interrupted');
+  expect(current.runId).toBe(input.runId);
+});
+
+it('speaks short plain-text result blocks while leaving programming code in chat', () => {
+  const job = {
+    id: 'job',
+    dotId: 'dot',
+    workerThreadId: 'thread',
+    status: 'completed',
+    leaseGeneration: 1,
+    result: 'The label is:\n```text\nmaple token\n```',
+  } as Parameters<typeof voiceJobReceipt>[0];
+  expect(voiceJobReceipt(job, true).spoken).toContain('maple token');
+  expect(
+    voiceJobReceipt({ ...job, result: '```js\nexport const a = 1;\n```' }, true)
+      .spoken,
+  ).toContain('Code is in the task conversation');
 });

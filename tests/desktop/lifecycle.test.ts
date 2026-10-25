@@ -814,17 +814,22 @@ it.each(['pause', 'stop'] as const)(
       idleMs: 10000,
     };
     let finishMove!: (value: boolean) => void;
-    env.pointer = {
-      begin: async () => physical,
-      move: () =>
-        new Promise((resolve) => {
+    const move = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
           finishMove = resolve;
         }),
+    );
+    env.pointer = {
+      begin: async () => physical,
+      move,
       end: () => {},
     };
     await driver.start({ bindingId: 'fixture', dotId: 'fixture' }, definition);
     await vi.advanceTimersByTimeAsync(550);
-    expect(driver.status('fixture')).toBe('running');
+    expect(move).toHaveBeenCalledTimes(1);
+    // Movement has been submitted, but the native acknowledgement is pending.
+    expect(driver.status('fixture')).toBe('approaching');
     const painted = host.frame!;
     await vi.advanceTimersByTimeAsync(75);
     expect(host.frame).toBe(painted); // future poses are queued behind native ack
@@ -835,6 +840,10 @@ it.each(['pause', 'stop'] as const)(
     finishMove(true);
     await vi.advanceTimersByTimeAsync(0);
     expect(host.frame).toBe(painted); // no obsolete future activity pose dispatched
+    expect(move).toHaveBeenCalledTimes(1);
+    expect(driver.status('fixture')).toBe(
+      release === 'pause' ? 'paused' : 'inactive',
+    ); // a late acknowledgement cannot restore movement evidence
     await driver.stop();
     clearInterval(refresh);
   },

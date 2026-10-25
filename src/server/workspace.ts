@@ -496,6 +496,12 @@ export class WorkspaceStore {
         throw new Error(
           'Conversation is busy. Finish its voice task before deleting it.',
         );
+      if (hasTable('voice_input_receipts'))
+        this.db
+          .prepare(
+            "UPDATE voice_input_receipts SET status='interrupted',reply='Conversation moved to Trash; request was not resumed.',deliveredAt=? WHERE ownerId=? AND parentThreadId=? AND deliveredAt IS NULL",
+          )
+          .run(Date.now(), this.ownerId, id);
       const deletedAt = Date.now();
       this.db
         .prepare(

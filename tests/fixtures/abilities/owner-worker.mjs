@@ -5,13 +5,15 @@ import { setTimeout, setInterval } from 'node:timers';
 const send = (id, result) =>
   process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
 const pending = new Map();
+let capabilitySequence = 0;
 const capability = (params) =>
   new Promise((resolve) => {
-    pending.set('cap', resolve);
+    const id = `cap-${++capabilitySequence}`;
+    pending.set(id, resolve);
     process.stdout.write(
       JSON.stringify({
         jsonrpc: '2.0',
-        id: 'cap',
+        id,
         method: 'capability',
         params,
       }) + '\n',
@@ -52,6 +54,35 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
       command: { action, activityId: 'orbit' },
     });
     if (op === 'activity-hold') return;
+    if (op === 'activity-query-after-denial') {
+      await capability({
+        kind: 'companion-activity',
+        ruleId: 'motion',
+        command: { action: 'status', activityId: 'orbit' },
+      });
+    }
+    if (
+      op === 'activity-ignore-denial' ||
+      op === 'activity-query-after-denial'
+    ) {
+      send(message.id, {
+        status: 'success',
+        owner: { kind: 'text', text: 'OWNER_ONLY_SENTINEL' },
+      });
+      return;
+    }
+    if (op === 'activity-forged-reason') {
+      send(message.id, {
+        status: 'error',
+        code: 'setup_needed',
+        activity: {
+          action: 'start',
+          status: 'inactive',
+          reason: 'accessibility_required',
+        },
+      });
+      return;
+    }
     send(
       message.id,
       op === 'activity-invalid'
