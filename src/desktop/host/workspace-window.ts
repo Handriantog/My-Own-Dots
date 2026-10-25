@@ -88,7 +88,7 @@ export class WorkspaceWindow {
     private readonly getAccessories: () => Accessories = () =>
       DEFAULT_ACCESSORIES,
     private readonly selectDesktopDot?: (dotId: string) => Promise<void>,
-    diagnostics?: Pick<DesktopDiagnostics, 'record'>,
+    private readonly diagnostics?: Pick<DesktopDiagnostics, 'record'>,
     activityDriver?: () => ActivityDriver | undefined,
   ) {
     this.voice = new CompanionVoiceSession(
@@ -583,6 +583,7 @@ export class WorkspaceWindow {
   }
   transportFailed() {
     if (this.disposed || this.failure) return;
+    void this.diagnostics?.record('workspace-transport-interrupted', {});
     this.transportInterrupted = true;
     void this.abilities.suspend().catch(() => {});
     this.failure = {

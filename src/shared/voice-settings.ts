@@ -272,12 +272,25 @@ export const VOICE_QUALITIES = [
 export function usesSpeechOutput(quality: VoiceQuality): boolean {
   return quality !== 'basic';
 }
+export const HIGH_VOICES = [
+  { id: 'vivian', name: 'Vivian' },
+  { id: 'serena', name: 'Serena' },
+  { id: 'ryan', name: 'Ryan' },
+  { id: 'aiden', name: 'Aiden' },
+  { id: 'uncle_fu', name: 'Uncle Fu' },
+  { id: 'ono_anna', name: 'Ono Anna' },
+  { id: 'sohee', name: 'Sohee' },
+  { id: 'dylan', name: 'Dylan' },
+  { id: 'eric', name: 'Eric' },
+] as const;
+export const DEFAULT_HIGH_VOICE = 'vivian';
 /** Updates keep omission intact until the storage worker merges the saved value. */
 export const voiceSettingsUpdateSchema = z
   .object({
     voiceId: z.enum(VOICES.map((voice) => voice.id)),
     personality: z.enum(PERSONALITIES.map((personality) => personality.id)),
     quality: voiceQualitySchema.optional(),
+    highVoiceId: z.enum(HIGH_VOICES.map((voice) => voice.id)).optional(),
   })
   .strict();
 export const voiceSettingsSchema = voiceSettingsUpdateSchema.extend({

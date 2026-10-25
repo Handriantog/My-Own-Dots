@@ -435,6 +435,13 @@ worker.system_speech("Synthetic cancellation probe.")
             with self.assertRaises(ValueError):
                 worker.verify_assets(root, manifest)
 
+class RecognitionOnlyTests(unittest.TestCase):
+    def test_recognition_only_never_requires_system_speech(self):
+        with patch.object(worker, 'system_speech_ready', side_effect=AssertionError('Samantha must not be required')), \
+             patch.object(worker, 'verify_assets', side_effect=ValueError('asset verification reached')):
+            with self.assertRaisesRegex(ValueError, 'asset verification reached'):
+                worker.LfmRuntime(Path('fixture'), recognition_only=True)
+
 
 if __name__ == "__main__":
     unittest.main()

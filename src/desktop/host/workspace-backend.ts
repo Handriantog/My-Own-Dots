@@ -1,3 +1,5 @@
+import { DailyErrorLog } from '../../shared/error-log.js';
+import { folderPython } from '../../server/folder-python.js';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { DesktopBrowserOpener } from './browser-opener.js';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -77,6 +79,7 @@ const editable = new Set([
   'LLM_BACKEND',
   'LLM_PROVIDER',
   'DOTS_AGENT_ENGINE',
+  'DOTS_FOLDER_PYTHON',
   'LLM_MODEL',
   'OPENAI_API_KEY',
   'OPENAI_MODEL',
@@ -114,6 +117,10 @@ export function validateWorkspaceConfiguration(values: Record<string, string>) {
       throw new Error('Unsupported workspace configuration value.');
     configurationLine(key, value);
   }
+  if (values.DOTS_FOLDER_PYTHON && !path.isAbsolute(values.DOTS_FOLDER_PYTHON))
+    throw new Error(
+      'DOTS_FOLDER_PYTHON must be an absolute Python 3.12 interpreter path.',
+    );
   if (values.HOST && !['127.0.0.1', 'localhost', '::1'].includes(values.HOST))
     throw new Error('Desktop HOST must be a loopback address.');
   for (const key of ['PORT', 'LOCAL_POSTGRES_PORT']) {
@@ -190,7 +197,10 @@ export class WorkspaceBackend {
     stage: 'workspace',
   };
   private config?: WorkspaceBackendConfiguration;
-  constructor(private readonly options: WorkspaceBackendOptions) {}
+  private readonly errors: DailyErrorLog;
+  constructor(private readonly options: WorkspaceBackendOptions) {
+    this.errors = new DailyErrorLog(path.join(options.data, 'logs'), 'desktop');
+  }
   get status() {
     return { ...this.current };
   }
@@ -210,6 +220,7 @@ export class WorkspaceBackend {
     warning?: string,
     stage?: WorkspaceStatus['stage'],
   ) {
+    if (phase === 'error') this.errors.record('backend_failed', message);
     const nextStage = stage ?? (phase === 'ready' ? 'ready' : undefined);
     this.current = {
       phase,
@@ -549,11 +560,15 @@ export class WorkspaceBackend {
       this.config!.workspace,
       'integrations/llm/.venv',
     );
-    const pythonEnvironment =
-      env.UV_PROJECT_ENVIRONMENT ||
-      ((await stat(previousPython).catch(() => undefined))?.isDirectory()
+    const pythonEnvironment = env.UV_PROJECT_ENVIRONMENT
+      ? path.resolve(
+          this.config!.workspace,
+          'integrations/llm/python',
+          env.UV_PROJECT_ENVIRONMENT,
+        )
+      : (await stat(previousPython).catch(() => undefined))?.isDirectory()
         ? previousPython
-        : path.join(this.options.data, 'integrations/llm/.venv'));
+        : path.join(this.options.data, 'integrations/llm/.venv');
     const child = spawn(
       this.options.executable || process.execPath,
       [path.join(this.options.bundle, 'server/index.js')],
@@ -563,6 +578,12 @@ export class WorkspaceBackend {
           ...env,
           ELECTRON_RUN_AS_NODE: '1',
           UV_PROJECT_ENVIRONMENT: pythonEnvironment,
+          UV_PYTHON: '3.12',
+          DOTS_FOLDER_PYTHON: folderPython({
+            ...env,
+            UV_PROJECT_ENVIRONMENT: pythonEnvironment,
+          }),
+          DOTS_ERROR_LOG_DIR: path.join(this.options.data, 'logs'),
           NODE_ENV: 'production',
           HOST: host,
           PORT: String(port),
@@ -594,7 +615,8 @@ export class WorkspaceBackend {
       });
     }
     let failure: Error | undefined;
-    child.once('error', () => {
+    child.once('error', (error) => {
+      this.errors.record('backend_start_failed', error);
       failure = new Error(
         'Bundled Node runtime could not start. Reinstall the application and retry.',
       );
@@ -603,6 +625,8 @@ export class WorkspaceBackend {
       failure = new Error(
         `Workspace backend exited (${code ?? signal ?? 'unknown'}). Check workspace configuration and integration setup, then retry.`,
       );
+      if (this.child === child && generation === this.generation)
+        this.errors.record('backend_exited', failure, { code, signal });
       if (this.active?.owned && this.child === child) {
         this.active = undefined;
         this.update('error', failure.message);

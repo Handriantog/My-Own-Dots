@@ -40,8 +40,9 @@ export function unionEvidence(
     spaceIds: [...new Set([...(a?.spaceIds ?? []), ...guard.spaceIds])].sort(),
     pageIds: [...new Set([...(a?.pageIds ?? []), ...guard.pageIds])].sort(),
     ...Object.fromEntries(
-      ['memoryItemIds', 'memorySourceKeys'].flatMap((key) => {
-        const k = key as 'memoryItemIds' | 'memorySourceKeys';
+      ['memoryItemIds', 'memorySourceKeys', 'folderGrantIds'].flatMap((key) => {
+        const k = key as
+          'memoryItemIds' | 'memorySourceKeys' | 'folderGrantIds';
         const values = [
           ...new Set([...(a?.[k] ?? []), ...(guard[k] ?? [])]),
         ].sort();
@@ -57,6 +58,12 @@ export function guardDependenciesAllowed(
   memoryEnabled: boolean,
   seen = new Set<string>(),
 ): boolean {
+  if (guard.folderGrantIds?.length) {
+    const grants = new Set(
+      workspace.folders.list(dotId).map((grant) => grant.id),
+    );
+    if (guard.folderGrantIds.some((id) => !grants.has(id))) return false;
+  }
   if (
     (guard.memoryItemIds?.length || guard.memorySourceKeys?.length) &&
     (!memoryEnabled || !workspace.dot(dotId)?.memoryAllowed)

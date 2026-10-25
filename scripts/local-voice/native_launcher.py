@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 
-def sandbox_profile(runtime, scripts, cache):
+def sandbox_profile(runtime, scripts, cache, model_root=None):
     system_cache = Path(subprocess.check_output(
         ["/usr/bin/getconf", "DARWIN_USER_CACHE_DIR"], text=True,
         env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"},
@@ -32,7 +32,8 @@ def sandbox_profile(runtime, scripts, cache):
         '(iokit-user-client-class "AGXDeviceUserClient"))\n'
         '(deny file-read* (require-all (subpath "/Users") '
         "(require-not (subpath " + literal(runtime) + ")) "
-        "(require-not (subpath " + literal(scripts) + "))))\n"
+        "(require-not (subpath " + literal(scripts) + "))"
+        + ("(require-not (subpath " + literal(model_root) + "))" if model_root else "") + "))\n"
         '(deny file-read* (subpath "/Library/Keychains") (subpath "/private/var/root"))\n'
         "(allow file-read-metadata)\n"
         "(allow file-write* file-issue-extension (subpath " + literal(cache) + "))\n"
@@ -71,6 +72,7 @@ def main():
     parser.add_argument("--runtime-root", type=Path, required=True)
     parser.add_argument("--python", type=Path)
     parser.add_argument("--speech-only", action="store_true")
+    parser.add_argument("--recognition-only", action="store_true")
     args = parser.parse_args()
     if sys.platform != "darwin" or platform.machine() != "arm64":
         raise ValueError("Native voice requires Apple Silicon macOS")
@@ -99,7 +101,9 @@ def main():
         str(python), "-B", str(scripts / "native_worker.py"),
         "--audio-model", str(runtime / "models" / manifest["audio"]["revision"]),
     ]
-    if not args.speech_only:
+    if args.recognition_only:
+        command += ["--recognition-only"]
+    if not args.speech_only and not args.recognition_only:
         command += ["--router-model", str(runtime / "models" / manifest["router"]["revision"])]
     # Replace this process; parent cancellation targets the actual worker PID.
     # Libraries inspect cwd at startup; never broaden reads to the app workspace.

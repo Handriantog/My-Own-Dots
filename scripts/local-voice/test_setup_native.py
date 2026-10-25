@@ -96,7 +96,7 @@ class NativeSetupTests(unittest.TestCase):
         command = setup.download_command(artifact(b"data"))
         self.assertEqual(command[:2], ["/usr/bin/curl", "-q"])
         self.assertIn("--max-filesize", command)
-        self.assertEqual(command[command.index("--max-filesize") + 1], "4")
+        self.assertEqual(command[command.index("--max-filesize") + 1], "65536")
         self.assertIn("--proto-redir", command)
         self.assertEqual(command[command.index("--proto-redir") + 1], "=https")
         for url in ("http://huggingface.co/file", "https://user:secret@huggingface.co/file", "https://localhost/file", "https://files.pythonhosted.org:444/file"):

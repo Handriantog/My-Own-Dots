@@ -40,7 +40,7 @@ const pythonEnvironment = path.resolve(
 environment.UV_PROJECT_ENVIRONMENT = pythonEnvironment;
 const result = spawnSync(
   environment.UV_BIN || 'uv',
-  ['sync', '--project', python, '--frozen', '--no-dev'],
+  ['sync', '--project', python, '--python', '3.12', '--frozen', '--no-dev'],
   { stdio: 'inherit', env: environment },
 );
 if (result.error || result.status !== 0)

@@ -5,7 +5,7 @@ import type { FolderAccessService } from '../src/server/folder-access';
 function fixture() {
   const service = {
     request: vi.fn(() => ({ id: 'request-id' })),
-    list: vi.fn(() => [
+    available: vi.fn(async () => [
       {
         id: 'grant-id',
         name: 'Work',

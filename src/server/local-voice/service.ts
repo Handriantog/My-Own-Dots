@@ -1,3 +1,4 @@
+import { logError } from '../../shared/error-log.js';
 import { timingSafeEqual, randomBytes, createHash } from 'node:crypto';
 import { access, lstat, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -13,6 +14,7 @@ import { LocalSpeechWorker } from './worker.js';
 import { clearVoiceTurn, setVoiceTurn } from './context.js';
 import {
   personalityFor,
+  DEFAULT_HIGH_VOICE,
   voiceSettingsSchema,
   voiceSettingsUpdateSchema,
   type VoiceQuality,
@@ -21,6 +23,7 @@ import {
 import { encodeFixtureWav } from './audio.js';
 import { VoiceInferenceSession, VoiceProviderSession } from './inference.js';
 import { NativeVoiceWorker } from './native-worker.js';
+import { QwenVoiceSession } from './qwen-voice.js';
 import { voiceJobReceipt } from './native-runtime.js';
 export interface LocalVoiceConfig {
   enabled: boolean;
@@ -34,6 +37,9 @@ export interface LocalVoiceConfig {
   nativePython?: string;
   nativeLauncher?: string;
   nativeManifest?: string;
+  qwenTtsRoot?: string;
+  qwenTtsLauncher?: string;
+  qwenTtsManifest?: string;
 }
 export function localVoiceConfig(env: NodeJS.ProcessEnv): LocalVoiceConfig {
   const root = join(
@@ -46,6 +52,17 @@ export function localVoiceConfig(env: NodeJS.ProcessEnv): LocalVoiceConfig {
   return {
     enabled: env.LOCAL_VOICE_ENABLED === '1',
     nativeRoot,
+    qwenTtsRoot:
+      env.LOCAL_VOICE_TTS_ROOT ||
+      join(homedir(), 'Library/Application Support/My Own Dots/qwen3-tts'),
+    qwenTtsLauncher: resolve(
+      env.DOTS_RUNTIME_ROOT || '.',
+      'scripts/local-voice/qwen_launcher.py',
+    ),
+    qwenTtsManifest: resolve(
+      env.DOTS_RUNTIME_ROOT || '.',
+      'scripts/local-voice/qwen3-tts-model.json',
+    ),
     nativePython:
       env.LOCAL_VOICE_NATIVE_PYTHON || join(nativeRoot, 'venv/bin/python'),
     nativeLauncher: resolve(
@@ -120,6 +137,33 @@ export class LocalVoiceService {
       ...(settings ? { voiceSettings: { ...settings } } : {}),
     });
   }
+  private qwenWorker(settings: VoiceSettings) {
+    if (
+      !this.config.qwenTtsRoot ||
+      !this.config.qwenTtsLauncher ||
+      !this.config.nativeRoot ||
+      !this.config.nativePython
+    )
+      throw Error('Install the High voice speech model.');
+    return new NativeVoiceWorker({
+      executable: this.config.nativePython,
+      args: [
+        this.config.qwenTtsLauncher,
+        '--runtime-root',
+        this.config.nativeRoot,
+        '--python',
+        this.config.nativePython,
+        '--tts-root',
+        this.config.qwenTtsRoot,
+        '--voice',
+        settings.highVoiceId ?? DEFAULT_HIGH_VOICE,
+        '--personality',
+        settings.personality,
+      ],
+      speechChunkSize: 240,
+      timeoutMs: 45000,
+    });
+  }
   preview(
     dotId: string,
     input: unknown,
@@ -143,21 +187,30 @@ export class LocalVoiceService {
     };
     this.previewing = work;
     const preview = async () => {
-      let worker: LocalSpeechWorker | undefined;
+      let worker: LocalSpeechWorker | NativeVoiceWorker | undefined;
       let release: (() => void) | undefined;
       try {
         signal.throwIfAborted();
         const saved = await this.settings(dotId);
         const settings = voiceSettingsSchema.parse({
+          ...saved,
           ...update,
           quality: update.quality ?? saved.quality,
         });
-        if (saved.quality !== 'medium' || settings.quality !== 'medium')
+        const high =
+          settings.quality === 'high' &&
+          this.platform.config.agentEngine === 'codex';
+        if (
+          !high &&
+          (saved.quality !== 'medium' || settings.quality !== 'medium')
+        )
           throw Error(
             'Voice preview is available only in Medium. Save Medium quality to preview a voice.',
           );
         if (
-          !(await this.status(dotId)).ready ||
+          !(high
+            ? (await this.status(dotId)).modes?.high.ready
+            : (await this.status(dotId)).ready) ||
           (await this.platform.store.settings()).paused
         )
           throw Error('Local speech is unavailable.');
@@ -169,14 +222,21 @@ export class LocalVoiceService {
           });
         await waitForVoiceOperation(foreground, signal);
         signal.throwIfAborted();
-        worker = this.worker('synthesis', settings);
+        worker = high
+          ? this.qwenWorker(settings)
+          : this.worker('synthesis', settings);
         await worker.warm(signal);
-        const pcm = await worker.synthesize(
-          personalityFor(settings).previewText,
-          signal,
-        );
+        const text = personalityFor(settings).previewText;
+        const pcm =
+          worker instanceof NativeVoiceWorker
+            ? (await worker.speak(text, signal)).pcm
+            : await worker.synthesize(text, signal);
         signal.throwIfAborted();
         return encodeFixtureWav(pcm, 24000);
+      } catch (error) {
+        if (!signal.aborted)
+          logError('voice_preview_failed', error, { operation: 'preview' });
+        throw error;
       } finally {
         try {
           await worker?.close();
@@ -213,11 +273,15 @@ export class LocalVoiceService {
       audioOutput,
       needsSetup: !ready,
     });
-    let high = mode(
-      true,
-      false,
-      'Install the pinned High voice runtime and models. High requires Apple Silicon macOS and local SQLite storage.',
-    );
+    let high: VoiceModeStatus = {
+      ...mode(
+        true,
+        false,
+        'Install the pinned High voice runtime and models. High requires Apple Silicon macOS and local SQLite storage.',
+      ),
+      speechEngine:
+        this.platform.config.agentEngine === 'codex' ? 'qwen3' : 'lfm',
+    };
     const unavailable = (reason: string): LocalVoiceStatus => ({
       enabled: this.config.enabled,
       ready: false,
@@ -320,9 +384,27 @@ export class LocalVoiceService {
           'audio' | 'router',
           { revision: string; files: { path: string; bytes: number }[] }
         >;
-        for (const model of this.platform.config.agentEngine === 'codex'
-          ? [native.audio]
-          : [native.audio, native.router]) {
+        const models = (
+          this.platform.config.agentEngine === 'codex'
+            ? [native.audio]
+            : [native.audio, native.router]
+        ).map((model) => ({ model, root: this.config.nativeRoot! }));
+        if (this.platform.config.agentEngine === 'codex') {
+          if (
+            !this.config.qwenTtsRoot ||
+            !this.config.qwenTtsLauncher ||
+            !this.config.qwenTtsManifest
+          )
+            throw Error();
+          high.reason =
+            'Install the Qwen3-TTS High voice model. See the local voice setup guide.';
+          await access(this.config.qwenTtsLauncher, constants.R_OK);
+          const tts = JSON.parse(
+            await readFile(this.config.qwenTtsManifest, 'utf8'),
+          ) as { tts: typeof native.audio };
+          models.push({ model: tts.tts, root: this.config.qwenTtsRoot });
+        }
+        for (const { model, root } of models) {
           if (!/^[a-f0-9]{40}$/.test(model.revision) || !model.files.length)
             throw Error();
           for (const file of model.files) {
@@ -338,7 +420,7 @@ export class LocalVoiceService {
               file.bytes < 1
             )
               throw Error();
-            let path = this.config.nativeRoot;
+            let path = root;
             for (const part of ['models', model.revision, ...parts]) {
               if (!(await lstat(path)).isDirectory()) throw Error();
               path = join(path, part);
@@ -347,13 +429,16 @@ export class LocalVoiceService {
             if (!stat.isFile() || stat.size !== file.bytes) throw Error();
           }
         }
-        high = mode(
-          true,
-          true,
-          this.platform.config.agentEngine === 'codex'
-            ? 'Speech stays on this Mac using its Samantha voice. Conversation and tasks use your Codex subscription and approved tools.'
-            : 'Local conversation and speech are installed. Replies use your transcribed words; emotion and background sounds do not guide the answer. Tasks use your subscription and existing approvals.',
-        );
+        high = {
+          ...mode(
+            true,
+            true,
+            this.platform.config.agentEngine === 'codex'
+              ? 'Natural speech runs on this Mac. Conversation and tasks use your Codex subscription and approved tools.'
+              : 'Local conversation and speech are installed. Replies use your transcribed words; emotion and background sounds do not guide the answer. Tasks use your subscription and existing approvals.',
+          ),
+          speechEngine: high.speechEngine,
+        };
       } catch {
         /* Readiness is separate from Basic and Medium. Hashes are checked at warmup. */
       }
@@ -448,7 +533,7 @@ export class LocalVoiceService {
         throw Error('Wait for the current response before starting a call.');
       signal.throwIfAborted();
       const receipt = await this.platform.workspace.createCall(threadId);
-      const native =
+      const recognition =
         voiceSettings.quality === 'high'
           ? new NativeVoiceWorker({
               executable: this.config.nativePython!,
@@ -459,11 +544,15 @@ export class LocalVoiceService {
                 '--python',
                 this.config.nativePython!,
                 ...(this.platform.config.agentEngine === 'codex'
-                  ? ['--speech-only']
+                  ? ['--recognition-only']
                   : []),
               ],
             })
           : undefined;
+      const native =
+        recognition && this.platform.config.agentEngine === 'codex'
+          ? new QwenVoiceSession(recognition, this.qwenWorker(voiceSettings))
+          : recognition;
       const providerSession =
         !native &&
         this.config.providerSession &&
@@ -576,7 +665,7 @@ export class LocalVoiceService {
       release = undefined;
       this.call = call;
       const detach = native
-        ? this.platform.nativeVoice!.listen((job) => {
+        ? this.platform.nativeVoice!.listen((job, retainUntilPlayed) => {
             if (
               job.dotId === dotId &&
               job.parentThreadId === threadId &&
@@ -590,12 +679,27 @@ export class LocalVoiceService {
                 update.id,
                 update.spoken,
                 this.platform.nativeVoice!.receiptValidator(job),
+                { retainUntilPlayed },
               );
             }
           })
         : undefined;
+      const detachProgress = native
+        ? this.platform.nativeVoice!.listenProgress((progress) => {
+            if (
+              progress.job.dotId === dotId &&
+              progress.job.parentThreadId === threadId &&
+              !call.ended
+            )
+              call.nativeUpdate(progress.id, progress.text, progress.authorize);
+          })
+        : undefined;
       if (detach)
         call.endSignal.addEventListener('abort', detach, { once: true });
+      if (detachProgress)
+        call.endSignal.addEventListener('abort', detachProgress, {
+          once: true,
+        });
       const abort = () => {
         void call.end('Call startup was cancelled.');
       };

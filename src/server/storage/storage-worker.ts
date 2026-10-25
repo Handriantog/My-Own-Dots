@@ -44,6 +44,7 @@ const asynchronous = {
   'folders.decide': true,
   'folders.bindExecution': true,
   'folders.executionScope': true,
+  'folders.available': true,
   'folders.listDirectory': true,
   'folders.readFile': true,
   'folders.writeFile': true,

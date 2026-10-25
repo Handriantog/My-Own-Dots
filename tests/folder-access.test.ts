@@ -1,3 +1,4 @@
+import { folderPython } from '../src/server/folder-python.js';
 import { afterEach, expect, it, vi } from 'vitest';
 import {
   mkdtemp,
@@ -116,7 +117,7 @@ it('rejects execution after the approved directory is replaced', async () => {
   );
 });
 
-it('keeps voice worker approval in its card while binding execution to the parent conversation', async () => {
+it('keeps each voice approval bound to its own task without changing another task’s project', async () => {
   const f = await fixture();
   const worker = f.workspace.bindThread(randomUUID(), f.dot.id, 'Voice task');
   const request = f.folders.request(
@@ -132,11 +133,35 @@ it('keeps voice worker approval in its card while binding execution to the paren
     selectionId: selected.id,
     access: 'execute',
   });
-  expect(await f.folders.executionScope(f.dot.id, f.thread.id)).toMatchObject({
+  const approvedA = await f.folders.executionScope(f.dot.id, worker.id);
+  expect(approvedA).toMatchObject({
     access: 'execute',
     path: await realpath(f.folder),
   });
-  expect(await f.folders.executionScope(f.dot.id, worker.id)).toBeUndefined();
+  expect(await f.folders.executionScope(f.dot.id, f.thread.id)).toBeUndefined();
+  const other = f.workspace.bindThread(randomUUID(), f.dot.id, 'Other task');
+  const otherFolder = join(f.root, 'other-project');
+  await mkdir(otherFolder);
+  const second = f.folders.request(
+    f.dot.id,
+    other.id,
+    { reason: 'Run another test', folderHint: otherFolder, access: 'execute' },
+    f.thread.id,
+  );
+  const selection = await f.folders.select(other.id, second.id, otherFolder);
+  await f.folders.decide(other.id, second.id, {
+    toolCallId: 'other-review',
+    approve: true,
+    selectionId: selection.id,
+    access: 'execute',
+  });
+  expect(await f.folders.executionScope(f.dot.id, worker.id)).toEqual(
+    approvedA,
+  );
+  expect(await f.folders.executionScope(f.dot.id, other.id)).toMatchObject({
+    path: await realpath(otherFolder),
+  });
+  expect(await f.folders.executionScope(f.dot.id, f.thread.id)).toBeUndefined();
 });
 
 it('starts with no authority and makes selection distinct from approval', async () => {
@@ -466,7 +491,7 @@ it('serializes writes through separate grants and overlapping folder roots', asy
   const wrapper = join(f.root, 'slow-python');
   await writeFile(
     wrapper,
-    `#!/usr/bin/env python3
+    `#!${folderPython()}
 import importlib.util,sys,time
 spec=importlib.util.spec_from_file_location('folder_helper',sys.argv[-1])
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)

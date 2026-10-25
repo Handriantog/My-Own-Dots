@@ -271,7 +271,9 @@ it.skipIf(!existsSync(python))(
 
     // A completed worker becomes an ordinary chat, without extending the old
     // voice job's scope, changing its receipt, or treating typed input as voice.
-    expect(parentContext).toHaveBeenCalledWith(parent.id, dot.id);
+    expect(parentContext).toHaveBeenCalledWith(parent.id, dot.id, {
+      throughMessageId: firstJob.sourceMessageId,
+    });
     expect(abilityExposure.mock.calls.length).toBeGreaterThan(0);
     expect(
       abilityExposure.mock.calls.every(([, mode]) => mode === 'voice'),

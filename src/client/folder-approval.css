@@ -97,13 +97,11 @@
   justify-content: flex-end;
   gap: 8px;
 }
-.folder-access-compact .review-primary {
-  background: var(--blue-dark);
-  border-color: var(--blue-dark);
-  color: #fff;
-}
+.folder-access-compact .review-primary,
 .folder-access-compact .review-primary:hover:not(:disabled) {
-  background: var(--blue);
+  background: var(--ws-accent);
+  border-color: var(--ws-accent);
+  color: var(--ws-canvas);
 }
 .folder-approval-surface p {
   margin: 0;

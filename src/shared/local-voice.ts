@@ -1,6 +1,7 @@
 import type { VoiceQuality } from './voice-settings.js';
 
 export interface VoiceModeStatus {
+  speechEngine?: 'qwen3' | 'lfm';
   ready: boolean;
   reason: string;
   audioInput: boolean;

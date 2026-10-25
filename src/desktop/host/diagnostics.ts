@@ -1,3 +1,4 @@
+import { DailyErrorLog, type ErrorContext } from '../../shared/error-log.js';
 import { appendFile, mkdir, rename, stat } from 'node:fs/promises';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -6,12 +7,17 @@ import path from 'node:path';
  * other applications' titles, contents, environment variables or credentials. */
 export class DesktopDiagnostics {
   private pending: Promise<void> = Promise.resolve();
+  private readonly errors: DailyErrorLog;
   constructor(
     private directory: string,
     private limit = 256 * 1024,
-  ) {}
+    errorDirectory = path.join(directory, 'errors'),
+  ) {
+    this.errors = new DailyErrorLog(errorDirectory, 'desktop');
+  }
 
   captureException(error: Error): void {
+    this.errors.record('uncaught_exception', error);
     // A fatal exception can exit before promise-based I/O gets a turn. Keep
     // this separate from queued events so it persists before returning.
     try {
@@ -31,6 +37,12 @@ export class DesktopDiagnostics {
   }
 
   record(event: string, details: Record<string, unknown>): Promise<void> {
+    if (/(?:failed|error|gone|unavailable|recovery|interrupted)/.test(event))
+      this.errors.record(
+        event,
+        typeof details.message === 'string' ? details.message : event,
+        details as ErrorContext,
+      );
     this.pending = this.pending
       .then(async () => {
         const at = new Date().toISOString();

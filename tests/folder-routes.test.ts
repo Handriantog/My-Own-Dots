@@ -1,5 +1,5 @@
-import { afterEach, expect, it } from 'vitest';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { afterEach, expect, it, vi } from 'vitest';
+import { mkdtemp, mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -11,6 +11,7 @@ import { createApp } from '../src/server/app.js';
 
 const cleanup: (() => Promise<void> | void)[] = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   for (const fn of cleanup.splice(0).reverse()) await fn();
 });
 async function fixture(ownerToken?: string) {
@@ -47,6 +48,7 @@ async function fixture(ownerToken?: string) {
   });
   return {
     app,
+    root,
     workspace,
     folder,
     dot,
@@ -313,4 +315,39 @@ it('resolves only the stored hint on explicit owner POST and keeps detail GET re
       )
     ).status,
   ).toBe(404);
+});
+
+it('records folder request IDs and interpreter failures without recording request content', async () => {
+  const f = await fixture();
+  const logs = join(f.root, 'logs');
+  vi.stubEnv('DOTS_ERROR_LOG_DIR', logs);
+  vi.stubEnv('DOTS_FOLDER_PYTHON', join(f.root, 'missing-python'));
+  const response = await f.app.request(
+    `${f.path}/selection`,
+    json({ path: f.folder }),
+  );
+  expect(response.status).toBe(503);
+  const raw = await readFile(join(logs, (await readdir(logs))[0]), 'utf8');
+  const entries = raw
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line));
+  expect(entries).toContainEqual(
+    expect.objectContaining({
+      event: 'folder_request_failed',
+      context: expect.objectContaining({
+        requestId: f.request.id,
+        threadId: f.thread.id,
+      }),
+    }),
+  );
+  expect(entries).toContainEqual(
+    expect.objectContaining({
+      event: 'folder_runtime_start_failed',
+      context: expect.objectContaining({
+        python: join(f.root, 'missing-python'),
+      }),
+    }),
+  );
+  expect(raw).not.toContain(f.folder);
 });

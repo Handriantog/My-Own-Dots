@@ -266,9 +266,10 @@ def serve(source, output, factory):
 
 
 class LfmRuntime:
-    def __init__(self, audio_dir, router_dir=None):
+    def __init__(self, audio_dir, router_dir=None, recognition_only=False):
+        self.recognition_only = recognition_only
         self.speech_only = router_dir is None
-        if self.speech_only:
+        if self.speech_only and not recognition_only:
             system_speech_ready()
         manifest = json.loads(Path(__file__).with_name("native-models.json").read_text())
         verify_assets(audio_dir, manifest["audio"]["files"])
@@ -394,6 +395,8 @@ class LfmRuntime:
         return self.render_reply(reply, pcm=pcm)
 
     def speak(self, text):
+        if getattr(self, 'recognition_only', False):
+            raise ValueError('Recognition worker cannot synthesize speech')
         if getattr(self, "speech_only", False):
             return system_speech(text)
         # Task receipts use the conversation speaker, not the separate UK-male
@@ -443,9 +446,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--audio-model", type=Path, required=True)
     parser.add_argument("--router-model", type=Path)
+    parser.add_argument("--recognition-only", action="store_true")
     args = parser.parse_args()
     try:
-        serve(sys.stdin.buffer, sys.stdout, lambda: LfmRuntime(args.audio_model.resolve(strict=True), args.router_model.resolve(strict=True) if args.router_model else None))
+        serve(sys.stdin.buffer, sys.stdout, lambda: LfmRuntime(args.audio_model.resolve(strict=True), args.router_model.resolve(strict=True) if args.router_model else None, args.recognition_only))
     except Exception:
         # Host turns process exit into a content-free failure and reaps it.
         sys.exit(1)

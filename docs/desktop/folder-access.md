@@ -26,7 +26,7 @@ Resolution, selection, and approval endpoints retain the workspace's owner-token
 
 ## Runtime and operating-system permissions
 
-The workspace uses a small standard-library Python helper; it installs no packages or models. Python 3.11+ is already required for the subscription setup. Set `DOTS_FOLDER_PYTHON` to an absolute Python interpreter path if `python3` is unavailable, and restart the workspace. The helper is `scripts/folder-access.py` in the workspace checkout; the desktop app bundles the helper with its workspace backend.
+The workspace uses a small standard-library Python helper; it installs no packages or models. Folder access uses the managed Python 3.12 subscription runtime, independent of Finder or terminal PATH. An absolute `DOTS_FOLDER_PYTHON` override takes precedence over `MYOWN_LLM_PYTHON` and the managed environment. The helper checks Python 3.12 before accessing folders; a missing or incompatible interpreter reports a setup error. Restart the workspace after configuring it. The helper is `scripts/folder-access.py` in the workspace checkout; the desktop app bundles the helper with its workspace backend.
 
 Folder approval is an application permission, not a bypass of macOS protections. Protected folders may also need permission for the process running the workspace. An inaccessible folder returns an error instead of silently widening access. Neither the model nor the approval endpoint grants itself macOS permissions.
 

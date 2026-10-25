@@ -1,4 +1,5 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { Pool } from 'pg';
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -313,8 +314,20 @@ describe.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
 it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
   'detects committed changes without counting its own reads and defers while busy',
   async () => {
-    const f = await storageWorkspace();
+    // activity() includes database-wide counters, so parallel fixtures must
+    // not write to this database between the two read-only samples.
+    const admin = new Pool({
+      connectionString: process.env.LOCAL_TEST_DATABASE_URL!,
+    });
+    const name = 'dots_snapshot_test_' + randomUUID().replaceAll('-', '');
+    const url = new URL(process.env.LOCAL_TEST_DATABASE_URL!);
+    url.pathname = '/' + name;
+    let f: Awaited<ReturnType<typeof storageWorkspace>> | undefined;
+    let created = false;
     try {
+      await admin.query(`CREATE DATABASE "${name}"`);
+      created = true;
+      f = await storageWorkspace(url.href);
       const source = new LegacySnapshotSource({
         ...f,
         owned: true,
@@ -343,7 +356,12 @@ it.skipIf(!process.env.LOCAL_TEST_DATABASE_URL)(
         release();
       }
     } finally {
-      await f.dispose();
+      try {
+        await f?.dispose();
+        if (created) await admin.query(`DROP DATABASE "${name}"`);
+      } finally {
+        await admin.end();
+      }
     }
   },
 );

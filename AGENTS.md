@@ -15,6 +15,12 @@ The owner requires all implementation work for this project to use worktrees ins
 
 This preference applies to future implementation sessions for this repository. It concerns development checkouts; application workspace data follows the product's storage configuration.
 
+## Launch after implementation
+
+- After completing implementation and relevant checks, launch or restart the updated app so the owner can test it. Leave it running at the relevant screen when practical.
+- Verify that the running process is the intended build and that the app connects to the intended workspace. A successful build or launch command alone is not sufficient.
+- The owner has given standing authorization for this routine local launch; do not ask for confirmation each time. Preserve workspace data and existing permissions. If launch is blocked, report the specific blocker.
+
 ## Agent reliability baseline
 
 Read [the reliability requirements and development rules](docs/development/agent-reliability.md) before changing agent, voice, tool, permission or delivery behavior. Its next-agent handoff links the approved decisions and maps postmortem lessons to regression tests.

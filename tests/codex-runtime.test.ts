@@ -73,3 +73,35 @@ it('rejects a repeated run identity instead of repeating its mutations', async (
   ).rejects.toThrow(/already|duplicate/i);
   expect(calls).toBe(1);
 });
+
+it('reserves the executor for a resumed approval and releases it without dispatching cancelled waits', async () => {
+  const coordinator = new CodexExecutionCoordinator();
+  const signal = new AbortController().signal;
+  const release = await coordinator.acquire(
+    'dot',
+    'first',
+    signal,
+    'first-thread',
+  );
+  const controller = new AbortController();
+  const waiting = coordinator.acquire(
+    'dot',
+    'cancelled',
+    controller.signal,
+    'cancelled-thread',
+  );
+  expect(coordinator.status('dot')).toMatchObject({
+    activeRunId: 'first',
+    queued: 1,
+  });
+  controller.abort();
+  await expect(waiting).rejects.toThrow();
+  const next = coordinator.acquire('dot', 'next', signal, 'next-thread');
+  await release();
+  const releaseNext = await next;
+  expect(coordinator.status('dot')).toMatchObject({
+    activeRunId: 'next',
+    activeThreadId: 'next-thread',
+  });
+  await releaseNext();
+});

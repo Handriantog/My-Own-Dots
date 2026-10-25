@@ -39,6 +39,7 @@ export interface RunLifecycle {
     input: RunAgentInput;
     signal: AbortSignal;
     abort(): void;
+    acquireExecution?(): Promise<(() => Promise<void>) | undefined>;
   }): Promise<
     | {
         settle(outcome: {
@@ -53,6 +54,10 @@ export interface RunLifecycle {
 }
 interface EvidenceAgent extends AbstractAgent {
   executionIdentity?(): string;
+  acquireExecution?(
+    input: RunAgentInput,
+    signal: AbortSignal,
+  ): Promise<(() => Promise<void>) | undefined>;
   evidenceGuard?(threadId: string): EvidenceGuard | Promise<EvidenceGuard>;
   setEvidenceRecorder?(record?: (guard: EvidenceGuard) => Promise<void>): void;
   onPersistedEvent?(input: RunAgentInput, event: BaseEvent): void;
@@ -311,6 +316,11 @@ export class LocalAgentRunner extends AgentRunner {
         input,
         signal: active.activityController.signal,
         abort: onStorageLost,
+        acquireExecution: () =>
+          (request.agent as EvidenceAgent).acquireExecution?.(
+            input,
+            active.activityController.signal,
+          ) ?? Promise.resolve(undefined),
       });
       const evidenceAgent = request.agent as EvidenceAgent;
       await lease.beginRun(

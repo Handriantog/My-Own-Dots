@@ -14,6 +14,7 @@ import stat
 import sys
 import threading
 import time
+import traceback
 
 MAX_BYTES = 65536
 DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -227,7 +228,20 @@ def execute(request):
         os.close(fd)
 
 
+def failure(message, error, code=None):
+    # Locations and exception type are enough to trace the helper without file contents.
+    frames = traceback.extract_tb(error.__traceback__)[-5:]
+    result = {"ok": False, "error": message, "exceptionType": type(error).__name__,
+              "pythonTrace": " > ".join(f"{os.path.basename(frame.filename)}:{frame.lineno}:{frame.name}" for frame in frames)}
+    if code:
+        result["code"] = code
+    return result
+
+
 def main():
+    if sys.version_info[:2] != (3, 12):
+        print(json.dumps({"ok": False, "code": "unsupported_python", "pythonVersion": ".".join(map(str, sys.version_info[:3])), "error": "Folder access requires managed Python 3.12. Run integration setup or configure DOTS_FOLDER_PYTHON with an absolute Python 3.12 path."}))
+        return
     signal.signal(signal.SIGTERM, cancelled)
     try:
         raw = sys.stdin.buffer.read(524289)
@@ -240,13 +254,17 @@ def main():
             watch_parent(request["parentPid"])
         result = {"ok": True, "result": execute(request)}
     except Rejected as error:
-        result = {"ok": False, "error": str(error)}
-    except (ValueError, TypeError, UnicodeError):
-        result = {"ok": False, "error": "Invalid folder request."}
-    except FileNotFoundError:
-        result = {"ok": False, "error": "The folder or file no longer exists."}
-    except OSError:
-        result = {"ok": False, "error": "Folder operation denied. Symlinks, special files, or inaccessible paths are not allowed."}
+        result = failure(str(error), error)
+    except (ValueError, TypeError, UnicodeError) as error:
+        result = failure("Invalid folder request.", error)
+    except FileNotFoundError as error:
+        result = failure("The folder or file no longer exists.", error)
+    except OSError as error:
+        result = failure("Folder operation denied. Symlinks, special files, or inaccessible paths are not allowed.", error)
+    except Exception as error:
+        result = failure("Folder helper failed. Check the daily error log.", error, "helper_failure")
+    if not result["ok"]:
+        result["pythonVersion"] = ".".join(map(str, sys.version_info[:3]))
     print(json.dumps(result, ensure_ascii=True))
 
 

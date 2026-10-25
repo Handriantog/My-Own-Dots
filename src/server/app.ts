@@ -1,3 +1,4 @@
+import { logError } from '../shared/error-log.js';
 import type { StoreRepository } from './storage/runtime-repositories.js';
 import {
   snapshotRoutes,
@@ -343,6 +344,12 @@ export function createApp({
       : c.json({ error: 'Memory not found.' }, 404);
   });
   app.onError((error, c) => {
+    logError('api_request_failed', error, {
+      method: c.req.method,
+      route: c.req.routePath,
+      requestId: c.req.param('requestId'),
+      threadId: c.req.param('threadId'),
+    });
     console.error('API request failed:', error.name);
     return c.json(
       {

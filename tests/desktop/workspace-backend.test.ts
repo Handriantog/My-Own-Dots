@@ -4,6 +4,7 @@ import {
   mkdtemp,
   mkdir,
   readFile,
+  readdir,
   rm,
   writeFile,
 } from 'node:fs/promises';
@@ -47,7 +48,7 @@ async function fixture(
     script ??
       `
 const http = require('node:http');
-const server = http.createServer((req,res) => { res.setHeader('Content-Type','application/json'); res.end(JSON.stringify({service:'my-own-dots',protocol:1,workspaceId:process.env.DOTS_WORKSPACE_ID,pythonEnvironment:process.env.UV_PROJECT_ENVIRONMENT})); });
+const server = http.createServer((req,res) => { res.setHeader('Content-Type','application/json'); res.end(JSON.stringify({service:'my-own-dots',protocol:1,workspaceId:process.env.DOTS_WORKSPACE_ID,pythonEnvironment:process.env.UV_PROJECT_ENVIRONMENT,pythonVersion:process.env.UV_PYTHON,folderPython:process.env.DOTS_FOLDER_PYTHON,errorLogs:process.env.DOTS_ERROR_LOG_DIR})); });
 server.listen(Number(process.env.PORT), process.env.HOST);
 process.on('SIGTERM', () => server.close(() => process.exit(0)));
 `,
@@ -791,4 +792,56 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
     });
   }
   expect(opened).toEqual(['https://example.com/reference']);
+});
+
+it('passes the managed Python and daily log directory to the real backend child', async () => {
+  const f = await fixture();
+  const connection = await f.backend.start();
+  const response = await fetch(connection.url);
+  expect(await response.json()).toMatchObject({
+    folderPython: path.join(f.root, 'data/integrations/llm/.venv/bin/python'),
+    errorLogs: path.join(f.root, 'data/logs'),
+    pythonVersion: '3.12',
+  });
+});
+it('persists unexpected backend exits even before startup completes', async () => {
+  const f = await fixture('process.exit(42)');
+  await expect(f.backend.start()).rejects.toThrow('42');
+  const directory = path.join(f.root, 'data/logs');
+  const raw = await readFile(
+    path.join(directory, (await readdir(directory))[0]),
+    'utf8',
+  );
+  expect(
+    raw
+      .trim()
+      .split('\n')
+      .map((row) => JSON.parse(row)),
+  ).toContainEqual(
+    expect.objectContaining({
+      event: 'backend_exited',
+      context: expect.objectContaining({ code: 42 }),
+    }),
+  );
+});
+
+it('normalizes a relative managed environment against the copied setup Python project', async () => {
+  const f = await fixture();
+  await writeFile(
+    path.join(f.workspace, '.env'),
+    (await readFile(path.join(f.workspace, '.env'), 'utf8')) +
+      'UV_PROJECT_ENVIRONMENT=custom-venv\n',
+  );
+  const connection = await f.backend.start();
+  const response = await fetch(connection.url);
+  expect(await response.json()).toMatchObject({
+    pythonEnvironment: path.join(
+      f.workspace,
+      'integrations/llm/python/custom-venv',
+    ),
+    folderPython: path.join(
+      f.workspace,
+      'integrations/llm/python/custom-venv/bin/python',
+    ),
+  });
 });

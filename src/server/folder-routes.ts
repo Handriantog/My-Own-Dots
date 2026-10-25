@@ -1,3 +1,4 @@
+import { logError } from '../shared/error-log.js';
 import type { FolderRepository } from './storage/runtime-repositories.js';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -238,6 +239,12 @@ export function folderRoutes(
     c.json(await folders.revoke(c.req.param('dotId'), c.req.param('grantId'))),
   );
   app.onError((error, c) => {
+    logError('folder_request_failed', error, {
+      method: c.req.method,
+      route: c.req.routePath,
+      requestId: c.req.param('requestId'),
+      threadId: c.req.param('threadId'),
+    });
     if (error instanceof FolderAccessError)
       return c.json({ error: error.message }, error.status);
     if (error instanceof z.ZodError)

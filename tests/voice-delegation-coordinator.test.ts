@@ -18,6 +18,7 @@ import {
   delegatedOutcome,
   VoiceDelegationCoordinator,
 } from '../src/server/local-voice/delegation.js';
+import { CodexExecutionCoordinator } from '../src/server/codex-runtime.js';
 import { connectionActionTool } from '../src/shared/connection-types.js';
 import { folderApprovalTool } from '../src/shared/folder-access.js';
 import type { ConversationSnapshot } from '../src/server/local-conversations.js';
@@ -551,3 +552,60 @@ it('reconciles an expired execution lease after the provider has stopped', async
   });
   expect(await f.jobs.get('job')).toMatchObject({ status: 'interrupted' });
 });
+
+it.each([false, true])(
+  'waits for execution before claiming an approval resume (cancel=%s)',
+  async (cancel) => {
+    const f = await fixture();
+    await f.jobs.enqueue(f.input);
+    const coordinator = new VoiceDelegationCoordinator(f.jobs, f.conversations);
+    const execution = new CodexExecutionCoordinator();
+    const runner = new LocalAgentRunner(
+      f.conversations,
+      undefined,
+      undefined,
+      coordinator,
+    );
+    cleanup.push(() => runner.close());
+    await collect(runner, new Agent(f.dot.id, true), 'first', [
+      { id: 'voice-task:job', role: 'user', content: f.input.request },
+    ]);
+    const release = await execution.acquire(
+      f.dot.id,
+      'other-task',
+      new AbortController().signal,
+      'other-thread',
+    );
+    class ResumingAgent extends Agent {
+      acquireExecution(input: RunAgentInput, signal: AbortSignal) {
+        return execution.acquire(f.dot.id, input.runId, signal, input.threadId);
+      }
+    }
+    const agent = new ResumingAgent(f.dot.id);
+    const done = collect(runner, agent, 'resume', [
+      {
+        id: 'decision',
+        role: 'tool',
+        toolCallId: 'approval',
+        content: '{"approved":true}',
+      },
+    ]);
+    await vi.waitFor(() => expect(execution.status(f.dot.id).queued).toBe(1));
+    expect(await f.jobs.get('job')).toMatchObject({
+      status: 'approval',
+      leaseGeneration: 1,
+    });
+    expect(agent.calls).toBe(0);
+    if (cancel) await runner.stop({ threadId: 'worker', runId: 'resume' });
+    await release();
+    await done;
+    expect(agent.calls).toBe(cancel ? 0 : 1);
+    expect(await f.jobs.get('job')).toMatchObject({
+      status: cancel ? 'approval' : 'completed',
+      leaseGeneration: cancel ? 1 : 2,
+    });
+    await vi.waitFor(() =>
+      expect(execution.status(f.dot.id).activeRunId).toBeUndefined(),
+    );
+  },
+);

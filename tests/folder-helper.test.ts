@@ -1,3 +1,4 @@
+import { folderPython } from '../src/server/folder-python.js';
 import { afterEach, expect, it } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -29,7 +30,7 @@ async function fixture() {
 }
 function call(request: unknown) {
   const child = spawnSync(
-    process.env.DOTS_FOLDER_PYTHON || 'python3',
+    folderPython(),
     ['-I', resolve('scripts/folder-access.py')],
     {
       input: JSON.stringify(request),
@@ -104,7 +105,7 @@ except FileExistsError: pass
 else: raise AssertionError('write unexpectedly succeeded')
 `;
   const child = spawnSync(
-    process.env.DOTS_FOLDER_PYTHON || 'python3',
+    folderPython(),
     ['-I', '-c', script, resolve('scripts/folder-access.py')],
     {
       input: JSON.stringify({
@@ -146,7 +147,7 @@ with open(sys.argv[3],'w') as output:
 os._exit(0)
 `;
   const parent = spawnSync(
-    process.env.DOTS_FOLDER_PYTHON || 'python3',
+    folderPython(),
     [
       '-I',
       '-c',
@@ -204,7 +205,7 @@ m.main()
   const run = (content: string) =>
     new Promise<{ ok: boolean }>((resolveResult, reject) => {
       const child = spawn(
-        process.env.DOTS_FOLDER_PYTHON || 'python3',
+        folderPython(),
         ['-I', '-c', script, resolve('scripts/folder-access.py')],
         { stdio: ['pipe', 'pipe', 'pipe'] },
       );
@@ -243,3 +244,25 @@ m.main()
     (await readdir(f.root)).filter((name) => name.startsWith('.dots-write-')),
   ).toEqual([]);
 });
+
+it.skipIf(process.platform !== 'darwin')(
+  'reports unsupported system Python as a runtime problem, not an invalid folder',
+  () => {
+    const child = spawnSync(
+      '/usr/bin/python3',
+      ['-I', resolve('scripts/folder-access.py')],
+      {
+        input: JSON.stringify({ action: 'inspect', root: '/tmp' }),
+        encoding: 'utf8',
+        timeout: 3000,
+      },
+    );
+    expect(child.status).toBe(0);
+    expect(JSON.parse(child.stdout)).toMatchObject({
+      ok: false,
+      code: 'unsupported_python',
+      pythonVersion: expect.any(String),
+    });
+    expect(JSON.parse(child.stdout).error).toContain('Python 3.12');
+  },
+);

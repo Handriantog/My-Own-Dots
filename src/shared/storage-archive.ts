@@ -58,6 +58,7 @@ const manifestSchema = z.discriminatedUnion('version', [
           z.literal(3),
           z.literal(4),
           z.literal(5),
+          z.literal(6),
           z.literal(sqliteStorageSchema),
         ]),
       }),
@@ -75,6 +76,7 @@ const manifestSchema = z.discriminatedUnion('version', [
           z.literal(3),
           z.literal(4),
           z.literal(5),
+          z.literal(6),
           z.literal(sqliteStorageSchema),
         ]),
       })

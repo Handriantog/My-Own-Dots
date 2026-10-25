@@ -296,6 +296,7 @@ export const repositoryMethods = {
     'select',
     'decide',
     'list',
+    'available',
     'revoke',
     'listDirectory',
     'readFile',
