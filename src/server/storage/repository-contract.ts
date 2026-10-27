@@ -49,7 +49,9 @@ interface Repositories {
 // Explicit names are the wire protocol. Never dispatch arbitrary paths/prototype properties.
 export const repositoryMethods = {
   voiceDelegations: [
+    'workerThreadIds',
     'receiveInput',
+    'inputReceipt',
     'pendingInputs',
     'deliverInput',
     'cancelInput',
@@ -170,6 +172,9 @@ export const repositoryMethods = {
     'canAccessSpace',
     'updateDot',
     'saveComposioSession',
+    'dailyConversation',
+    'recordCallMessages',
+    'callForMessage',
     'conversations',
     'updateConversation',
     'deletedConversations',

@@ -33,9 +33,16 @@ if (
   ipcRenderer.sendSync(`${voiceChannel}:context`) === true
 ) {
   let pendingTalk = false;
+  let pendingChat = false;
+  const chatListeners = new Set<() => void>();
+  ipcRenderer.on(`${voiceChannel}:chat`, () => {
+    if (!chatListeners.size) pendingChat = true;
+    else for (const listener of chatListeners) listener();
+  });
   let windowless = false;
   const talkListeners = new Set<() => void>();
   ipcRenderer.on(`${voiceChannel}:talk`, (_event, background: unknown) => {
+    pendingChat = false;
     windowless = background === true;
     if (!talkListeners.size) pendingTalk = true;
     else for (const listener of talkListeners) listener();
@@ -45,6 +52,16 @@ if (
     windowless = false;
   });
   const bridge: DesktopVoiceBridge = {
+    onChat(callback) {
+      chatListeners.add(callback);
+      if (pendingChat) {
+        pendingChat = false;
+        callback();
+      }
+      return () => {
+        chatListeners.delete(callback);
+      };
+    },
     setReady: (ready) =>
       ipcRenderer.invoke(`${voiceChannel}:ready`, ready).catch(() => {}),
     activate: () => ipcRenderer.invoke(`${voiceChannel}:activate`),

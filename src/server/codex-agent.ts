@@ -1,4 +1,5 @@
 import { taskProgressEvent } from './local-voice/task-progress.js';
+import { logDiagnostic } from '../shared/error-log.js';
 import { randomUUID } from 'node:crypto';
 import { AbstractAgent } from '@ag-ui/client';
 import { EventType, type BaseEvent, type RunAgentInput } from '@ag-ui/core';
@@ -128,6 +129,16 @@ export class CodexAgent extends AbstractAgent {
   }
   run(input: RunAgentInput): Observable<BaseEvent> {
     return new Observable((subscriber) => {
+      const requestedAt = performance.now();
+      const trace = (stage: string) =>
+        logDiagnostic('execution_timing', {
+          dotId: this.options.agentId,
+          threadId: input.threadId,
+          runId: input.runId,
+          stage,
+          elapsedMs: Math.round(performance.now() - requestedAt),
+        });
+      trace('requested');
       const controller = new AbortController();
       this.controller = controller;
       const signal = controller.signal;
@@ -138,6 +149,7 @@ export class CodexAgent extends AbstractAgent {
       const calls = new Set<string>();
       const messages = new Set<string>();
       let progressSent = false;
+      let providerEventSeen = false;
       const finalMessages = new Map<string, string>();
       const outcomes: unknown[] = [];
       const emit = (event: BaseEvent) => {
@@ -214,6 +226,10 @@ export class CodexAgent extends AbstractAgent {
       };
       const onEvent = async (event: ExecutionEvent) => {
         signal.throwIfAborted();
+        if (!providerEventSeen) {
+          providerEventSeen = true;
+          trace('provider_first_event');
+        }
         if (event.type === 'message') {
           if (event.final) finalMessages.set(event.id, event.text);
           else {
@@ -265,12 +281,16 @@ export class CodexAgent extends AbstractAgent {
           threadId: input.threadId,
           runId: input.runId,
         });
+        trace('persisted');
         await this.runTask(
           input.runId,
           signal,
           async () => {
+            trace('admitted');
             // The canonical snapshot is data; client-supplied system/developer messages never become instructions.
+            trace('prepare_start');
             const prepared = await this.options.prepare?.(input, signal);
+            trace('prepare_done');
             const snapshot =
               prepared?.messages ??
               input.messages.filter((m) =>
@@ -365,6 +385,7 @@ export class CodexAgent extends AbstractAgent {
                 },
               });
               try {
+                trace('provider_start');
                 const result = await this.session.run({
                   input: JSON.stringify({
                     conversation: snapshot,
@@ -381,6 +402,7 @@ export class CodexAgent extends AbstractAgent {
                   timeoutMs: this.options.timeoutMs,
                   onEvent,
                 });
+                trace('provider_done');
                 if (result.status === 'uncertain') {
                   emit({
                     type: EventType.RUN_ERROR,
@@ -427,6 +449,7 @@ export class CodexAgent extends AbstractAgent {
                 clearInterval(watcher);
                 await this.session.close();
                 this.session = undefined;
+                trace('cleanup_done');
               }
             }
             throw new Error(
@@ -448,6 +471,7 @@ export class CodexAgent extends AbstractAgent {
           }),
         )
         .finally(() => {
+          trace('finished');
           clearInterval(watcher);
           subscriber.complete();
         });

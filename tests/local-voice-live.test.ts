@@ -7,6 +7,7 @@ import {
 import type { ConversationSnapshot } from '../src/server/local-conversations';
 import type { LocalVoiceEvent } from '../src/shared/local-voice';
 import { RecognitionInputError } from '../src/server/local-voice/worker';
+import pausedInterruption from './fixtures/local-voice/paused-interruption-vad.json';
 const transcript = { messageId: 'voice-user', text: 'Hello Dot' };
 function snapshot(messages: unknown[], status = 'finished') {
   return {
@@ -1139,6 +1140,135 @@ describe('speech-confirmed interruption', () => {
               (event.type === 'phase' && event.phase === 'listening'),
           ),
       ).toBe(false);
+      expect(f.call.ended).toBe(false);
+    } finally {
+      await f.call.end();
+    }
+  });
+
+  it('confirms recorded Silero speech with natural pauses and retains every opening word', async () => {
+    const f = await speakingCall();
+    try {
+      const flushes = f.events.filter((event) => event.type === 'flush').length;
+      // Real file-speech trace: 14 voiced, 6 quiet, 17 voiced, 6 quiet,
+      // then 40 voiced frames. The 47th voiced frame is input frame 67.
+      for (let i = 0; i < pausedInterruption.probabilities.length; i++) {
+        f.speech(pausedInterruption.probabilities[i]);
+        await f.frame(Buffer.alloc(1024, i + 1));
+        if (i === 65)
+          expect(
+            f.events.filter((event) => event.type === 'flush'),
+          ).toHaveLength(flushes);
+        if (i === 66)
+          expect(
+            f.events.filter((event) => event.type === 'flush'),
+          ).toHaveLength(flushes + 1);
+      }
+      await vi.waitFor(() =>
+        expect(f.recognition.transcribe).toHaveBeenCalledTimes(2),
+      );
+      const captured = f.recognition.transcribe.mock.calls[1][0];
+      expect(captured.subarray(0, 1024)).toEqual(Buffer.alloc(1024, 9));
+      expect(captured.subarray(58 * 1024, 59 * 1024)).toEqual(
+        Buffer.alloc(1024, 67),
+      );
+      expect(f.call.ended).toBe(false);
+    } finally {
+      await f.call.end();
+    }
+  });
+
+  it.each([8, 9])(
+    'bounds a confirmation pause at eight frames (%i quiet frames)',
+    async (gap) => {
+      const f = await speakingCall();
+      try {
+        const flushes = f.events.filter(
+          (event) => event.type === 'flush',
+        ).length;
+        f.speech(1);
+        for (let i = 0; i < 20; i++) await f.frame();
+        f.speech(0);
+        for (let i = 0; i < gap; i++) await f.frame();
+        f.speech(1);
+        for (let i = 0; i < 26; i++) await f.frame();
+        expect(f.events.filter((event) => event.type === 'flush')).toHaveLength(
+          flushes,
+        );
+        await f.frame();
+        expect(f.events.filter((event) => event.type === 'flush')).toHaveLength(
+          flushes + (gap === 8 ? 1 : 0),
+        );
+        if (gap === 9) {
+          for (let i = 0; i < 20; i++) await f.frame();
+          expect(
+            f.events.filter((event) => event.type === 'flush'),
+          ).toHaveLength(flushes + 1);
+        }
+      } finally {
+        await f.call.end();
+      }
+    },
+  );
+
+  it('does not accumulate sparse detections beyond a two-second confirmation window', async () => {
+    const f = await speakingCall();
+    try {
+      const flushes = f.events.filter((event) => event.type === 'flush').length;
+      for (let burst = 0; burst < 12; burst++) {
+        f.speech(1);
+        for (let i = 0; i < 4; i++) await f.frame();
+        f.speech(0);
+        for (let i = 0; i < 8; i++) await f.frame();
+      }
+      expect(f.events.filter((event) => event.type === 'flush')).toHaveLength(
+        flushes,
+      );
+      expect(f.call.ended).toBe(false);
+    } finally {
+      await f.call.end();
+    }
+  });
+
+  it.each([
+    { runs: [15, 8, 15, 8, 17], confirms: true },
+    { runs: [15, 6, 15, 6, 16, 5, 1], confirms: false },
+  ])(
+    'bounds a candidate at 63 total frames ($runs)',
+    async ({ runs, confirms }) => {
+      const f = await speakingCall();
+      try {
+        const flushes = f.events.filter(
+          (event) => event.type === 'flush',
+        ).length;
+        for (const [index, count] of runs.entries()) {
+          f.speech(index % 2 === 0 ? 1 : 0);
+          for (let i = 0; i < count; i++) await f.frame();
+        }
+        // Both cases contain exactly 47 voiced frames; only the first fits
+        // the bounded confirmation window (63 vs. 64 total frames).
+        expect(f.events.filter((event) => event.type === 'flush')).toHaveLength(
+          flushes + (confirms ? 1 : 0),
+        );
+      } finally {
+        await f.call.end();
+      }
+    },
+  );
+
+  it('still accepts a short utterance while no reply is playing', async () => {
+    const f = fixture();
+    try {
+      await f.call.start();
+      f.speech(1);
+      for (let i = 0; i < 3; i++) await f.frame();
+      f.speech(0);
+      for (let i = 0; i < 22; i++) await f.frame();
+      await vi.waitFor(() =>
+        expect(f.events.some((event) => event.type === 'transcript')).toBe(
+          true,
+        ),
+      );
       expect(f.call.ended).toBe(false);
     } finally {
       await f.call.end();

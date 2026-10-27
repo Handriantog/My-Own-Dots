@@ -100,6 +100,8 @@ These tools act on real accounts. Start with a read-only request and use a test 
 
 ### Text and calls
 
+Opening **Chat** or **Talk** from the desktop Dot reuses one conversation per Dot and local calendar day, with the date as its default name. New calls group their messages and task updates into expandable timeline items. Background task conversations remain available through their task links without adding entries to the chat list. Renaming a daily chat preserves its identity; existing history and manually created conversations remain separate.
+
 A compact conversation groups consecutive messages by sender, with a slim header and a composer anchored below the timeline. Conversation settings in the header opens folder access, voice settings, and memory activity. Approval cards keep decision buttons visible while their details can be folded away; completed reviews collapse into expandable receipts. Work updates, source links, and call receipts appear in the timeline; a side panel shows results or the agent's computer.
 
 Hover over a message (or focus its actions with the keyboard) to **pin** it in the current conversation or **bookmark** it across chats. The **Saved messages** button in the chat header opens both collections with links back to the original messages. Pins and bookmarks are independent, can be removed, and persist in the workspace database across restarts.

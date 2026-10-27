@@ -130,6 +130,9 @@ export function App({
   });
   const [voiceIntent, setVoiceIntent] = useState(0);
   const nextVoiceIntent = useRef(0);
+  const nextEntry = useRef(0);
+  const [dailyEntry, setDailyEntry] = useState<{ id: number; voice: number }>();
+  const [resolvedVoiceIntent, setResolvedVoiceIntent] = useState(0);
   const [voiceChecked, setLocalVoiceChecked] = useState(false);
   const [voiceResolved, setLocalVoiceResolved] = useState(false);
   const currentVoiceScope = voiceScope === resolvedVoiceScope;
@@ -142,18 +145,29 @@ export function App({
         ready: false,
         reason: 'Checking local voice setup…',
       } as LocalVoiceStatus);
-  const voiceCreation = useRef(0);
   const consumeVoiceIntent = useCallback(() => {
+    nextEntry.current++;
     setVoiceIntent(0);
+    setDailyEntry((entry) => (entry?.voice ? undefined : entry));
     window.dotVoice?.cancelTalk();
   }, []);
   useEffect(() => {
-    const offTalk = window.dotVoice?.onTalk(() =>
-      setVoiceIntent(++nextVoiceIntent.current),
-    );
+    const offTalk = window.dotVoice?.onTalk(() => {
+      const voice = ++nextVoiceIntent.current;
+      setVoiceIntent(voice);
+      setDailyEntry({ id: ++nextEntry.current, voice });
+    });
+    const offChat = window.dotVoice?.onChat?.(() => {
+      consumeVoiceIntent();
+      setDailyEntry({ id: ++nextEntry.current, voice: 0 });
+    });
     // The host already revoked this request. Echoing cancelTalk can cancel a
     // newer shortcut request queued while this renderer was busy.
-    const offStop = window.dotVoice?.onStop(() => setVoiceIntent(0));
+    const offStop = window.dotVoice?.onStop(() => {
+      nextEntry.current++;
+      setVoiceIntent(0);
+      setDailyEntry((entry) => (entry?.voice ? undefined : entry));
+    });
     const hidden = () => {
       if (
         document.visibilityState === 'hidden' &&
@@ -165,6 +179,8 @@ export function App({
     window.addEventListener('pagehide', consumeVoiceIntent);
     return () => {
       offTalk?.();
+      offChat?.();
+      nextEntry.current++;
       offStop?.();
       document.removeEventListener('visibilitychange', hidden);
       window.removeEventListener('pagehide', consumeVoiceIntent);
@@ -291,6 +307,11 @@ export function App({
     );
   const setView = (next: WorkspaceView) =>
     guard(() => {
+      if (next !== 'chat') {
+        nextEntry.current++;
+        setDailyEntry(undefined);
+        if (voiceIntent) consumeVoiceIntent();
+      }
       setMessageTarget(undefined);
       if (next !== 'space') acceptedHash.current = '';
       if (next !== 'space' && typeof history !== 'undefined')
@@ -302,8 +323,14 @@ export function App({
         setSpaceId(workspace?.spaces[0]?.id || '');
       rawSetView(next);
     });
-  const navigateDestination = (destination: MessageDestination) =>
+  const navigateDestination = (
+    destination: MessageDestination,
+    daily = false,
+  ) =>
     guard(() => {
+      if (!daily) nextEntry.current++;
+      setDailyEntry(undefined);
+      if (!daily && voiceIntent) consumeVoiceIntent();
       setMessageTarget(
         destination.threadId && destination.messageId
           ? { threadId: destination.threadId, messageId: destination.messageId }
@@ -656,11 +683,15 @@ export function App({
   const chooseDot = (next: Dot) =>
     navigateDestination({
       dotId: next.id,
-      threadId: workspace?.conversations.find((item) => item.dotId === next.id)
-        ?.id,
+      threadId: workspace?.conversations.find(
+        (item) => item.dotId === next.id && item.kind !== 'delegated-task',
+      )?.id,
     });
   const newConversation = async (text?: string) => {
     if (!dot || !configured || busy || !setView('chat')) return;
+    nextEntry.current++;
+    setDailyEntry(undefined);
+    if (voiceIntent) consumeVoiceIntent();
     setBusy(true);
     setError('');
     try {
@@ -712,14 +743,6 @@ export function App({
       consumeVoiceIntent();
       return;
     }
-    if (!thread && !busy && voiceCreation.current !== voiceIntent) {
-      voiceCreation.current = voiceIntent;
-      const existing = workspace?.conversations.find(
-        (item) => item.dotId === dot.id,
-      );
-      if (existing) setSelectedThread(existing.id);
-      else void newConversation();
-    }
   }, [
     voiceIntent,
     configured,
@@ -727,6 +750,78 @@ export function App({
     thread?.id,
     busy,
     needsAuth,
+    localVoiceResolved,
+    localVoice.ready,
+    state?.settings.paused,
+  ]);
+  useEffect(() => {
+    if (!dailyEntry || !configured || !dot || needsAuth) return;
+    // Reopening Chat must not detach an active call, including at midnight.
+    if (activeVoiceDot) {
+      setDailyEntry(undefined);
+      if (dailyEntry.voice) consumeVoiceIntent();
+      return;
+    }
+    if (
+      dailyEntry.voice &&
+      (!localVoiceResolved || !localVoice.ready || state?.settings.paused)
+    )
+      return;
+    if (!setView('chat')) {
+      setDailyEntry(undefined);
+      if (dailyEntry.voice) consumeVoiceIntent();
+      return;
+    }
+    let current = true;
+    const controller = new AbortController();
+    setError('');
+    void api<Conversation>(
+      '/conversations/daily',
+      'POST',
+      { dotId: dot.id },
+      controller.signal,
+    )
+      .then((next) => {
+        if (!current || nextEntry.current !== dailyEntry.id) return;
+        // Merge the returned binding before selecting it; a workspace poll may
+        // have started before creation and must not erase the new selection.
+        conversationRevision.current++;
+        setWorkspace(
+          (previous) =>
+            previous && {
+              ...previous,
+              conversations: [
+                next,
+                ...previous.conversations.filter((item) => item.id !== next.id),
+              ],
+            },
+        );
+        if (navigateDestination({ dotId: dot.id, threadId: next.id }, true))
+          setResolvedVoiceIntent(dailyEntry.voice);
+      })
+      .catch((error: unknown) => {
+        if (!current || nextEntry.current !== dailyEntry.id) return;
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Could not open today’s chat.';
+        if (dailyEntry.voice) {
+          window.dotVoice?.reportError?.(message);
+          consumeVoiceIntent();
+        }
+        setDailyEntry(undefined);
+        setError(message);
+      });
+    return () => {
+      current = false;
+      controller.abort();
+    };
+  }, [
+    dailyEntry,
+    configured,
+    dot?.id,
+    needsAuth,
+    activeVoiceDot,
     localVoiceResolved,
     localVoice.ready,
     state?.settings.paused,
@@ -837,26 +932,28 @@ export function App({
     <div
       className={`app template-app ${navCollapsed ? 'nav-collapsed' : ''} ${desktop ? 'desktop-chat' : 'desktop-workspace'}`}
     >
-      {voiceIntent > 0 && !thread && configured && (
-        <CallView
-          dot={dot}
-          companionColor={companionColor}
-          voice={{
-            status: 'connecting',
-            phase: 'listening',
-            error: '',
-            muted: false,
-            speakerMuted: false,
-            startedAt: undefined,
-            caption: 'Preparing your conversation…',
-            userCaption: '',
-            start: async () => {},
-            end: async () => consumeVoiceIntent(),
-            toggleMute() {},
-            toggleSpeaker() {},
-          }}
-        />
-      )}
+      {voiceIntent > 0 &&
+        (!thread || resolvedVoiceIntent !== voiceIntent) &&
+        configured && (
+          <CallView
+            dot={dot}
+            companionColor={companionColor}
+            voice={{
+              status: 'connecting',
+              phase: 'listening',
+              error: '',
+              muted: false,
+              speakerMuted: false,
+              startedAt: undefined,
+              caption: 'Preparing your conversation…',
+              userCaption: '',
+              start: async () => {},
+              end: async () => consumeVoiceIntent(),
+              toggleMute() {},
+              toggleSpeaker() {},
+            }}
+          />
+        )}
       {!desktop && (
         <>
           <WorkspaceTitlebar
@@ -951,8 +1048,16 @@ export function App({
               }}
             >
               <option value="">A new conversation</option>
+              {thread?.kind === 'delegated-task' && (
+                <option value={thread.id} hidden>
+                  {thread.title}
+                </option>
+              )}
               {workspace.conversations
-                .filter((item) => item.dotId === dot.id)
+                .filter(
+                  (item) =>
+                    item.dotId === dot.id && item.kind !== 'delegated-task',
+                )
                 .map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.title}
@@ -1123,6 +1228,25 @@ export function App({
                   dot={dot}
                   initialPrompt={pendingPrompt}
                   onConsumed={() => setPendingPrompt(undefined)}
+                  onContinueChat={(target, text) => {
+                    if (
+                      !workspace.conversations.some(
+                        (item) =>
+                          item.id === target.threadId &&
+                          item.dotId === target.dotId,
+                      )
+                    )
+                      return false;
+                    if (
+                      !navigateDestination({
+                        dotId: target.dotId,
+                        threadId: target.threadId,
+                      })
+                    )
+                      return false;
+                    setPendingPrompt(text);
+                    return true;
+                  }}
                   localMemory={
                     workspace.setup.conversationBackend === 'local' &&
                     workspace.setup.llmBackend === 'subscription'
@@ -1142,7 +1266,9 @@ export function App({
                   localVoiceEnabled={localVoice.enabled}
                   localVoiceReason={localVoice.reason}
                   localVoicePending={!localVoiceResolved}
-                  voiceIntent={voiceIntent}
+                  voiceIntent={
+                    resolvedVoiceIntent === voiceIntent ? voiceIntent : 0
+                  }
                   onVoiceConsumed={consumeVoiceIntent}
                   calls={workspace.calls.filter(
                     (call) => call.threadId === thread.id,

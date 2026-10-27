@@ -19,7 +19,8 @@ import { Pages } from './pages.js';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { SQLiteConversationRecords } from './storage/sqlite-conversation-records.js';
 import type { VoiceDelivery } from '../shared/local-voice.js';
 import {
   DEFAULT_VOICE_SETTINGS,
@@ -60,6 +61,7 @@ export class WorkspaceStore {
       CREATE TABLE IF NOT EXISTS thread_bindings(id TEXT PRIMARY KEY, dotId TEXT NOT NULL, ownerId TEXT NOT NULL, title TEXT NOT NULL, createdAt INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS task_threads(taskId TEXT PRIMARY KEY, threadId TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS calls(id TEXT PRIMARY KEY, threadId TEXT NOT NULL, startedAt INTEGER NOT NULL, endedAt INTEGER, status TEXT NOT NULL, transcript TEXT NOT NULL, error TEXT);
+      CREATE TABLE IF NOT EXISTS call_history(callId TEXT PRIMARY KEY REFERENCES calls(id), afterMessageId TEXT, messageIds TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS local_voice_delivery(callId TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS dot_voice_settings(dotId TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS desktop_dot(id INTEGER PRIMARY KEY CHECK(id=1), dotId TEXT, initialized INTEGER NOT NULL DEFAULT 0);
@@ -407,6 +409,58 @@ export class WorkspaceStore {
       )
       .run(sessionId, policyHash, id);
   }
+  dailyConversation(dotId: string, date: string): Conversation {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date))
+      throw new Error('Invalid daily date.');
+    if (!this.dot(dotId)) throw new Error('Dot not found.');
+    const transaction = beginSQLiteTransaction(this.db);
+    try {
+      const scope = createHash('sha256')
+        .update(JSON.stringify([this.ownerId, dotId]))
+        .digest('hex');
+      const prefix = `daily:v1:${scope}:${date}:`;
+      const rows = this.db
+        .prepare(
+          'SELECT * FROM thread_bindings WHERE ownerId=? AND dotId=? AND id LIKE ?',
+        )
+        .all(this.ownerId, dotId, `${prefix}%`) as unknown as Conversation[];
+      const latest = rows
+        .filter((row) => /^\d+$/.test(row.id.slice(prefix.length)))
+        .sort(
+          (a, b) =>
+            Number(b.id.slice(prefix.length)) -
+            Number(a.id.slice(prefix.length)),
+        )[0];
+      const id =
+        latest && latest.deletedAt == null
+          ? latest.id
+          : `${prefix}${latest ? Number(latest.id.slice(prefix.length)) + 1 : 0}`;
+      // Unified SQLite creates the canonical thread and its binding under one lock.
+      if (
+        this.db
+          .prepare(
+            "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='conversation_threads'",
+          )
+          .get()
+      ) {
+        new SQLiteConversationRecords(this.db, this.ownerId).getOrCreateThread({
+          threadId: id,
+          userId: this.ownerId,
+          agentId: dotId,
+          name: date,
+        });
+      }
+      const result =
+        latest?.id === id
+          ? this.requireThread(id, dotId)
+          : this.bindThread(id, dotId, date);
+      transaction.commit();
+      return result;
+    } catch (error) {
+      transaction.rollback();
+      throw error;
+    }
+  }
   conversations(): Conversation[] {
     return this.db
       .prepare(
@@ -622,12 +676,63 @@ export class WorkspaceStore {
   }
   calls(threadId?: string): CallReceipt[] {
     if (threadId) this.requireThread(threadId);
-    return this.db
+    const rows = this.db
       .prepare(
-        `SELECT * FROM calls ${threadId ? 'WHERE threadId=?' : ''} ORDER BY startedAt DESC`,
+        `SELECT calls.*,call_history.afterMessageId,call_history.messageIds FROM calls JOIN thread_bindings ON thread_bindings.id=calls.threadId LEFT JOIN call_history ON call_history.callId=calls.id WHERE thread_bindings.ownerId=? ${threadId ? 'AND calls.threadId=?' : ''} ORDER BY startedAt DESC`,
       )
-      .all(...(threadId ? [threadId] : [])) as unknown as CallReceipt[];
+      .all(this.ownerId, ...(threadId ? [threadId] : []));
+    return rows.map((row) => {
+      const { messageIds, afterMessageId, ...call } = row;
+      return {
+        ...call,
+        ...(messageIds === null
+          ? {}
+          : { messageIds: JSON.parse(String(messageIds)), afterMessageId }),
+      } as unknown as CallReceipt;
+    });
   }
+  callForMessage(threadId: string, messageId: string): CallReceipt | undefined {
+    this.requireThread(threadId);
+    const row = this.db
+      .prepare(
+        'SELECT h.callId FROM call_history h JOIN calls c ON c.id=h.callId, json_each(h.messageIds) m WHERE c.threadId=? AND m.value=? LIMIT 1',
+      )
+      .get(threadId, messageId);
+    return row ? this.call(String(row.callId)) : undefined;
+  }
+  recordCallMessages(callId: string, messageIds: string[]): void {
+    const transaction = beginSQLiteTransaction(this.db);
+    try {
+      const call = this.call(callId);
+      if (
+        !Array.isArray(messageIds) ||
+        messageIds.some((id) => typeof id !== 'string' || !id.length)
+      )
+        throw new Error('Invalid call message IDs.');
+      if (!call.messageIds) {
+        transaction.commit();
+        return;
+      }
+      const assigned = new Set(
+        this.calls(call.threadId)
+          .filter((other) => other.id !== callId)
+          .flatMap((other) => other.messageIds ?? []),
+      );
+      if (messageIds.some((id) => assigned.has(id)))
+        throw new Error('Message already belongs to another call.');
+      this.db
+        .prepare('UPDATE call_history SET messageIds=? WHERE callId=?')
+        .run(
+          JSON.stringify([...new Set([...call.messageIds, ...messageIds])]),
+          callId,
+        );
+      transaction.commit();
+    } catch (error) {
+      transaction.rollback();
+      throw error;
+    }
+  }
+
   saveVoiceDelivery(id: string, rows: VoiceDelivery[]): void {
     this.call(id);
     this.db
@@ -643,8 +748,13 @@ export class WorkspaceStore {
       .get(id);
     return row ? (JSON.parse(String(row.value)) as VoiceDelivery[]) : [];
   }
-  createCall(threadId: string): CallReceipt {
+  createCall(threadId: string, afterMessageId?: string): CallReceipt {
     this.requireThread(threadId);
+    if (
+      afterMessageId !== undefined &&
+      (typeof afterMessageId !== 'string' || !afterMessageId.length)
+    )
+      throw new Error('Invalid call anchor.');
     const call: CallReceipt = {
       id: randomUUID(),
       threadId,
@@ -653,13 +763,25 @@ export class WorkspaceStore {
       status: 'connecting',
       transcript: '',
       error: null,
+      messageIds: [],
+      afterMessageId: afterMessageId ?? null,
     };
-    this.db
-      .prepare(
-        'INSERT INTO calls(id, threadId, startedAt, endedAt, status, transcript, error) VALUES (?, ?, ?, NULL, ?, ?, NULL)',
-      )
-      .run(call.id, threadId, call.startedAt, call.status, '');
-    return call;
+    const transaction = beginSQLiteTransaction(this.db);
+    try {
+      this.db
+        .prepare(
+          'INSERT INTO calls(id, threadId, startedAt, endedAt, status, transcript, error) VALUES (?, ?, ?, NULL, ?, ?, NULL)',
+        )
+        .run(call.id, threadId, call.startedAt, call.status, '');
+      this.db
+        .prepare('INSERT INTO call_history VALUES(?,?,?)')
+        .run(call.id, afterMessageId ?? null, '[]');
+      transaction.commit();
+      return call;
+    } catch (error) {
+      transaction.rollback();
+      throw error;
+    }
   }
   call(id: string): CallReceipt {
     const call = this.calls().find((call) => call.id === id);

@@ -101,15 +101,17 @@ export function navigationItems(
       view: 'space' as const,
       destination: { spaceId: space.id },
     })),
-    ...workspace.conversations.map((thread) => ({
-      id: `thread:${thread.id}`,
-      label: thread.title,
-      detail:
-        workspace.dots.find((dot) => dot.id === thread.dotId)?.name ||
-        'Conversation',
-      view: 'chat' as const,
-      destination: { dotId: thread.dotId, threadId: thread.id },
-    })),
+    ...workspace.conversations
+      .filter((thread) => thread.kind !== 'delegated-task')
+      .map((thread) => ({
+        id: `thread:${thread.id}`,
+        label: thread.title,
+        detail:
+          workspace.dots.find((dot) => dot.id === thread.dotId)?.name ||
+          'Conversation',
+        view: 'chat' as const,
+        destination: { dotId: thread.dotId, threadId: thread.id },
+      })),
   ];
   const terms = query.trim().toLowerCase().split(/\s+/);
   return items.filter((item) =>

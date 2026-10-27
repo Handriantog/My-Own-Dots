@@ -218,7 +218,25 @@ export class DotAgent extends AbstractAgent {
   onRunRequested(input: RunAgentInput) {
     voiceTurnTiming(this.workspace, this.dotId, input)?.mark('run_requested');
   }
-  onPersistedEvent(input: RunAgentInput, event: BaseEvent) {
+  async onPersistedEvent(input: RunAgentInput, event: BaseEvent) {
+    // Membership comes from host-admitted captions, never forwarded model/UI
+    // metadata. Keep late responses with their originating call after hangup.
+    const messageId =
+      event.type === EventType.TEXT_MESSAGE_START
+        ? event.messageId
+        : event.type === EventType.TOOL_CALL_START
+          ? event.parentMessageId
+          : undefined;
+    const source = input.messages.findLast(
+      (message) => message.role === 'user',
+    );
+    if (typeof messageId === 'string' && source) {
+      const call = await this.workspace.callForMessage(
+        input.threadId,
+        source.id,
+      );
+      if (call) await this.workspace.recordCallMessages(call.id, [messageId]);
+    }
     if (this.inner instanceof CodexAgent)
       this.inner.onPersistedEvent(input, event);
     persistedVoiceEvent(this.workspace, this.dotId, input, event);

@@ -1,12 +1,20 @@
 import { z } from 'zod';
+/** Host-resolved destination for ordinary chat opened from a task transcript. */
+export interface ConversationChatTarget {
+  threadId: string;
+  dotId: string;
+  taskId: string;
+}
 export interface VoiceInputReceipt {
   id: string;
   dotId: string;
   callId: string;
   parentThreadId: string;
   caption: string;
-  kind: 'request' | 'status' | 'stop';
+  kind: 'request' | 'status' | 'stop' | 'conversation';
   reply: string;
+  /** Contextual replies are invalid after owner history suppression changes. */
+  replySuppressionGeneration?: number | null;
   status: 'received' | 'interrupted';
   createdAt: number;
   deliveredAt: number | null;

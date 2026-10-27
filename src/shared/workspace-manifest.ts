@@ -3,16 +3,18 @@ import { open, rename, rm } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { z } from 'zod';
-export const sqliteStorageSchema = 7;
+export const sqliteStorageSchema = 9;
 export function supportedSQLiteStorageSchema(
   value: number,
-): value is 2 | 3 | 4 | 5 | 6 | 7 {
+): value is 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 {
   return (
     value === 2 ||
     value === 3 ||
     value === 4 ||
     value === 5 ||
     value === 6 ||
+    value === 7 ||
+    value === 8 ||
     value === sqliteStorageSchema
   );
 }

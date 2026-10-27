@@ -34,8 +34,10 @@ it.each([
       taskStatus: 'completed' as const,
     };
     const nativeContext = vi.fn(async () => context);
+    const receipt = vi.fn();
     const nativeTurn = vi.fn(async (turn: { audio: Buffer }) => {
       expect(turn.audio.length).toBeGreaterThan(3000);
+      expect(receipt).toHaveBeenCalledWith('active', 'You: Hello');
       return {
         text: awaitingReply ? '' : 'Hi!',
         pcm: Buffer.alloc(awaitingReply ? 0 : 1920),
@@ -58,7 +60,7 @@ it.each([
         foreground: async () => () => {},
         snapshot: async () => ({ messages: [], state: {} }),
         stop,
-        receipt: vi.fn(),
+        receipt,
         delivery: vi.fn(),
         nativeTurn,
         nativeContext,

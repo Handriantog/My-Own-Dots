@@ -13,6 +13,11 @@ const contextKeys = new Set([
   'requestId',
   'threadId',
   'callId',
+  'messageId',
+  'runId',
+  'dotId',
+  'quality',
+  'stage',
   'operation',
   'route',
   'method',
@@ -26,6 +31,7 @@ const contextKeys = new Set([
   'exceptionType',
   'origin',
 ]);
+const numericContextKeys = new Set(['step', 'elapsedMs']);
 export type ErrorContext = Record<
   string,
   string | number | boolean | undefined | null
@@ -114,8 +120,12 @@ export class DailyErrorLog {
         Object.entries(context)
           .filter(
             ([key, value]) =>
-              contextKeys.has(key) &&
-              ['string', 'number', 'boolean'].includes(typeof value),
+              (contextKeys.has(key) &&
+                ['string', 'number', 'boolean'].includes(typeof value)) ||
+              (numericContextKeys.has(key) &&
+                typeof value === 'number' &&
+                Number.isFinite(value) &&
+                value >= 0),
           )
           .map(([key, value]) => [
             key,

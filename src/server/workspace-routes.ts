@@ -47,17 +47,26 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
     await platform.setupTelemetry.capture(event);
     return c.json({ ok: true });
   });
-  app.get('/workspace', async (c) =>
-    c.json({
+  app.get('/workspace', async (c) => {
+    const workers = new Set(
+      (await platform.voiceDelegations?.workerThreadIds()) ?? [],
+    );
+    const classify = (rows: import('../shared/types.js').Conversation[]) =>
+      rows.map((row) =>
+        workers.has(row.id) ? { ...row, kind: 'delegated-task' as const } : row,
+      );
+    return c.json({
       spaces: await platform.workspace.spaces(),
       dots: await platform.workspace.dots(),
       desktopDotId: (await platform.workspace.desktopDot()).dotId,
-      conversations: await platform.workspace.conversations(),
-      deletedConversations: await platform.workspace.deletedConversations(),
+      conversations: classify(await platform.workspace.conversations()),
+      deletedConversations: classify(
+        await platform.workspace.deletedConversations(),
+      ),
       setup: platform.setup(),
       calls: await platform.workspace.calls(),
-    }),
-  );
+    });
+  });
   app.get('/desktop-dot', async (c) =>
     c.json(await platform.workspace.desktopDot()),
   );
@@ -216,6 +225,14 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
       201,
     );
   });
+  app.post('/conversations/daily', async (c) => {
+    const input = z
+      .object({ dotId: z.string().min(1) })
+      .strict()
+      .safeParse(await c.req.json().catch(() => null));
+    if (!input.success) return c.json({ error: 'Select a Dot.' }, 400);
+    return c.json(await platform.dailyConversation(input.data.dotId));
+  });
   app.patch('/conversations/:id', async (c) => {
     const data = z
       .object({
@@ -235,6 +252,37 @@ export function workspaceRoutes(platform: Platform, voice: VoiceService) {
     return c.json(
       await platform.workspace.updateConversation(c.req.param('id'), data.data),
     );
+  });
+  app.get('/conversations/:id/chat-target', async (c) => {
+    const thread = await platform.workspace.requireThread(c.req.param('id'));
+    const job = await platform.voiceDelegations?.forThread(thread.id);
+    if (!job) return c.json(null);
+    let current = job;
+    const visited = new Set([thread.id]);
+    while (true) {
+      if (
+        current.dotId !== thread.dotId ||
+        visited.has(current.parentThreadId) ||
+        visited.size > 16
+      )
+        return c.json(
+          { error: 'Task conversation scope is unavailable.' },
+          409,
+        );
+      const parent = await platform.workspace.requireThread(
+        current.parentThreadId,
+        thread.dotId,
+      );
+      visited.add(parent.id);
+      const ancestor = await platform.voiceDelegations?.forThread(parent.id);
+      if (!ancestor)
+        return c.json({
+          threadId: parent.id,
+          dotId: thread.dotId,
+          taskId: job.id,
+        });
+      current = ancestor;
+    }
   });
   app.get('/conversations/:id/capture', async (c) =>
     c.json(await platform.workspace.capture(c.req.param('id'))),

@@ -474,7 +474,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         vi.spyOn(agent, 'onPersistedEvent').mockImplementation(
           (input, event) => {
             voiceEvents.push(structuredClone(event));
-            persisted(input, event);
+            return persisted(input, event);
           },
         );
         const runner = new LocalAgentRunner(f.conversations);

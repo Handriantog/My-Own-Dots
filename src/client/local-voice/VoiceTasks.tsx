@@ -1,19 +1,8 @@
+import { VoiceTaskList } from './VoiceTaskList';
 import { useEffect, useRef, useState } from 'react';
 import { authHeaders } from '../api';
-import {
-  voiceDelegationActive,
-  type VoiceDelegation,
-} from '../../shared/voice-delegation';
-const labels: Record<VoiceDelegation['status'], string> = {
-  queued: 'Queued',
-  running: 'Working',
-  approval: 'Needs approval',
-  completed: 'Finished',
-  cancelled: 'Stopped',
-  failed: 'Failed',
-  interrupted: 'Interrupted',
-};
-export function VoiceTasks({
+import { type VoiceDelegation } from '../../shared/voice-delegation';
+export function useVoiceTasks({
   threadId,
   onUpdated,
 }: {
@@ -50,7 +39,7 @@ export function VoiceTasks({
         if (revision !== previous) {
           const changed = !!previous && value.length > 0;
           previous = revision;
-          setJobs(value.slice(-20).reverse());
+          setJobs([...value].reverse());
           if (changed) updated.current?.();
         }
       } finally {
@@ -91,34 +80,9 @@ export function VoiceTasks({
       setStopping(undefined);
     }
   };
-  if (!jobs.length) return null;
-  return (
-    <section className="voice-tasks" aria-label="Voice tasks">
-      {jobs.map((job) => (
-        <div className="voice-task" key={job.id}>
-          <div>
-            <strong>{labels[job.status]}</strong>
-            <p>{job.request}</p>
-            <a
-              href={`#/chat/${encodeURIComponent(job.dotId)}/${encodeURIComponent(job.workerThreadId)}`}
-            >
-              {job.status === 'approval'
-                ? 'Review approval'
-                : 'Open task conversation'}
-            </a>
-          </div>
-          {voiceDelegationActive(job.status) && (
-            <button
-              type="button"
-              disabled={stopping === job.id}
-              onClick={() => stop(job.id)}
-            >
-              Stop task
-            </button>
-          )}
-        </div>
-      ))}
-      {error && <p role="alert">{error}</p>}
-    </section>
-  );
+  return { jobs, error, stopping, stop };
+}
+export type VoiceTaskState = ReturnType<typeof useVoiceTasks>;
+export function VoiceTasks(props: { threadId: string; onUpdated?(): void }) {
+  return <VoiceTaskList {...useVoiceTasks(props)} />;
 }

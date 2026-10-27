@@ -19,6 +19,7 @@ import {
 import { evidenceHash } from '../src/server/conversation-memory.js';
 import { folderTools } from '../src/server/folder-tools.js';
 import type { NativeVoiceSession } from '../src/server/local-voice/native-contract.js';
+import * as diagnostics from '../src/shared/error-log.js';
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
@@ -142,6 +143,259 @@ it('sends ordinary High voice conversation through the same task agent in Codex 
       result: 'Hello from the shared engine.',
     }),
   );
+});
+
+it('answers conversation without creating a task while an earlier task owns execution', async () => {
+  const trace = vi
+    .spyOn(diagnostics, 'logDiagnostic')
+    .mockImplementation(() => {});
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  const release = await codexCoordinator(f.platform.workspace).acquire(
+    f.dot.id,
+    'held',
+    new AbortController().signal,
+    'other-thread',
+  );
+  cleanup.push(release);
+  const intake = vi.fn(async () => ({
+    reply: 'Hi! What would you like to talk about?',
+    needsTask: false,
+  }));
+  const reply = await f.platform.nativeVoice!.turn({ ...f.turn, intake });
+  expect(reply.text).toBe('Hi! What would you like to talk about?');
+  expect(reply.awaitingReply).toBeUndefined();
+  expect(intake).toHaveBeenCalledOnce();
+  const rows = trace.mock.calls
+    .filter(([event]) => event === 'voice_conversation_timing')
+    .map(([, context]) => context);
+  expect(rows.map((row) => row?.stage)).toEqual([
+    'context_started',
+    'intake_started',
+    'intake_finished',
+    'admission_persisted',
+    'speech_started',
+    'speech_ready',
+  ]);
+  expect(JSON.stringify(rows)).not.toContain(reply.text);
+  expect(await f.platform.nativeVoice!.list(f.thread.id)).toHaveLength(0);
+  await vi.waitFor(async () => {
+    const snapshot = await f.platform.localConversations!.getSnapshot(
+      f.thread.id,
+    );
+    expect(
+      snapshot.messages
+        .filter((m) => m.role === 'assistant')
+        .map((m) => m.content),
+    ).toContain(reply.text);
+  });
+  // Same admitted input reuses the recorded decision, even after canonical delivery.
+  expect((await f.platform.nativeVoice!.turn({ ...f.turn, intake })).text).toBe(
+    reply.text,
+  );
+  expect(intake).toHaveBeenCalledOnce();
+});
+
+it('speaks a contextual handoff while the unchanged task waits durably for execution', async () => {
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  const release = await codexCoordinator(f.platform.workspace).acquire(
+    f.dot.id,
+    'held',
+    new AbortController().signal,
+    'other-thread',
+  );
+  cleanup.push(release);
+  const executed = vi
+    .spyOn(DotAgent.prototype, 'run')
+    .mockImplementation((input) =>
+      of(
+        {
+          type: EventType.RUN_STARTED,
+          threadId: input.threadId,
+          runId: input.runId,
+        },
+        {
+          type: EventType.RUN_FINISHED,
+          threadId: input.threadId,
+          runId: input.runId,
+        },
+      ),
+    );
+  const caption = 'Create a README in the folder I selected.';
+  const intake = vi.fn(async () => ({
+    reply:
+      'I’ll check the selected folder’s access before creating the README; your earlier task is still running.',
+    needsTask: true,
+  }));
+  const reply = await f.platform.nativeVoice!.turn({
+    ...f.turn,
+    understanding: { route: 'chat', text: caption },
+    intake,
+  });
+  expect(reply.text).toContain('README');
+  expect(reply.awaitingReply).toBeUndefined();
+  expect(executed).not.toHaveBeenCalled();
+  await vi.waitFor(async () =>
+    expect(await f.platform.nativeVoice!.list(f.thread.id)).toEqual([
+      expect.objectContaining({
+        request: caption,
+        sourceText: caption,
+        status: 'queued',
+      }),
+    ]),
+  );
+  await release();
+  await vi.waitFor(() => expect(executed).toHaveBeenCalledOnce());
+});
+
+it('does not turn a conversation reply or a changed Dot context into effects', async () => {
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  const intake = vi.fn(async () => {
+    await f.platform.store.updateSettings({ paused: true });
+    return { reply: 'I’ll look at the folder.', needsTask: true };
+  });
+  await expect(
+    f.platform.nativeVoice!.turn({ ...f.turn, intake }),
+  ).rejects.toThrow(/context changed|unavailable/i);
+  expect(await f.platform.nativeVoice!.list(f.thread.id)).toHaveLength(0);
+  expect(f.native.speak).not.toHaveBeenCalled();
+});
+
+it('keeps a quick conversation reply durable while the parent conversation is leased', async () => {
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  const lease = await f.platform.localConversations!.acquireThread(f.thread.id);
+  expect(lease).not.toBeNull();
+  cleanup.push(() => lease!.release());
+  const intake = vi.fn(async () => ({
+    reply: 'Of course, take your time choosing the folder.',
+    needsTask: false,
+  }));
+  const reply = await f.platform.nativeVoice!.turn({
+    ...f.turn,
+    understanding: { route: 'chat', text: 'Give me a moment to choose it.' },
+    intake,
+  });
+  expect(reply.text).toContain('take your time');
+  expect(
+    (await f.storage.repositories.voiceDelegations.pendingInputs())[0],
+  ).toMatchObject({ kind: 'conversation', reply: reply.text });
+  expect(await f.platform.nativeVoice!.list(f.thread.id)).toHaveLength(0);
+  await f.platform.workspace.setCall(f.turn.callId, 'ended', '');
+  const laterCall = await f.platform.workspace.createCall(f.thread.id);
+  await lease!.release();
+  await vi.waitFor(
+    async () => {
+      const snapshot = await f.platform.localConversations!.getSnapshot(
+        f.thread.id,
+      );
+      expect(
+        snapshot.messages.some(
+          (m) => m.role === 'assistant' && m.content === reply.text,
+        ),
+      ).toBe(true);
+    },
+    { timeout: 2500 },
+  );
+  expect(intake).toHaveBeenCalledOnce();
+  expect((await f.platform.workspace.call(f.turn.callId)).messageIds).toEqual(
+    expect.arrayContaining([f.turn.messageId, reply.assistantMessageId]),
+  );
+  expect((await f.platform.workspace.call(laterCall.id)).messageIds).toEqual(
+    [],
+  );
+});
+
+it('preserves the original request once when quick inference fails', async () => {
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  const release = await codexCoordinator(f.platform.workspace).acquire(
+    f.dot.id,
+    'held',
+    new AbortController().signal,
+  );
+  cleanup.push(release);
+  const intake = vi.fn(async () => {
+    throw Error('Subscription unavailable');
+  });
+  const turn = {
+    ...f.turn,
+    understanding: {
+      route: 'chat' as const,
+      text: 'Check access to my project.',
+    },
+    intake,
+  };
+  const reply = await f.platform.nativeVoice!.turn(turn);
+  expect(reply.text).toContain('couldn’t prepare');
+  await vi.waitFor(async () =>
+    expect(await f.platform.nativeVoice!.list(f.thread.id)).toEqual([
+      expect.objectContaining({
+        request: turn.understanding.text,
+        status: 'queued',
+      }),
+    ]),
+  );
+  await f.platform.nativeVoice!.turn(turn);
+  expect(intake).toHaveBeenCalledOnce();
+  expect(await f.platform.nativeVoice!.list(f.thread.id)).toHaveLength(1);
+});
+
+it('keeps task results and external assistant context out of the quick conversation lane', async () => {
+  const f = await fixture();
+  // Existing local response models a previously persisted answer containing private facts.
+  vi.mocked(f.native.respond).mockResolvedValue({
+    text: 'Private task result: confidential-data',
+    pcm: Buffer.alloc(4),
+  });
+  await f.platform.nativeVoice!.turn(f.turn);
+  f.platform.config.agentEngine = 'codex';
+  const intake = vi.fn(async () => ({
+    reply: 'I’ll ask the task agent to check that result.',
+    needsTask: true,
+  }));
+  const release = await codexCoordinator(f.platform.workspace).acquire(
+    f.dot.id,
+    'held',
+    new AbortController().signal,
+  );
+  cleanup.push(release);
+  await f.platform.nativeVoice!.turn({
+    ...f.turn,
+    messageId: randomUUID(),
+    understanding: { route: 'chat', text: 'What was that result?' },
+    intake,
+  });
+  expect(JSON.stringify(intake.mock.calls)).not.toContain('confidential-data');
+});
+
+it('rechecks lifecycle claims when earlier work finishes during conversation inference', async () => {
+  const f = await fixture();
+  f.platform.config.agentEngine = 'codex';
+  const release = await codexCoordinator(f.platform.workspace).acquire(
+    f.dot.id,
+    'held',
+    new AbortController().signal,
+  );
+  cleanup.push(release);
+  const intake = vi.fn(async () => {
+    await release();
+    return {
+      reply: 'Your earlier task is still running.',
+      needsTask: false,
+      usesTaskStatus: true,
+    };
+  });
+  const reply = await f.platform.nativeVoice!.turn({
+    ...f.turn,
+    understanding: { route: 'chat', text: 'Still thinking about it?' },
+    intake,
+  });
+  expect(reply.text).toBe('There is no active task in this conversation.');
+  expect(await f.platform.nativeVoice!.list(f.thread.id)).toHaveLength(0);
+  expect(intake).toHaveBeenCalledOnce();
 });
 
 it('keeps the next voice request queued durably until the first task releases execution', async () => {
@@ -441,6 +695,9 @@ it('keeps casual conversation local, sends the original waveform and persists ca
     'Hello from local audio.',
   ]);
   expect(saved.lastRun?.status).toBe('finished');
+  expect((await f.platform.workspace.call(f.turn.callId)).messageIds).toEqual(
+    saved.messages.map((m) => m.id),
+  );
   await f.platform.nativeVoice!.turn({
     ...f.turn,
     messageId: randomUUID(),
@@ -460,6 +717,68 @@ it('keeps casual conversation local, sends the original waveform and persists ca
   );
   expect(f.native.speak).not.toHaveBeenCalled();
   expect(provider).not.toHaveBeenCalled();
+});
+
+it('groups persisted ordinary voice-agent output after hangup without capturing subsequent typed replies', async () => {
+  const f = await fixture();
+  await f.platform.workspace.recordCallMessages(f.turn.callId, [
+    f.turn.messageId,
+  ]);
+  await f.platform.workspace.setCall(f.turn.callId, 'ended', '');
+  const later = await f.platform.workspace.createCall(f.thread.id);
+  vi.spyOn(DotAgent.prototype, 'run').mockImplementation((input) => {
+    const id = `answer-${input.runId}`;
+    return of(
+      {
+        type: EventType.RUN_STARTED,
+        threadId: input.threadId,
+        runId: input.runId,
+      },
+      { type: EventType.TEXT_MESSAGE_START, messageId: id, role: 'assistant' },
+      {
+        type: EventType.TEXT_MESSAGE_CONTENT,
+        messageId: id,
+        delta: 'Here is your answer.',
+      },
+      { type: EventType.TEXT_MESSAGE_END, messageId: id },
+      {
+        type: EventType.RUN_FINISHED,
+        threadId: input.threadId,
+        runId: input.runId,
+      },
+    );
+  });
+  for (const [messageId, runId] of [
+    [f.turn.messageId, 'voice-run'],
+    ['typed-id', 'typed-run'],
+  ]) {
+    const agent = new DotAgent(
+      f.platform.store,
+      f.platform.workspace,
+      f.platform.config,
+      f.dot.id,
+    );
+    await lastValueFrom(
+      f.platform['localRunner']!.run({
+        threadId: f.thread.id,
+        agent,
+        input: {
+          threadId: f.thread.id,
+          runId,
+          messages: [{ id: messageId, role: 'user', content: 'Hello' }],
+          tools: [],
+          context: [],
+          state: {},
+          forwardedProps: {},
+        },
+      }).pipe(toArray()),
+    );
+  }
+  expect((await f.platform.workspace.call(f.turn.callId)).messageIds).toEqual([
+    f.turn.messageId,
+    'answer-voice-run',
+  ]);
+  expect((await f.platform.workspace.call(later.id)).messageIds).toEqual([]);
 });
 it('runs delegated work on a linked thread while local conversation can continue', async () => {
   const events = new Subject<BaseEvent>();
@@ -506,6 +825,66 @@ it('runs delegated work on a linked thread while local conversation can continue
   expect(
     await f.storage.repositories.voiceDelegations.get(job.id),
   ).toMatchObject({ status: 'cancelled' });
+});
+
+it('keeps a late task receipt with its originating call after another call begins', async () => {
+  const events = new Subject<BaseEvent>();
+  const provider = vi
+    .spyOn(DotAgent.prototype, 'run')
+    .mockImplementation((input) => {
+      queueMicrotask(() =>
+        events.next({
+          type: EventType.RUN_STARTED,
+          threadId: input.threadId,
+          runId: input.runId,
+        }),
+      );
+      return events;
+    });
+  const f = await fixture();
+  await f.platform.nativeVoice!.turn({
+    ...f.turn,
+    understanding: {
+      route: 'delegate',
+      text: 'Inspect the notes.',
+      tool: {
+        name: 'delegate_task',
+        arguments: { request: 'Inspect the notes.' },
+      },
+    },
+  });
+  await vi.waitFor(() => expect(provider).toHaveBeenCalledOnce());
+  await f.platform.workspace.setCall(f.turn.callId, 'ended', '');
+  const later = await f.platform.workspace.createCall(f.thread.id);
+  const input = provider.mock.calls[0][0];
+  events.next({
+    type: EventType.TEXT_MESSAGE_START,
+    messageId: 'task-answer',
+    role: 'assistant',
+  });
+  events.next({
+    type: EventType.TEXT_MESSAGE_CONTENT,
+    messageId: 'task-answer',
+    delta: 'The notes contain three entries.',
+  });
+  events.next({ type: EventType.TEXT_MESSAGE_END, messageId: 'task-answer' });
+  events.next({
+    type: EventType.RUN_FINISHED,
+    threadId: input.threadId,
+    runId: input.runId,
+  });
+  events.complete();
+  await vi.waitFor(
+    async () => {
+      const job = (await f.storage.repositories.voiceDelegations.list())[0];
+      expect(job.receiptMessageId).toBeTruthy();
+      expect(
+        (await f.platform.workspace.call(f.turn.callId)).messageIds,
+      ).toContain(job.receiptMessageId);
+    },
+    { timeout: 3000 },
+  );
+  expect((await f.platform.workspace.call(later.id)).messageIds).toEqual([]);
 });
 it.each([true, false])(
   'handles folder waits without queuing phantom work (expired: %s)',

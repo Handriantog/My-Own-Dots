@@ -8,7 +8,7 @@ import { sqliteStorageSchema } from '../../shared/workspace-manifest.js';
 export { sqliteStorageSchema } from '../../shared/workspace-manifest.js';
 export function initializeSQLiteSchema(
   db: DatabaseSync,
-  targetVersion: 2 | 3 | 4 | 5 | 6 | 7 = sqliteStorageSchema,
+  targetVersion: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 = sqliteStorageSchema,
 ) {
   const transaction = beginSQLiteTransaction(db);
   try {
@@ -148,6 +148,32 @@ export function initializeSQLiteSchema(
       db.exec(`DROP INDEX voice_delegations_active_dot;
         CREATE UNIQUE INDEX voice_delegations_active_dot ON voice_delegations(owner_id,dot_id) WHERE status='running';`);
       db.prepare('INSERT INTO workspace_storage_schema VALUES(7,?)').run(
+        Date.now(),
+      );
+    }
+    if (version < 8 && targetVersion >= 8) {
+      const indexes = db
+        .prepare(
+          "SELECT sql FROM sqlite_schema WHERE type='index' AND tbl_name='voice_input_receipts' AND sql IS NOT NULL ORDER BY name",
+        )
+        .all();
+      // SQLite cannot alter CHECK constraints. Keep rowids because undelivered
+      // receipts use them to order inputs with the same creation timestamp.
+      db.exec(`CREATE TABLE voice_input_receipts_v8(ownerId TEXT NOT NULL,id TEXT NOT NULL,dotId TEXT NOT NULL,callId TEXT NOT NULL,parentThreadId TEXT NOT NULL,caption TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('request','status','stop','conversation')),reply TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('received','interrupted')),createdAt INTEGER NOT NULL,deliveredAt INTEGER,replySuppressionGeneration INTEGER CHECK(replySuppressionGeneration IS NULL OR (typeof(replySuppressionGeneration)='integer' AND replySuppressionGeneration>=0)),PRIMARY KEY(ownerId,id),FOREIGN KEY(ownerId,parentThreadId) REFERENCES conversation_threads(owner_id,id),FOREIGN KEY(callId) REFERENCES calls(id));
+        INSERT INTO voice_input_receipts_v8(rowid,ownerId,id,dotId,callId,parentThreadId,caption,kind,reply,status,createdAt,deliveredAt)
+          SELECT rowid,ownerId,id,dotId,callId,parentThreadId,caption,kind,reply,status,createdAt,deliveredAt FROM voice_input_receipts ORDER BY rowid;
+        DROP TABLE voice_input_receipts;
+        ALTER TABLE voice_input_receipts_v8 RENAME TO voice_input_receipts;`);
+      for (const index of indexes) db.exec(String(index.sql));
+      db.prepare('INSERT INTO workspace_storage_schema VALUES(8,?)').run(
+        Date.now(),
+      );
+    }
+    if (version < 9 && targetVersion >= 9) {
+      db.exec(
+        'CREATE TABLE IF NOT EXISTS call_history(callId TEXT PRIMARY KEY REFERENCES calls(id), afterMessageId TEXT, messageIds TEXT NOT NULL)',
+      );
+      db.prepare('INSERT INTO workspace_storage_schema VALUES(9,?)').run(
         Date.now(),
       );
     }

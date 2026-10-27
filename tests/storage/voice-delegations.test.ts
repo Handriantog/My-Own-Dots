@@ -8,6 +8,7 @@ import { afterEach, expect, it } from 'vitest';
 import { StorageClient } from '../../src/server/storage/storage-client.js';
 import { evidenceHash } from '../../src/server/conversation-memory.js';
 import { SQLiteConversations } from '../../src/server/storage/sqlite-conversations.js';
+import { initializeSQLiteSchema } from '../../src/server/storage/sqlite-schema.js';
 import {
   copyValidatedSQLite,
   restoreSQLite,
@@ -771,17 +772,26 @@ it('fails cleanly on the legacy backend without adding delegation schema', async
   db.close();
 });
 
+function restoreSchemaSixFixture(db: DatabaseSync) {
+  // These historical fixtures have no input receipts; recreate their exact
+  // schema-6 CHECK constraint instead of relabeling the current table as old.
+  db.exec(
+    "DROP TABLE voice_input_receipts; DROP INDEX voice_delegations_active_dot; CREATE UNIQUE INDEX voice_delegations_active_dot ON voice_delegations(owner_id,dot_id) WHERE status IN ('queued','running','approval'); DELETE FROM workspace_storage_schema WHERE version>5;",
+  );
+  initializeSQLiteSchema(db, 6);
+}
+
 it.each([2, 6])(
-  'restores known schema-%s history into schema 7 without mutating the source',
+  'restores known schema-%s history into schema 9 without mutating the source',
   async (schema) => {
     const f = await fixture();
     await f.storage.close();
     const old = new DatabaseSync(f.database);
-    old.exec(
-      schema === 2
-        ? 'DROP TABLE voice_input_receipts; DROP TABLE voice_delegations; DROP TRIGGER ability_deleted_dot; DROP TABLE ability_cleanup; DROP TABLE ability_receipts; DROP TABLE ability_bindings; DROP TABLE ability_installations; DROP TABLE ability_packages; DELETE FROM workspace_storage_schema WHERE version>=3'
-        : "DROP INDEX voice_delegations_active_dot; CREATE UNIQUE INDEX voice_delegations_active_dot ON voice_delegations(owner_id,dot_id) WHERE status IN ('running','approval'); DELETE FROM workspace_storage_schema WHERE version>6",
-    );
+    if (schema === 2)
+      old.exec(
+        'DROP TABLE voice_input_receipts; DROP TABLE voice_delegations; DROP TRIGGER ability_deleted_dot; DROP TABLE ability_cleanup; DROP TABLE ability_receipts; DROP TABLE ability_bindings; DROP TABLE ability_installations; DROP TABLE ability_packages; DELETE FROM workspace_storage_schema WHERE version>=3',
+      );
+    else restoreSchemaSixFixture(old);
     old.close();
     const destination = join(f.root, 'restored');
     await mkdir(join(destination, 'data'), { recursive: true });
@@ -801,7 +811,7 @@ it.each([2, 6])(
       restored
         .prepare('SELECT max(version) AS version FROM workspace_storage_schema')
         .get()!.version,
-    ).toBe(7);
+    ).toBe(9);
     expect(
       restored.prepare('SELECT count(*) AS n FROM voice_delegations').get()!.n,
     ).toBe(0);
@@ -897,26 +907,29 @@ it('validates delegation ownership and source captions when importing an archive
   ).rejects.toThrow(/delegation|reference|binding/i);
 });
 
-it('atomically updates a known workspace manifest after runtime schema upgrade', async () => {
-  const f = await fixture();
-  const identity = {
-    version: 1 as const,
-    id: randomUUID(),
-    ownerId: f.ownerId,
-    storage: 'sqlite' as const,
-    schema: 2,
-  };
-  await createWorkspaceManifest(f.root, identity);
-  await updateWorkspaceManifestSchema(f.root, f.ownerId);
-  expect(await readWorkspaceManifest(f.root)).toEqual({
-    ...identity,
-    schema: 7,
-  });
-  await updateWorkspaceManifestSchema(f.root, f.ownerId);
-  await expect(
-    updateWorkspaceManifestSchema(f.root, 'other-owner'),
-  ).rejects.toThrow(/owner/i);
-});
+it.each([2, 7])(
+  'atomically updates a schema-%s workspace manifest after runtime schema upgrade',
+  async (schema) => {
+    const f = await fixture();
+    const identity = {
+      version: 1 as const,
+      id: randomUUID(),
+      ownerId: f.ownerId,
+      storage: 'sqlite' as const,
+      schema,
+    };
+    await createWorkspaceManifest(f.root, identity);
+    await updateWorkspaceManifestSchema(f.root, f.ownerId);
+    expect(await readWorkspaceManifest(f.root)).toEqual({
+      ...identity,
+      schema: 9,
+    });
+    await updateWorkspaceManifestSchema(f.root, f.ownerId);
+    await expect(
+      updateWorkspaceManifestSchema(f.root, 'other-owner'),
+    ).rejects.toThrow(/owner/i);
+  },
+);
 
 it('binds an unused same-Dot worker but rejects a worker leased by another run', async () => {
   const f = await fixture();
@@ -1267,9 +1280,7 @@ it('upgrades schema 6 with a pending approval and reserves execution only for ru
   await f.jobs.settle(first, { status: 'approval' });
   await f.storage.close();
   const old = new DatabaseSync(f.database);
-  old.exec(
-    "DROP INDEX voice_delegations_active_dot; CREATE UNIQUE INDEX voice_delegations_active_dot ON voice_delegations(owner_id,dot_id) WHERE status IN ('running','approval'); DELETE FROM workspace_storage_schema WHERE version>6;",
-  );
+  restoreSchemaSixFixture(old);
   old.close();
   const reopened = await StorageClient.open({
     database: f.database,
@@ -1306,6 +1317,6 @@ it('upgrades schema 6 with a pending approval and reserves execution only for ru
     verified
       .prepare('SELECT max(version) AS version FROM workspace_storage_schema')
       .get()!.version,
-  ).toBe(7);
+  ).toBe(9);
   verified.close();
 });

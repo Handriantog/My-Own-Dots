@@ -1,16 +1,17 @@
 {
   "package": "myown-llm-integrator",
-  "version": "0.3.0-rc.1",
+  "version": "0.3.0-rc.2",
   "upstream": "https://github.com/Handriantog/My-Own-LLM-Integrator",
   "baseRevision": "f0f0c63833cddbb5b0bba9bf3eaeab411606c35b",
-  "sourcePatch": "myown-llm-integrator-0.3.0-rc.1.patch",
-  "sourcePatchSha256": "932f247d9cd7e7485134aef98487af20a12d88ab21329ee6b72860e0c15b7e98",
-  "archive": "myown-llm-integrator-0.3.0-rc.1.tgz",
-  "archiveSha256": "cda9da67a747eadd98f07fe70cdc20388b6450ef6f8e58a7d93c41480af334dd",
+  "sourcePatch": "myown-llm-integrator-0.3.0-rc.2.patch",
+  "sourcePatchSha256": "298d79d9620064acbbc49c7b70150a1076b2b2d6dab535e99f25164bfb80eaea",
+  "archive": "myown-llm-integrator-0.3.0-rc.2.tgz",
+  "archiveSha256": "8319a1511d2d1d9c30b5f335a06a5c6bc51a3223787ca40ba46d7a2e7b5d6556",
   "reconstruction": {
     "method": "git archive base, git apply source patch, node scripts/build.mjs, compare every regular archive member",
     "matchedFiles": 32,
     "tarMetadataCompared": false
   },
-  "releaseStatus": "unpublished candidate; upstream source changes preserved as patch"
+  "releaseStatus": "unpublished candidate; upstream source changes preserved as patch",
+  "changeFromPrevious": "Adds validated optional reasoningEffort to execution sessions; verifies effective process configuration and sends effort on every turn. Omitting it preserves existing settings."
 }

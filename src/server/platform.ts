@@ -297,6 +297,28 @@ export class Platform {
     )
       await this.localRunner?.stop({ threadId, runId: run.runId });
   }
+  async dailyConversation(dotId: string) {
+    this.requireReady();
+    const now = new Date();
+    const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const thread = await this.workspace.dailyConversation(dotId, date);
+    const result = await (
+      this.localConversations ?? this.intelligence!
+    ).getOrCreateThread({
+      threadId: thread.id,
+      userId: this.workspace.ownerId,
+      agentId: dotId,
+      name: date,
+    });
+    const canonical = 'thread' in result ? result.thread : result;
+    if (
+      canonical.id !== thread.id ||
+      canonical.agentId !== dotId ||
+      canonical.createdById !== this.workspace.ownerId
+    )
+      throw new Error('Conversation scope denied.');
+    return thread;
+  }
   async createConversation(dotId: string, title: string) {
     this.requireReady();
     if (!(await this.workspace.dot(dotId))) throw new Error('Dot not found.');
@@ -335,6 +357,17 @@ export class Platform {
       )
       .join('\n')
       .slice(-12000);
+  }
+  async lastMessageId(threadId: string): Promise<string | undefined> {
+    this.requireReady();
+    await this.workspace.requireThread(threadId);
+    const history = await (
+      this.localConversations ?? this.intelligence!
+    ).getThreadMessages({
+      threadId,
+      userId: this.workspace.ownerId,
+    });
+    return history.messages.at(-1)?.id;
   }
   async handle(request: Request): Promise<Response> {
     if (!this.handler)
@@ -406,9 +439,12 @@ export class Platform {
     prompt: string,
     signal: AbortSignal,
     metadata?: Record<string, unknown>,
+    callId?: string,
   ): Promise<string> {
     this.requireReady();
     const thread = await this.workspace.requireThread(threadId);
+    if (callId && (await this.workspace.call(callId)).threadId !== threadId)
+      throw new Error('Voice call scope mismatch.');
     return runThreadTurn(
       this.config.runtimeUrl,
       this.config.ownerToken
@@ -419,6 +455,11 @@ export class Platform {
       prompt,
       signal,
       metadata,
+      callId
+        ? async (ids) => {
+            await this.workspace.recordCallMessages(callId, ids);
+          }
+        : undefined,
     );
   }
 }

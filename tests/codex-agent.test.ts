@@ -5,6 +5,7 @@ import { CodexAgent, codexTools } from '../src/server/codex-agent.js';
 import { codexCoordinator } from '../src/server/codex-runtime.js';
 import { websiteTools } from '../src/server/website-tools.js';
 import type { ExecutionResult, ExecutionSession } from 'myown-llm-integrator';
+import * as diagnostics from '../src/shared/error-log.js';
 
 const provider = vi.hoisted(() => ({
   create: vi.fn(),
@@ -92,6 +93,60 @@ it('waits for durable admission before dispatch and excludes client system instr
     'untrusted instruction',
   );
   expect(f.events.at(-1)?.type).toBe(EventType.RUN_FINISHED);
+});
+
+it('traces preparation separately from provider work without recording conversation content', async () => {
+  const trace = vi
+    .spyOn(diagnostics, 'logDiagnostic')
+    .mockImplementation(() => {});
+  let release!: () => void;
+  const preparation = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const f = fixture({
+    prepare: async () => {
+      await preparation;
+      return {
+        instructions: 'private instructions',
+        messages: ['private request'],
+      };
+    },
+  });
+  const running = f.run();
+  await vi.waitFor(() =>
+    expect(trace).toHaveBeenCalledWith(
+      'execution_timing',
+      expect.objectContaining({
+        stage: 'prepare_start',
+        runId: 'run',
+        threadId: 'thread',
+        dotId: 'dot',
+      }),
+    ),
+  );
+  expect(provider.run).not.toHaveBeenCalled();
+  release();
+  await running;
+  const rows = trace.mock.calls
+    .filter(([event]) => event === 'execution_timing')
+    .map(([, row]) => row);
+  expect(rows.map((row) => row?.stage)).toEqual([
+    'requested',
+    'persisted',
+    'admitted',
+    'prepare_start',
+    'prepare_done',
+    'provider_start',
+    'provider_done',
+    'cleanup_done',
+    'finished',
+  ]);
+  expect(
+    rows.every(
+      (row) => typeof row?.elapsedMs === 'number' && row.elapsedMs >= 0,
+    ),
+  ).toBe(true);
+  expect(JSON.stringify(rows)).not.toMatch(/private|fix the test|Done\./);
 });
 
 it('does not finish stopping or release execution ownership before provider shutdown settles', async () => {
