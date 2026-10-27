@@ -19,6 +19,9 @@ import type {
 
 // Input frames contain 512 samples at 16 kHz (32 ms each).
 const interruptionSpeechFrames = Math.ceil(1500 / 32);
+// Allow short word/phrase gaps, but never accumulate sparse detections forever.
+const interruptionGapFrames = 8; // 256 ms; recorded speech pauses were 192 ms.
+const interruptionWindowFrames = Math.ceil(2000 / 32);
 
 type Utterance = {
   messageId: string;
@@ -158,7 +161,7 @@ export interface VoiceCallPort {
     messageId: string;
     text: string;
     timing?: VoiceTurnTiming;
-  }): void;
+  }): void | Promise<void>;
   requireThread(): { dotId: string } | Promise<{ dotId: string }>;
   paused(): boolean | Promise<boolean>;
   foreground(signal: AbortSignal): Promise<() => void>;
@@ -191,6 +194,8 @@ export class LiveVoiceCall {
   private outputSequence = 0;
   private positives = 0;
   private speechStartFrames = 3;
+  private speechCandidateFrames = 0;
+  private speechCandidateSilence = 0;
   private silence = 0;
   private speaking = false;
   private lastVoiceAt = performance.now();
@@ -198,6 +203,8 @@ export class LiveVoiceCall {
   private preRoll: Buffer[] = [];
   private frames: Buffer[] = [];
   private utterance?: Utterance;
+  private nativeInputId?: string;
+  private nativeApprovalInputId?: string;
   private recognizing?: Promise<void>;
   private queuedRecognition = false;
   private recognitionGeneration = 0;
@@ -255,6 +262,12 @@ export class LiveVoiceCall {
   }
   private get speechOutput() {
     return this.quality !== 'basic';
+  }
+  private get nativeRestingPhase() {
+    return this.nativeInputId &&
+      this.nativeApprovalInputId === this.nativeInputId
+      ? ('approval' as const)
+      : ('listening' as const);
   }
   get endSignal(): AbortSignal {
     return this.controller.signal;
@@ -389,15 +402,52 @@ export class LiveVoiceCall {
     const voiced = probability >= 0.5;
     if (voiced) this.lastVoiceAt = performance.now();
     if (!this.speaking) {
-      if (!this.positives) this.speechStartFrames = 3;
+      if (!this.positives) {
+        this.speechStartFrames = 3;
+        this.speechCandidateFrames = 0;
+        this.speechCandidateSilence = 0;
+      }
       // Once speech overlaps a reply, keep confirming it even if playback ends.
       if (this.outputActive) this.speechStartFrames = interruptionSpeechFrames;
-      this.positives = voiced ? this.positives + 1 : 0;
+      const interruption = this.speechStartFrames === interruptionSpeechFrames;
+      if (voiced) {
+        this.positives++;
+        this.speechCandidateSilence = 0;
+      } else if (interruption && this.positives) {
+        this.speechCandidateSilence++;
+      } else {
+        this.positives = 0;
+      }
+      if (this.positives) this.speechCandidateFrames++;
+      if (
+        interruption &&
+        (this.speechCandidateSilence > interruptionGapFrames ||
+          this.speechCandidateFrames > interruptionWindowFrames)
+      ) {
+        logDiagnostic('voice_interruption', {
+          callId: this.scope.id,
+          threadId: this.scope.threadId,
+          status: 'rejected',
+          code:
+            this.speechCandidateSilence > interruptionGapFrames
+              ? 'speech_gap'
+              : 'sparse_speech',
+        });
+        this.positives = voiced ? 1 : 0;
+        this.speechCandidateFrames = this.positives;
+        this.speechCandidateSilence = 0;
+      }
       this.preRoll.push(pcm);
       // Retain the whole confirmation window so interruption loses no words.
-      while (this.preRoll.length > Math.max(8, this.positives))
+      while (this.preRoll.length > Math.max(8, this.speechCandidateFrames))
         this.preRoll.shift();
       if (this.positives < this.speechStartFrames) return;
+      if (interruption)
+        logDiagnostic('voice_interruption', {
+          callId: this.scope.id,
+          threadId: this.scope.threadId,
+          status: 'confirmed',
+        });
       this.speaking = true;
       this.silence = 0;
       this.frames = this.preRoll;
@@ -506,7 +556,12 @@ export class LiveVoiceCall {
         if (native) {
           if (!this.port.nativeTurn)
             throw Error('Native conversation runtime is unavailable.');
+          this.nativeInputId = messageId;
+          this.nativeApprovalInputId = undefined;
           const utterance = this.utterance;
+          // Preserve the recognized input before subscription reasoning. A
+          // crash during intake must not erase the owner's spoken request.
+          await this.checkpoint(`You: ${text}`);
           const reply = await this.port.nativeTurn({
             messageId,
             audio,
@@ -515,7 +570,6 @@ export class LiveVoiceCall {
           });
           if (this.ended || generation !== this.recognitionGeneration) return;
           utterance.answered = true;
-          await this.checkpoint(`You: ${text}`);
           this.emit({
             type: 'native-transcript',
             messageId,
@@ -525,13 +579,19 @@ export class LiveVoiceCall {
           if (reply.reviewFolders) this.emit({ type: 'review-folders' });
           if (reply.awaitingReply) {
             timing.mark('run_requested');
-            this.emit({ type: 'phase', phase: 'thinking' });
+            this.emit({
+              type: 'phase',
+              phase:
+                this.nativeApprovalInputId === messageId
+                  ? 'approval'
+                  : 'thinking',
+            });
             return;
           }
           await this.checkpoint(`Dot (generated): ${reply.text}`);
           this.emit({ type: 'caption', text: reply.text });
           if (this.speakerMuted)
-            this.emit({ type: 'phase', phase: 'listening' });
+            this.emit({ type: 'phase', phase: this.nativeRestingPhase });
           else {
             this.outputActive = true;
             void this.speak(
@@ -552,14 +612,14 @@ export class LiveVoiceCall {
               .finally(() => {
                 if (utterance.generation === this.generation) {
                   this.outputActive = false;
-                  this.emit({ type: 'phase', phase: 'listening' });
+                  this.emit({ type: 'phase', phase: this.nativeRestingPhase });
                   this.announceUpdate();
                 }
               });
           }
           return;
         }
-        this.port.voiceTurn?.(this.utterance);
+        await this.port.voiceTurn?.(this.utterance);
         await this.checkpoint(`You: ${text}`);
         timing.mark('transcript_ready');
         this.emit({
@@ -691,12 +751,47 @@ export class LiveVoiceCall {
     id: string,
     text: string,
     authorization: Promise<() => Promise<boolean>> | (() => Promise<boolean>),
-    options: { retainUntilPlayed?: boolean } = {},
+    options: {
+      retainUntilPlayed?: boolean;
+      sourceMessageId?: string;
+      approval?: boolean;
+    } = {},
   ) {
     if (!this.workers.native || this.ended || this.seenUpdates.has(id)) return;
     this.seenUpdates.add(id);
     if (this.seenUpdates.size > 256)
       this.seenUpdates.delete(this.seenUpdates.values().next().value!);
+    const authorized = Promise.resolve(authorization).catch(
+      () => async () => false,
+    );
+    if (options.sourceMessageId && options.approval !== undefined) {
+      // A waiting task must surface its review even while speech is muted or
+      // synthesis is busy. The same durable receipt guard governs this hint.
+      void (async () => {
+        const validate = await waitForVoiceOperation(
+          authorized,
+          this.controller.signal,
+        );
+        await this.check();
+        if (
+          !(await waitForVoiceOperation(validate(), this.controller.signal)) ||
+          this.ended
+        )
+          return;
+        if (options.approval) this.emit({ type: 'review-folders' });
+        if (options.sourceMessageId !== this.nativeInputId) return;
+        this.nativeApprovalInputId = options.approval
+          ? options.sourceMessageId
+          : undefined;
+        if (!this.speaking && !this.outputActive)
+          this.emit({
+            type: 'phase',
+            phase: options.approval ? 'approval' : 'listening',
+          });
+      })().catch(() => {
+        /* Stale receipts and ended calls cannot request a review. */
+      });
+    }
     if (this.updates.length >= 64) {
       const disposable = this.updates.findIndex(
         (update) => !update.retainUntilPlayed,
@@ -710,9 +805,7 @@ export class LiveVoiceCall {
       id,
       text,
       generation: this.generation,
-      authorization: Promise.resolve(authorization).catch(
-        () => async () => false,
-      ),
+      authorization: authorized,
       retainUntilPlayed: options.retainUntilPlayed === true,
       deferred: this.speakerMuted && options.retainUntilPlayed === true,
     });
@@ -886,7 +979,10 @@ export class LiveVoiceCall {
           this.retainedUpdates.delete(update.id);
         }
         if (!this.ended && generation === this.generation)
-          this.emit({ type: 'phase', phase: 'listening' });
+          this.emit({
+            type: 'phase',
+            phase: this.nativeRestingPhase,
+          });
         if (!this.ended) this.announceUpdate();
       });
   }
@@ -896,6 +992,8 @@ export class LiveVoiceCall {
     this.speaking = false;
     this.positives = 0;
     this.speechStartFrames = 3;
+    this.speechCandidateFrames = 0;
+    this.speechCandidateSilence = 0;
     this.silence = 0;
   }
   private appendTranscript(line: string) {

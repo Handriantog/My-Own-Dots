@@ -45,6 +45,7 @@ function fixture(maintenance?: MaintenanceGate) {
       config,
       turn,
       history,
+      lastMessageId: async () => 'earlier-message',
       requireReady() {},
       setup: () => ({
         voice: true,
@@ -69,6 +70,7 @@ it('binds voice history and compute to the existing thread, deduplicates tools a
     new AbortController().signal,
   );
   expect(f.history).toHaveBeenCalledWith('thread');
+  expect(f.workspace.call(call.id).afterMessageId).toBe('earlier-message');
   const body = f.transport.mock.calls[0][1]?.body;
   expect(body).toBeInstanceOf(FormData);
   expect(String((body as FormData).get('session'))).toContain('Earlier topic');
@@ -91,6 +93,7 @@ it('binds voice history and compute to the existing thread, deduplicates tools a
     expect.stringContaining('Record a short call receipt'),
     expect.any(AbortSignal),
     { opendotsSource: 'voice_receipt' },
+    call.id,
   );
   await expect(f.voice.compute(call.id, 'late', 'Research')).rejects.toThrow(
     'ended',

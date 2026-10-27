@@ -6,6 +6,7 @@ import type { Conversation } from '../src/shared/types';
 const harness = vi.hoisted(() => ({
   api: vi.fn(),
   talk: undefined as (() => void) | undefined,
+  chat: undefined as (() => void) | undefined,
   stop: undefined as (() => void) | undefined,
 }));
 vi.mock('../src/client/api', () => ({
@@ -85,7 +86,7 @@ beforeEach(() => {
       };
     if (path.startsWith('/local-voice/status'))
       return { enabled: true, ready: true };
-    if (path === '/conversations' && method === 'POST') {
+    if (path === '/conversations/daily' && method === 'POST') {
       const created = thread('created');
       conversations = [...conversations, created];
       return created;
@@ -98,6 +99,12 @@ beforeEach(() => {
     Object.assign(new EventTarget(), {
       dotVoice: {
         ...bridge,
+        onChat(callback: () => void) {
+          harness.chat = callback;
+          return () => {
+            harness.chat = undefined;
+          };
+        },
         onTalk(callback: () => void) {
           harness.talk = callback;
           return () => {
@@ -135,7 +142,7 @@ async function mount() {
 }
 const createdCalls = () =>
   harness.api.mock.calls.filter(
-    ([path, method]) => path === '/conversations' && method === 'POST',
+    ([path, method]) => path === '/conversations/daily' && method === 'POST',
   );
 
 it('offers voice and personality settings before the first conversation', async () => {
@@ -221,29 +228,29 @@ it('keeps native readiness through a transient status failure but revokes on con
   expect(bridge.setReady).toHaveBeenLastCalledWith(false);
 });
 
-it('delivers one native Talk to the restored selected conversation without creating another', async () => {
+it('resolves today before delivering native Talk instead of using the restored selection', async () => {
   storage.set('desktop-dot', 'dot');
   storage.set('desktop-thread', 'selected');
   await mount();
   expect(root.root.findByType(Chat).props.voiceIntent).toBe(0);
   await act(async () => harness.talk!());
   const props = root.root.findByType(Chat).props;
-  expect(props.thread.id).toBe('selected');
+  expect(props.thread.id).toBe('created');
   expect(props.voiceIntent).toBe(1);
-  expect(createdCalls()).toHaveLength(0);
+  expect(createdCalls()).toHaveLength(1);
   await act(async () => props.onVoiceConsumed());
   expect(root.root.findByType(Chat).props.voiceIntent).toBe(0);
   expect(bridge.cancelTalk).toHaveBeenCalled();
 });
 
-it('selects an existing Dot thread on first Talk and never restores its call intent on reload', async () => {
+it('resolves the daily thread on first Talk and never restores its call intent on reload', async () => {
   await mount();
   await act(async () => harness.talk!());
-  expect(root.root.findByType(Chat).props.thread.id).toBe('first');
-  expect(createdCalls()).toHaveLength(0);
+  expect(root.root.findByType(Chat).props.thread.id).toBe('created');
+  expect(createdCalls()).toHaveLength(1);
   await act(async () => root.unmount());
   await mount();
-  expect(root.root.findByType(Chat).props.thread.id).toBe('first');
+  expect(root.root.findByType(Chat).props.thread.id).toBe('created');
   expect(root.root.findByType(Chat).props.voiceIntent).toBe(0);
 });
 
@@ -252,7 +259,7 @@ it('creates at most one conversation while first Talk waits and cancels a hidden
   let release!: (value: Conversation) => void;
   const normal = harness.api.getMockImplementation()!;
   harness.api.mockImplementation((path: string, method?: string) =>
-    path === '/conversations' && method === 'POST'
+    path === '/conversations/daily' && method === 'POST'
       ? new Promise((resolve) => {
           release = resolve;
         })
@@ -272,8 +279,78 @@ it('creates at most one conversation while first Talk waits and cancels a hidden
   });
   conversations = [thread('created')];
   await act(async () => release(conversations[0]));
-  expect(root.root.findByType(Chat).props.voiceIntent).toBe(0);
+  expect(root.root.findAllByType(Chat)).toHaveLength(0);
   expect(bridge.cancelTalk).toHaveBeenCalled();
+});
+
+it('does not start in an old or worker thread while daily resolution is pending', async () => {
+  storage.set('desktop-thread', 'selected');
+  const normal = harness.api.getMockImplementation()!;
+  let release!: (value: Conversation) => void;
+  harness.api.mockImplementation((path: string, method?: string) =>
+    path === '/conversations/daily'
+      ? new Promise((resolve) => {
+          release = resolve;
+        })
+      : normal(path, method),
+  );
+  await mount();
+  await act(async () => harness.talk!());
+  expect(root.root.findByType(Chat).props.thread.id).toBe('selected');
+  expect(root.root.findByType(Chat).props.voiceIntent).toBe(0);
+  await act(async () => release(thread('today')));
+  expect(root.root.findByType(Chat).props.thread.id).toBe('today');
+  expect(root.root.findByType(Chat).props.voiceIntent).toBe(1);
+});
+
+it('Chat resolves today again on each native entry without requesting a call', async () => {
+  storage.set('desktop-thread', 'selected');
+  await mount();
+  await act(async () => harness.chat!());
+  expect(root.root.findByType(Chat).props.thread.id).toBe('created');
+  expect(root.root.findByType(Chat).props.voiceIntent).toBe(0);
+  const normal = harness.api.getMockImplementation()!;
+  harness.api.mockImplementation((path: string, method?: string) =>
+    path === '/conversations/daily'
+      ? Promise.resolve(thread('tomorrow'))
+      : normal(path, method),
+  );
+  await act(async () => harness.chat!());
+  expect(root.root.findByType(Chat).props.thread.id).toBe('tomorrow');
+});
+
+it('keeps an active call in its original thread when Chat is reopened after midnight', async () => {
+  storage.set('desktop-thread', 'selected');
+  await mount();
+  await act(async () =>
+    root.root.findByType(Chat).props.onVoiceActive('dot', true),
+  );
+  await act(async () => harness.chat!());
+  expect(root.root.findByType(Chat).props.thread.id).toBe('selected');
+  expect(createdCalls()).toHaveLength(0);
+});
+
+it('does not let an older Chat resolution replace the next Talk destination', async () => {
+  storage.set('desktop-thread', 'selected');
+  const normal = harness.api.getMockImplementation()!;
+  let release!: (value: Conversation) => void;
+  let calls = 0;
+  harness.api.mockImplementation((path: string, method?: string) =>
+    path === '/conversations/daily'
+      ? ++calls === 1
+        ? new Promise((resolve) => {
+            release = resolve;
+          })
+        : Promise.resolve(thread('today'))
+      : normal(path, method),
+  );
+  await mount();
+  await act(async () => harness.chat!());
+  await act(async () => harness.talk!());
+  expect(root.root.findByType(Chat).props.thread.id).toBe('today');
+  await act(async () => release(thread('yesterday')));
+  expect(root.root.findByType(Chat).props.thread.id).toBe('today');
+  expect(root.root.findByType(Chat).props.voiceIntent).toBe(1);
 });
 
 it('preserves a windowless Talk intent when hidden and cancels it on a native stop', async () => {

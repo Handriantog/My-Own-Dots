@@ -58,7 +58,16 @@ export class VoiceDelegations {
     private enabled = true,
     private memoryEnabled: () => boolean = () => false,
   ) {}
-  /** Admit busy-call input without acquiring the active conversation's run lease. */
+  workerThreadIds(): string[] {
+    if (!this.enabled) return [];
+    return this.db
+      .prepare(
+        'SELECT DISTINCT worker_thread_id FROM voice_delegations WHERE owner_id=?',
+      )
+      .all(this.ownerId)
+      .map((row) => String(row.worker_thread_id));
+  }
+  /** Persist call input without acquiring the active conversation's run lease. */
   receiveInput(
     input: Omit<VoiceInputReceipt, 'status' | 'createdAt' | 'deliveredAt'>,
   ) {
@@ -68,8 +77,11 @@ export class VoiceDelegations {
       input.id.length > 200 ||
       !input.caption.trim() ||
       input.caption.length > 4000 ||
-      !['request', 'status', 'stop'].includes(input.kind) ||
-      input.reply.length > 400
+      !['request', 'status', 'stop', 'conversation'].includes(input.kind) ||
+      input.reply.length > 400 ||
+      (input.replySuppressionGeneration != null &&
+        (!Number.isSafeInteger(input.replySuppressionGeneration) ||
+          input.replySuppressionGeneration < 0))
     )
       throw Error('Invalid voice input.');
     return this.transaction(() => {
@@ -77,10 +89,7 @@ export class VoiceDelegations {
       const call = this.workspace.call(input.callId);
       if (call.threadId !== input.parentThreadId || call.endedAt)
         throw Error('Voice call is no longer active.');
-      const prior = this.db
-        .prepare('SELECT * FROM voice_input_receipts WHERE ownerId=? AND id=?')
-        .get(this.ownerId, input.id) as unknown as
-        VoiceInputReceipt | undefined;
+      const prior = this.inputReceipt(input.id);
       if (prior) {
         if (
           prior.callId !== input.callId ||
@@ -103,13 +112,14 @@ export class VoiceDelegations {
         throw Error('The request queue is full. Wait for current work.');
       const receipt: VoiceInputReceipt = {
         ...input,
+        replySuppressionGeneration: input.replySuppressionGeneration ?? null,
         status: 'received',
         createdAt: Date.now(),
         deliveredAt: null,
       };
       this.db
         .prepare(
-          'INSERT INTO voice_input_receipts VALUES(?,?,?,?,?,?,?,?,?,?,NULL)',
+          'INSERT INTO voice_input_receipts(ownerId,id,dotId,callId,parentThreadId,caption,kind,reply,status,createdAt,deliveredAt,replySuppressionGeneration) VALUES(?,?,?,?,?,?,?,?,?,?,NULL,?)',
         )
         .run(
           this.ownerId,
@@ -122,15 +132,25 @@ export class VoiceDelegations {
           receipt.reply,
           receipt.status,
           receipt.createdAt,
+          receipt.replySuppressionGeneration ?? null,
         );
       return { created: true, receipt };
     });
+  }
+  /** Idempotency lookup includes delivered replies and stays scoped to the owner. */
+  inputReceipt(id: string): VoiceInputReceipt | undefined {
+    if (!this.enabled) return;
+    return this.db
+      .prepare(
+        'SELECT id,dotId,callId,parentThreadId,caption,kind,reply,status,createdAt,deliveredAt,replySuppressionGeneration FROM voice_input_receipts WHERE ownerId=? AND id=?',
+      )
+      .get(this.ownerId, id) as unknown as VoiceInputReceipt | undefined;
   }
   pendingInputs(): VoiceInputReceipt[] {
     if (!this.enabled) return [];
     return this.db
       .prepare(
-        'SELECT id,dotId,callId,parentThreadId,caption,kind,reply,status,createdAt,deliveredAt FROM voice_input_receipts WHERE ownerId=? AND deliveredAt IS NULL ORDER BY createdAt,rowid LIMIT 100',
+        'SELECT id,dotId,callId,parentThreadId,caption,kind,reply,status,createdAt,deliveredAt,replySuppressionGeneration FROM voice_input_receipts WHERE ownerId=? AND deliveredAt IS NULL ORDER BY createdAt,rowid LIMIT 100',
       )
       .all(this.ownerId) as unknown as VoiceInputReceipt[];
   }
@@ -473,9 +493,11 @@ export class VoiceDelegations {
       const input = voiceDelegationEnqueueSchema.parse(raw);
       const receipt = this.db
         .prepare(
-          'SELECT status,callId,dotId,parentThreadId,caption FROM voice_input_receipts WHERE ownerId=? AND id=?',
+          'SELECT status,kind,callId,dotId,parentThreadId,caption FROM voice_input_receipts WHERE ownerId=? AND id=?',
         )
         .get(this.ownerId, input.utteranceId);
+      if (receipt && receipt.kind !== 'request')
+        throw Error('Voice input is not a task request; no task was queued.');
       if (
         receipt &&
         (receipt.status !== 'received' ||
@@ -751,9 +773,11 @@ export class VoiceDelegations {
   /** Startup reconciliation only. Never claims a job or retries an interrupted action. */
   recover(input: VoiceDelegationRecovery = {}): VoiceDelegation[] {
     return this.transaction(() => {
+      // Conversation decisions are complete; only their canonical mirroring
+      // may be pending. Preserve the answer and its suppression provenance.
       this.db
         .prepare(
-          "UPDATE voice_input_receipts SET status='interrupted',reply='Interrupted by restart; review chat before asking again.' WHERE ownerId=? AND deliveredAt IS NULL AND status='received'",
+          "UPDATE voice_input_receipts SET status='interrupted',reply='Interrupted by restart; review chat before asking again.' WHERE ownerId=? AND deliveredAt IS NULL AND status='received' AND kind<>'conversation'",
         )
         .run(this.ownerId);
       const supplied = new Map(

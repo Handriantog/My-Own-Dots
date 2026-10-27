@@ -39,6 +39,7 @@ export async function runThreadTurn(
   prompt: string,
   signal: AbortSignal,
   metadata?: Record<string, unknown>,
+  onMessageIds?: (ids: string[]) => Promise<void>,
 ): Promise<string> {
   signal.throwIfAborted();
   const response = await fetch(`${runtimeUrl}/info`, { headers, signal });
@@ -69,7 +70,16 @@ export async function runThreadTurn(
         });
   agent.threadId = threadId;
   let runError: Error | undefined;
+  let recording = false;
+  const outputIds = new Set<string>();
   const subscription = agent.subscribe({
+    onTextMessageStartEvent: ({ event }) => {
+      if (recording) outputIds.add(event.messageId);
+    },
+    onToolCallStartEvent: ({ event }) => {
+      if (recording && event.parentMessageId)
+        outputIds.add(event.parentMessageId);
+    },
     onRunErrorEvent: ({ event }) => {
       runError = new Error(event.message);
     },
@@ -94,18 +104,29 @@ export async function runThreadTurn(
               /^[a-f0-9]{64}$/.test(metadata.browserRequestId)
             ? `${voiceComputeMessagePrefix}${metadata.browserRequestId}:`
             : '';
-    agent.addMessage({
+    const message: Message = {
       id: `${idPrefix}${randomUUID()}`,
       role: 'user',
       content: prompt,
       ...(metadata ? { metadata } : {}),
-    });
+    };
+    await onMessageIds?.([message.id]);
+    agent.addMessage(message);
+    recording = true;
     const result = await agent.runAgent();
+    for (const message of result.newMessages) outputIds.add(message.id);
     signal.throwIfAborted();
     return currentTurnText(result.newMessages, runError);
   } finally {
+    recording = false;
     signal.removeEventListener('abort', stop);
     subscription.unsubscribe();
-    await agent.detachActiveRun();
+    try {
+      // Include observed partial output even when the SDK rejects the run.
+      // Connect/replay happened before recording; those IDs never join this call.
+      if (outputIds.size) await onMessageIds?.([...outputIds]);
+    } finally {
+      await agent.detachActiveRun();
+    }
   }
 }

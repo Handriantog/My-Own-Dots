@@ -70,7 +70,7 @@
     "age-encryption": "0.3.1",
     "hono": "^4.13.11",
     "lucide-react": "^1.48.0",
-    "myown-llm-integrator": "file:vendor/myown-llm-integrator-0.3.0-rc.1.tgz",
+    "myown-llm-integrator": "file:vendor/myown-llm-integrator-0.3.0-rc.2.tgz",
     "pg": "8.16.3",
     "pixi.js": "8.22.0",
     "playwright": "^1.63.0",

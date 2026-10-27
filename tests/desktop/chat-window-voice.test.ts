@@ -142,6 +142,20 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it('requests today on each native Chat entry, but preserves an engaged call', async () => {
+  const sent = host.windows[0].webContents.send;
+  sent.mockClear();
+  await chat.open(bounds);
+  expect(sent).toHaveBeenCalledWith('dot:voice:chat');
+  sent.mockClear();
+  await chat.talk(bounds);
+  expect(sent).toHaveBeenCalledWith('dot:voice:talk');
+  expect(sent).not.toHaveBeenCalledWith('dot:voice:chat');
+  sent.mockClear();
+  await chat.open(bounds);
+  expect(sent).not.toHaveBeenCalledWith('dot:voice:chat');
+});
+
 it.each([false, true])(
   'keeps the selected chat and latest color when appearance changes are queued (recovery: %s)',
   async (recovery) => {

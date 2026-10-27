@@ -23,4 +23,6 @@ export interface DesktopVoiceBridge {
   reportError(message: string): void;
   onStop(callback: (reason: string) => void): () => void;
   onTalk(callback: () => void): () => void;
+  /** Open today's chat from the native Dot without starting a call. */
+  onChat?(callback: () => void): () => void;
 }

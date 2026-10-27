@@ -98,6 +98,28 @@ const base = {
   onRestore: async () => {},
 };
 
+it('omits delegated worker chats from both active and trash navigation', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  const worker = {
+    ...local[0],
+    id: 'worker',
+    title: 'Hidden worker',
+    kind: 'delegated-task' as const,
+  };
+  let root!: ReturnType<typeof create>;
+  await act(async () => {
+    root = create(
+      createElement(ThreadList, {
+        ...base,
+        local: [...local, worker],
+        deleted: [{ ...worker, deletedAt: 4 }],
+      }),
+    );
+  });
+  expect(JSON.stringify(root.toJSON())).not.toContain('Hidden worker');
+  await act(async () => root.unmount());
+});
+
 it('keeps pinned chats first and searches titles and Dot names across all chats', async () => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
   let root!: ReturnType<typeof create>;

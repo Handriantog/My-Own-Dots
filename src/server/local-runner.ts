@@ -60,7 +60,10 @@ interface EvidenceAgent extends AbstractAgent {
   ): Promise<(() => Promise<void>) | undefined>;
   evidenceGuard?(threadId: string): EvidenceGuard | Promise<EvidenceGuard>;
   setEvidenceRecorder?(record?: (guard: EvidenceGuard) => Promise<void>): void;
-  onPersistedEvent?(input: RunAgentInput, event: BaseEvent): void;
+  onPersistedEvent?(
+    input: RunAgentInput,
+    event: BaseEvent,
+  ): void | Promise<void>;
   onRunSettled?(input: RunAgentInput, failed: boolean): void;
   onRunRequested?(input: RunAgentInput): void;
 }
@@ -207,7 +210,10 @@ export class LocalAgentRunner extends AgentRunner {
             }
             active.events.push(structuredClone(persisted));
             if (!isTerminal(persisted))
-              (agent as EvidenceAgent).onPersistedEvent?.(input, persisted);
+              await (agent as EvidenceAgent).onPersistedEvent?.(
+                input,
+                persisted,
+              );
             if (!isTerminal(persisted)) active.subject.next(persisted);
             return persisted;
           };

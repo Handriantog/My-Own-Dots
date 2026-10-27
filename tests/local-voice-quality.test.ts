@@ -11,6 +11,7 @@ import { LocalSpeechWorker } from '../src/server/local-voice/worker.js';
 import { DEFAULT_VOICE_SETTINGS } from '../src/shared/voice-settings.js';
 import { UnifiedSnapshotSource } from '../src/server/storage/unified-snapshot.js';
 import { restoreSQLite } from '../src/server/storage/restore-sqlite.js';
+import { CodexConversationSession } from '../src/server/local-voice/codex-conversation-intake.js';
 
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -329,11 +330,15 @@ it('snapshots Basic at startup and rejects a stale quality expectation without s
 it
   .skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')
   .each([false, true])(
-  'offers High with pinned assets and no inference session (speech only: %s)',
+  'offers High with pinned assets and warms Codex conversation separately (speech only: %s)',
   async (speechOnly) => {
     const { NativeVoiceWorker } =
       await import('../src/server/local-voice/native-worker.js');
     const f = await fixture();
+    const conversationWarm = vi
+      .spyOn(CodexConversationSession.prototype, 'warm')
+      .mockResolvedValue();
+    vi.spyOn(CodexConversationSession.prototype, 'close').mockResolvedValue();
     if (speechOnly) f.platform.config.agentEngine = 'codex';
     const nativeManifest = join(f.root, 'native-models.json');
     const revision = 'a'.repeat(40);
@@ -436,6 +441,10 @@ it
       parentSnapshot.mockResolvedValue({ messages: [], state: {} });
     }
     const listeners = vi.spyOn(f.platform.nativeVoice!, 'listen');
+    const progressListeners = vi.spyOn(
+      f.platform.nativeVoice!,
+      'listenProgress',
+    );
     const handle = await service.start(
       thread.id,
       f.dot.id,
@@ -443,6 +452,7 @@ it
       'high',
     );
     expect(handle.quality).toBe('high');
+    expect(conversationWarm).toHaveBeenCalledTimes(speechOnly ? 1 : 0);
     expect(warmed).toHaveBeenCalledTimes(speechOnly ? 2 : 1);
     expect(localWarm).toHaveBeenCalledOnce();
     await (await service.require(handle.id, handle.token)).end();
@@ -467,6 +477,7 @@ it
       dotId: f.dot.id,
       parentThreadId: thread.id,
       workerThreadId: 'worker',
+      sourceMessageId: 'spoken-request',
       status: 'completed',
       result: 'The folder contains project notes.',
       leaseGeneration: 1,
@@ -479,7 +490,35 @@ it
       expect.any(String),
       expect.stringContaining('project notes'),
       authorization,
-      { retainUntilPlayed: true },
+      {
+        retainUntilPlayed: true,
+        sourceMessageId: 'spoken-request',
+        approval: false,
+      },
+    );
+    notify({ ...job, status: 'approval' });
+    expect(update).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.stringContaining('waiting for approval'),
+      authorization,
+      {
+        retainUntilPlayed: undefined,
+        sourceMessageId: 'spoken-request',
+        approval: true,
+      },
+    );
+    const authorizeProgress = async () => true;
+    progressListeners.mock.calls.at(-1)![0]({
+      id: 'resumed-progress',
+      job: { ...job, status: 'running' },
+      text: 'I will inspect the selected folder.',
+      authorize: authorizeProgress,
+    });
+    expect(update).toHaveBeenLastCalledWith(
+      'resumed-progress',
+      'I will inspect the selected folder.',
+      authorizeProgress,
+      { sourceMessageId: 'spoken-request', approval: false },
     );
     await resumedCall.end();
   },

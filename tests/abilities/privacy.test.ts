@@ -282,7 +282,7 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         vi.spyOn(f.agent, 'onPersistedEvent').mockImplementation(
           (input, event) => {
             voiceEvents.push(structuredClone(event));
-            persisted(input, event);
+            return persisted(input, event);
           },
         );
         engine.runAgent.mockReset();

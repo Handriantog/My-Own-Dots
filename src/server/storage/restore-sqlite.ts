@@ -10,7 +10,10 @@ import {
   initializeSQLiteSchema,
   sqliteStorageSchema,
 } from './sqlite-schema.js';
-import { validateUnifiedGraph } from './unified-validation.js';
+import {
+  validateCallHistory,
+  validateUnifiedGraph,
+} from './unified-validation.js';
 
 const inventory = (db: DatabaseSync) =>
   db
@@ -26,7 +29,7 @@ export async function copyValidatedSQLite(
   ownerId: string,
   signal: AbortSignal,
   engine: 'legacy-postgres' | 'sqlite' = 'legacy-postgres',
-  expectedSchema?: 2 | 3 | 4 | 5 | 6 | 7,
+  expectedSchema?: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9,
 ) {
   const baselineDirectory = await mkdtemp(
     join(dirname(destination), '.schema-'),
@@ -51,6 +54,10 @@ export async function copyValidatedSQLite(
         supported.set(5, inventory(schema));
         initializeSQLiteSchema(schema, 6);
         supported.set(6, inventory(schema));
+        initializeSQLiteSchema(schema, 7);
+        supported.set(7, inventory(schema));
+        initializeSQLiteSchema(schema, 8);
+        supported.set(8, inventory(schema));
         initializeSQLiteSchema(schema);
         supported.set(sqliteStorageSchema, inventory(schema));
       } finally {
@@ -72,24 +79,34 @@ export async function copyValidatedSQLite(
     const actual = JSON.stringify(inventory(original));
     // The additive customization migration is also absent in older supported
     // backups. Match that exact known schema; never execute archived DDL.
-    const baseVariants = [...supported.entries()].flatMap(
-      ([version, schema]) => [
-        [version, schema] as const,
-        [
-          version,
-          schema
-            .filter((row) => row.name !== 'desktop_dot')
-            .map((row) =>
-              row.name === 'dots'
-                ? {
-                    ...row,
-                    sql: String(row.sql).replace(', customization TEXT', ''),
-                  }
-                : row,
-            ),
-        ] as const,
-      ],
+    const historicalVariants = [...supported.entries()].flatMap(
+      ([version, schema]) =>
+        version < 9
+          ? [
+              [version, schema] as const,
+              [
+                version,
+                schema.filter((row) => row.name !== 'call_history'),
+              ] as const,
+            ]
+          : [[version, schema] as const],
     );
+    const baseVariants = historicalVariants.flatMap(([version, schema]) => [
+      [version, schema] as const,
+      [
+        version,
+        schema
+          .filter((row) => row.name !== 'desktop_dot')
+          .map((row) =>
+            row.name === 'dots'
+              ? {
+                  ...row,
+                  sql: String(row.sql).replace(', customization TEXT', ''),
+                }
+              : row,
+          ),
+      ] as const,
+    ]);
     const variants = baseVariants.flatMap(([version, schema]) =>
       version < 6
         ? [
@@ -166,6 +183,7 @@ export async function copyValidatedSQLite(
         )
           throw new Error('Invalid SQLite owner');
     }
+    if (engine !== 'sqlite') validateCallHistory(original, ownerId, signal);
     if (engine === 'sqlite')
       await validateUnifiedGraph(original, ownerId, signal, version);
   } finally {
@@ -184,7 +202,7 @@ export async function restoreSQLite(
   ownerId: string,
   signal: AbortSignal,
   engine: 'legacy-postgres' | 'sqlite' = 'legacy-postgres',
-  expectedSchema?: 2 | 3 | 4 | 5 | 6 | 7,
+  expectedSchema?: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9,
 ) {
   await copyValidatedSQLite(
     source,

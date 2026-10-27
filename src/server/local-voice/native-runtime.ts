@@ -1,4 +1,4 @@
-import { logError } from '../../shared/error-log.js';
+import { logDiagnostic, logError } from '../../shared/error-log.js';
 import { listenTaskProgress } from './task-progress.js';
 import { randomUUID } from 'node:crypto';
 import {
@@ -32,6 +32,10 @@ import {
 import { runtimePolicy } from '../storage/runtime-policy.js';
 import { personalityInstruction } from '../../shared/voice-settings.js';
 import type { EvidenceGuard } from '../../shared/memory.js';
+import type {
+  CodexConversationIntakeOptions,
+  CodexConversationDecision,
+} from './codex-conversation-intake.js';
 
 export interface NativeTurn {
   callId: string;
@@ -42,6 +46,13 @@ export interface NativeTurn {
   understanding: NativeUnderstanding;
   native: NativeVoiceSession;
   signal: AbortSignal;
+  /** Effect-free Codex conversation step; only the host may admit its handoff. */
+  intake?: (
+    options: CodexConversationIntakeOptions,
+  ) => Promise<CodexConversationDecision>;
+  /** Previously admitted reply, mirrored to canonical chat without inference replay. */
+  receiptReply?: string;
+  receiptReplySuppressionGeneration?: number | null;
 }
 const clean = (text: string, limit = 4000) =>
   text
@@ -253,6 +264,12 @@ export class NativeVoiceRuntime {
       !['running', 'approval', 'completed'].includes(job.status)
     )
       return;
+    if (job.leaseGeneration === 1) {
+      const receipt = await this.coordinator.jobs.inputReceipt(job.utteranceId);
+      // The first task plan would repeat the admission reply. A resumed
+      // approval has a new generation and must explain its selected target.
+      if (receipt?.kind === 'request' && receipt.reply) return;
+    }
     const suppression =
       await this.platform.workspace.memory.suppressionGeneration();
     const scope = JSON.stringify(await this.taskScope(job));
@@ -463,6 +480,8 @@ export class NativeVoiceRuntime {
     const control = execution
       ? voiceTaskControl(turn.understanding.text)
       : undefined;
+    if (execution && !admitted && !control && turn.intake)
+      return this.conversationTurn(turn);
     const stopTask = control === 'stop';
     const status = control === 'status';
     const understanding: NativeUnderstanding =
@@ -500,7 +519,13 @@ export class NativeVoiceRuntime {
     let speech: NativeSpeech | undefined;
     let awaitingReply = false;
     let reviewFolders = false;
-    const assistantMessageId = randomUUID();
+    const assistantMessageId = turn.receiptReply
+      ? `voice-input:${turn.messageId}`
+      : randomUUID();
+    await platform.workspace.recordCallMessages(turn.callId, [
+      turn.messageId,
+      assistantMessageId,
+    ]);
     const agent = new NativeConversationAgent(
       turn.dotId,
       async (input, runSignal, record) => {
@@ -588,9 +613,17 @@ export class NativeVoiceRuntime {
           }
           reviewFolders = queued.job.status === 'approval';
           if (execution && queued.kind !== 'busy') {
-            // Admission is durable, but it is not a conversational answer.
-            awaitingReply = true;
-            speech = { text: '', pcm: Buffer.alloc(0) };
+            // A quick reply is already durable for conversation intake. Older
+            // callers still wait for the task agent's actual response.
+            awaitingReply = !turn.receiptReply;
+            speech = {
+              text: await this.visibleInputReply({
+                reply: turn.receiptReply ?? '',
+                replySuppressionGeneration:
+                  turn.receiptReplySuppressionGeneration,
+              }),
+              pcm: Buffer.alloc(0),
+            };
           } else
             speech = await turn.native.speak(
               execution
@@ -712,6 +745,227 @@ export class NativeVoiceRuntime {
       ...(reviewFolders ? { reviewFolders } : {}),
     };
   }
+  private async conversationTurn(turn: NativeTurn): Promise<NativeTurnReply> {
+    const started = performance.now();
+    const trace = (stage: string) =>
+      logDiagnostic('voice_conversation_timing', {
+        callId: turn.callId,
+        threadId: turn.threadId,
+        messageId: turn.messageId,
+        stage,
+        elapsedMs: Math.round(performance.now() - started),
+      });
+    trace('context_started');
+    const caption = turn.understanding.text;
+    if (!caption.trim() || caption.length > 4000)
+      throw Error('Native caption is unavailable.');
+    const policy = runtimePolicy(this.platform.store, this.platform.workspace);
+    const initial = await policy.turnState(turn.dotId);
+    if (!initial.dot || initial.settings.paused)
+      throw Error('Dot is unavailable.');
+    const suppression =
+      await this.platform.workspace.memory.suppressionGeneration();
+    const check = async () => {
+      turn.signal.throwIfAborted();
+      if (
+        this.closed ||
+        JSON.stringify(await policy.turnState(turn.dotId)) !==
+          JSON.stringify(initial) ||
+        (await this.platform.workspace.memory.suppressionGeneration()) !==
+          suppression
+      )
+        throw Error('Dot context changed. Please repeat your request.');
+    };
+    const prior = await this.coordinator.jobs.inputReceipt(turn.messageId);
+    if (
+      prior &&
+      (prior.dotId !== turn.dotId ||
+        prior.parentThreadId !== turn.threadId ||
+        prior.callId !== turn.callId ||
+        prior.caption !== caption)
+    )
+      throw Error('Voice input identity was reused.');
+    let receipt = prior;
+    if (!receipt) {
+      const context = await this.coordinator.jobs.threadContext(
+        turn.threadId,
+        turn.dotId,
+      );
+      const pending = (await this.coordinator.jobs.pendingInputs()).filter(
+        (row) =>
+          row.dotId === turn.dotId && row.parentThreadId === turn.threadId,
+      );
+      const jobs = (
+        await this.coordinator.jobs.list({ parentThreadId: turn.threadId })
+      ).slice(-16);
+      const active = codexCoordinator(this.platform.workspace).status(
+        turn.dotId,
+      );
+      const lifecycle = (
+        rows: VoiceDelegation[],
+        inputs: typeof pending,
+        activeRunId?: string,
+      ) =>
+        JSON.stringify({
+          tasks: rows.map((job) => [job.id, job.status, job.leaseGeneration]),
+          inputs: inputs.map((row) => [row.id, row.status, row.kind]),
+          activeRunId,
+        });
+      const lifecycleAtIntake = lifecycle(jobs, pending, active.activeRunId);
+      const visibleRequests = new Map(
+        (context.available ? context.messages : [])
+          .filter(
+            (message) =>
+              message.role === 'user' && typeof message.content === 'string',
+          )
+          .map((message) => [message.id, String(message.content)]),
+      );
+      let decision: CodexConversationDecision;
+      await check();
+      try {
+        trace('intake_started');
+        decision = await turn.intake!({
+          caption,
+          instructions: clean(
+            `You are ${initial.dot.name}. ${initial.dot.instructions}. ${personalityInstruction(await this.platform.workspace.voiceSettings(turn.dotId))}`,
+            2400,
+          ),
+          context: {
+            // Only owner-authored requests and host lifecycle. External facts,
+            // task results and private page/tool content stay with the checked task agent.
+            ownerMessages: recentHistory(
+              context.available
+                ? context.messages.filter((m) => m.role === 'user')
+                : [],
+              turn.messageId,
+              4000,
+            ),
+            pending: pending.slice(-8).map((row) => ({
+              status: row.status,
+              kind: row.kind,
+            })),
+            tasks: jobs.map((job) => {
+              const request = visibleRequests.get(job.sourceMessageId);
+              return {
+                // A delegation's copied caption is not a substitute for the
+                // currently visible canonical source (forget/revoke may hide it).
+                ...(request === job.sourceText
+                  ? { request: clean(request, 400) }
+                  : {}),
+                status: job.status,
+              };
+            }),
+            executionBusy: !!active.activeRunId,
+            abilities:
+              'Dot can check installed Abilities and approved folders, use authorized file tools, and request owner-reviewed read, read/write or project command access. Only the owner grants access; actions wait for necessary grants. Actual readiness must be checked before claiming an action is available.',
+          },
+          model: this.platform.config.subscriptionModel,
+          signal: turn.signal,
+        });
+        if (
+          !decision.reply.trim() ||
+          decision.reply.length > 400 ||
+          typeof decision.needsTask !== 'boolean'
+        )
+          throw Error('Invalid conversation decision.');
+        trace('intake_finished');
+      } catch (error) {
+        trace('intake_failed');
+        await check();
+        logError('voice_conversation_intake_failed', error, {
+          callId: turn.callId,
+          threadId: turn.threadId,
+          messageId: turn.messageId,
+        });
+        // A failed quick reply never discards the original owner request. The
+        // ordinary task agent still receives it once under its normal policy.
+        decision = {
+          reply:
+            'I couldn’t prepare a quick reply. I’ve saved your request and will try to handle it.',
+          needsTask: true,
+        };
+      }
+      await check();
+      if (decision.usesTaskStatus) {
+        const currentJobs = (
+          await this.coordinator.jobs.list({ parentThreadId: turn.threadId })
+        ).slice(-16);
+        const currentInputs = (
+          await this.coordinator.jobs.pendingInputs()
+        ).filter(
+          (row) =>
+            row.dotId === turn.dotId && row.parentThreadId === turn.threadId,
+        );
+        const currentRun = codexCoordinator(this.platform.workspace).status(
+          turn.dotId,
+        ).activeRunId;
+        if (
+          lifecycle(currentJobs, currentInputs, currentRun) !==
+          lifecycleAtIntake
+        ) {
+          const latest = currentJobs.at(-1);
+          const latestInput = currentInputs
+            .filter((row) => row.kind === 'request')
+            .at(-1);
+          const status =
+            latestInput?.status === 'interrupted' &&
+            (!latest || latestInput.createdAt >= latest.createdAt)
+              ? 'That queued request was stopped. Other tasks may still be running.'
+              : latest?.status === 'approval'
+                ? 'The task is now waiting for your approval.'
+                : currentRun || latest?.status === 'running'
+                  ? 'A task is currently running.'
+                  : latest?.status === 'queued'
+                    ? 'The task is queued.'
+                    : latest?.status === 'completed'
+                      ? 'There is a new task reply in its conversation.'
+                      : latest
+                        ? 'The task has stopped; its conversation has the details.'
+                        : 'There is no active task in this conversation.';
+          decision.reply = decision.needsTask
+            ? `${status} I’ve saved your new request.`
+            : status;
+        }
+      }
+      receipt = (
+        await this.coordinator.jobs.receiveInput({
+          id: turn.messageId,
+          dotId: turn.dotId,
+          callId: turn.callId,
+          parentThreadId: turn.threadId,
+          caption,
+          kind: decision.needsTask ? 'request' : 'conversation',
+          reply: decision.reply,
+          replySuppressionGeneration: suppression,
+        })
+      ).receipt;
+    }
+    trace(prior ? 'admission_reused' : 'admission_persisted');
+    await check();
+    // Persistence precedes dispatch. Canonical delivery can wait for a typed
+    // parent run without holding speech or creating a competing execution run.
+    void this.deliverInputs();
+    trace('speech_started');
+    const speech = await turn.native.speak(
+      await this.visibleInputReply(receipt),
+      turn.signal,
+    );
+    await check();
+    trace('speech_ready');
+    return { ...speech, assistantMessageId: `voice-input:${turn.messageId}` };
+  }
+  private async visibleInputReply(
+    receipt: Pick<
+      import('../../shared/voice-delegation.js').VoiceInputReceipt,
+      'reply' | 'replySuppressionGeneration'
+    >,
+  ) {
+    return receipt.replySuppressionGeneration != null &&
+      receipt.replySuppressionGeneration !==
+        (await this.platform.workspace.memory.suppressionGeneration())
+      ? 'The saved reply is no longer available.'
+      : receipt.reply;
+  }
   private async receiveInput(
     turn: NativeTurn,
     kind: 'request' | 'status' | 'stop',
@@ -815,6 +1069,10 @@ export class NativeVoiceRuntime {
           forwardedProps: {},
         };
         try {
+          await this.platform.workspace.recordCallMessages(receipt.callId, [
+            receipt.id,
+            `voice-input:${receipt.id}`,
+          ]);
           if (receipt.kind === 'request' && receipt.status === 'received') {
             // Mirror an accepted caption once the parent is free. This enqueues the
             // ordinary durable job; it does not bypass the shared execution engine.
@@ -826,6 +1084,9 @@ export class NativeVoiceRuntime {
                 messageId: receipt.id,
                 audio: Buffer.alloc(0),
                 understanding: { text: receipt.caption, route: 'chat' },
+                receiptReply: receipt.reply,
+                receiptReplySuppressionGeneration:
+                  receipt.replySuppressionGeneration,
                 signal: this.inputController.signal,
                 native: {
                   warm: async () => {},
@@ -847,7 +1108,7 @@ export class NativeVoiceRuntime {
                 receipt.reply
                   ? {
                       id: `voice-input:${receipt.id}`,
-                      text: receipt.reply,
+                      text: await this.visibleInputReply(receipt),
                     }
                   : null,
               ),
@@ -1017,6 +1278,9 @@ export class NativeVoiceRuntime {
               continue;
             let delivered = job;
             const receiptId = voiceJobReceipt(job).id;
+            await this.platform.workspace.recordCallMessages(job.callId, [
+              receiptId,
+            ]);
             await this.run(
               new NativeConversationAgent(
                 job.dotId,

@@ -47,10 +47,21 @@ corrupt assets fail explicitly; there is no Samantha fallback. See the
 Codex keeps approval waits separate from execution. Leaving a dialog undecided
 pauses only that task; you can keep talking or ask for something else. Approving
 while another task runs queues the continuation. The agent mentions an existing
-approval when your request needs it. Before substantial work or an approved
-continuation, it gives a brief, specific next step in its own words. High speaks
-that saved message and then the result, without adding a canned acknowledgment
-to casual replies. Muting queues updates; interruption suppresses stale speech.
+approval when your request needs it. A call-scoped, effect-free Codex session
+answers casual conversation or gives a brief, specific next step before handing
+the unchanged request to the task agent. It warms during connection and stays
+independent of the task execution queue. Only the task agent can use tools or
+request permission; task results and missing project facts go through its
+authorized context. High speaks the saved reply and later result. An approved
+continuation explains its selected target before acting. Muting queues updates;
+interruption suppresses stale speech. Delayed approvals show the existing folder
+review independently of audio playback.
+
+This short conversation turn adds subscription usage before task work. Its
+deadline is bounded, but provider reasoning and local speech generation still
+determine audible response latency. On quick-inference failure, Dot explains
+the failure and keeps the original request for the ordinary task agent. Task
+execution remains serialized; no competing effects or paid fallback are enabled.
 
 The following hybrid description applies to the **legacy engine**:
 
@@ -64,9 +75,9 @@ Routing uses bounded, authorized conversation history and the current task state
 
 An accepted task gets a separate conversation belonging to the same Dot. The parent chat shows a task card with **Open task conversation**, **Review approval** or **Stop task**. The task agent receives bounded permitted context from the parent, and uses the existing folder, page and connection approval cards. Folder requests also open a panel beside the desktop Dot, so the owner can choose and approve the folder without opening the task chat; page and connection approvals stay in chat. Local conversation can continue during that work. In the legacy engine, one task may remain active per Dot, including approval waits. Codex allows multiple pending approvals and one executing task. Results and status return to the parent; short spoken summaries use the actual saved result, while full details remain in the task conversation.
 
-Hangup stops capture and speech; accepted tasks continue. Barge-in stops playback and suppresses stale audio; it does not cancel work. Use **Stop task** to cancel a job. Restart recovery never retries actions or resumes audio automatically. Approval waits need an explicit decision. Restore/move invalidates executable work so an old callback cannot act on the restored workspace. These records now use SQLite schema 7; known schema 2–6 archives remain readable and upgrade on restore/open. Runtime/model files stay outside backups.
+Hangup stops capture and speech; accepted tasks continue. Barge-in stops playback and suppresses stale audio; it does not cancel work. Use **Stop task** to cancel a job. Restart recovery never retries actions or resumes audio automatically. Approval waits need an explicit decision. Restore/move invalidates executable work so an old callback cannot act on the restored workspace. These records now use SQLite schema 8, which adds conversation-only input receipts; known schema 2–7 archives remain readable and upgrade on restore/open. Normal startup does not create a backup before upgrading. Keep a verified pre-upgrade workspace copy before first launch; a schema 7 runtime cannot reopen the upgraded workspace. Runtime/model files stay outside backups.
 
-While Dot is speaking, automatic interruption waits for 1.5 seconds of sustained detected speech. Brief detections leave the reply playing, and the confirmation audio is retained so the beginning of your interruption reaches recognition. Normal listening keeps its short speech-start threshold; manual interruption stays immediate. This detects speech activity, not speaker identity, so sustained background speech or speaker echo can still trigger it.
+While Dot is speaking, automatic interruption requires 1.5 seconds of detected speech within about two seconds. Pauses up to 256 ms are allowed without discarding the speech already detected; longer pauses or sparse detections reset confirmation. The whole confirmation audio is retained so recognition receives the opening words. Short phrases below the 1.5-second requirement leave the reply playing. Normal listening keeps its short speech-start threshold; manual interruption stays immediate. This detects speech activity, not speaker identity, so sustained background speech or speaker echo can still trigger it. Generated speech through the real browser capture, upload, VAD and playback path verifies the software flush; physical speaker echo remains a device acceptance check.
 
 High currently generates bounded whole utterances before playback. It is not continuous full-duplex audio. On the M3 Max with 36 GB memory, the updated hybrid passed 20 synthetic conversation/routing checks. Bedtime and follow-up replies took about 2.98 and 3.21 seconds including recognition, routing and whole-response generation; these exclude real-time microphone and acoustic timing. Earlier 1.7B measurements are historical and do not describe the updated runtime's memory use. Live microphone, speaker/echo, noisy room, emotional delivery, other languages and extended call acceptance remain user/device checks. See the [measurement record](native-voice-evaluation.md).
 
@@ -169,7 +180,9 @@ No microphone, speaker playback, separate API or additional model download was u
 
 ## Per-turn latency trace
 
-Set `LOCAL_VOICE_TIMING_LOG=1` in `.env`, restart the workspace, and start a fresh Talk call. Each utterance gets a server-generated message ID shared by recognition, the governed agent run and playback. Server stdout contains one JSON record per `[voice-timing]` line. The owner's workspace writes stdout to `artifacts/voice-session-workspace.log`; with a different launch command, redirect stdout to a local file and pass that path below.
+Voice phase timings are saved automatically in the configured [daily diagnostic log](runtime.md#local-error-logs), including in the packaged app whose backend discards stdout. Each `voice_timing` row records the call/message IDs, quality, fixed phase or recognition outcome, step and elapsed milliseconds. These rows share the existing private `errors-YYYY-MM-DD.jsonl` file and its 20 MiB daily limit; no provider payload or token count is persisted. Standalone server launches use `<workspace>/logs`, while the desktop uses its profile's `logs` directory. `DOTS_ERROR_LOG_DIR` selects the diagnostic directory; `LOCAL_VOICE_TIMING_LOG=0` disables voice timing records after restart.
+
+For the existing detailed console report, set `LOCAL_VOICE_TIMING_LOG=1`, restart the workspace, and start a fresh Talk call. This also emits one JSON record per `[voice-timing]` stdout line, including allowlisted provider timings and usage counts. Redirect stdout to a local file and pass that path below. The report command reads these opt-in console traces; it does not currently read the compact daily diagnostic rows.
 
 ```sh
 npm run voice:timings
@@ -183,7 +196,7 @@ New traces identify the snapshotted quality. Basic reports `text_reply_complete`
 
 The origin is when the server last classified a frame as voiced, not the physical end of microphone speech. Audio capture/upload delays before that point are not measured. The last milestone is receipt of a browser playback acknowledgement, including transport, scheduling and the first small audio frame; it is not a physical-device audible-onset measurement. Provider-to-first-text includes Integrator preparation, its internal lock, remote provider/model work and validated record delivery. Integrator 0.2.0 splits the local portions and first-delta/first-record milestones as described below; remote queueing versus model compute remains opaque. Ordinary text generation and model/voice settings are unchanged.
 
-The new trace is opt-in, has at most 256 rows per turn and records only IDs, dates, fixed phase labels, durations and allowlisted numeric/boolean provider metadata. It does not log audio, transcripts, prompts, answer text, tool arguments, credentials or raw errors. This does not alter existing transcript storage or unrelated server logs. Disable with `LOCAL_VOICE_TIMING_LOG=0` and restart. No new database or client telemetry endpoint is added. The report retains recent turns by their `speech_end_detected` start record; give it a complete log file, since a truncated prefix without that record is ignored.
+Both timing outputs have at most 256 rows per turn. They do not log audio, transcripts, prompts, answer text, tool arguments, credentials or raw errors; daily rows use the existing logger's secret redaction as well. This does not alter transcript storage or unrelated server logs. Disable with `LOCAL_VOICE_TIMING_LOG=0` and restart. No new database or client telemetry endpoint is added. The console report retains recent turns by their `speech_end_detected` start record; give it a complete log file, since a truncated prefix without that record is ignored.
 
 Verification uses a monotonic simulated timeline with hand-calculated intervals, two turns through the installed provider package with fixture inference and synthetic audio, failure/recovery/cancellation checks, and a report-reader fixture. These checks use no real-provider requests, microphone or speaker playback. A new owner call is needed to collect the complete real-world breakdown; older `[voice-inference]` logs cannot reconstruct the missing phases.
 

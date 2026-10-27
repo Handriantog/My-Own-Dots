@@ -5,6 +5,47 @@ import { MessageSchema, type Message } from '@ag-ui/core';
 import { sourceRefSchema } from '../../shared/memory.js';
 import { evidenceHash } from '../conversation-memory.js';
 
+/** Validate host metadata for every accepted archive engine and historical schema. */
+export function validateCallHistory(
+  db: DatabaseSync,
+  ownerId: string,
+  signal: AbortSignal,
+) {
+  if (
+    db
+      .prepare(
+        "SELECT 1 FROM sqlite_schema WHERE type='table' AND name='call_history'",
+      )
+      .get()
+  ) {
+    const seen = new Set<string>();
+    for (const row of db
+      .prepare(
+        'SELECT h.*,c.threadId,b.ownerId FROM call_history h LEFT JOIN calls c ON c.id=h.callId LEFT JOIN thread_bindings b ON b.id=c.threadId',
+      )
+      .iterate()) {
+      signal.throwIfAborted();
+      const ids: unknown = JSON.parse(String(row.messageIds));
+      if (
+        row.ownerId !== ownerId ||
+        !Array.isArray(ids) ||
+        ids.some((id) => typeof id !== 'string' || !id.length) ||
+        new Set(ids).size !== ids.length ||
+        (row.afterMessageId !== null &&
+          (typeof row.afterMessageId !== 'string' ||
+            !row.afterMessageId.length))
+      )
+        throw new Error('Invalid call history membership');
+      for (const id of ids) {
+        const key = JSON.stringify([row.threadId, id]);
+        if (seen.has(key))
+          throw new Error('Conflicting call history membership');
+        seen.add(key);
+      }
+    }
+  }
+}
+
 /** Offline validation follows an exact schema allowlist. It never executes archived SQL. */
 export async function validateUnifiedGraph(
   db: DatabaseSync,
@@ -12,6 +53,7 @@ export async function validateUnifiedGraph(
   signal: AbortSignal,
   schema = 3,
 ) {
+  validateCallHistory(db, ownerId, signal);
   const checks = [
     ...(schema >= 6
       ? [

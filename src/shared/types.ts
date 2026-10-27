@@ -95,6 +95,7 @@ export interface Dot {
   skillDeliveryEnabled?: boolean;
 }
 export interface Conversation {
+  kind?: 'delegated-task';
   id: string;
   dotId: string;
   ownerId: string;
@@ -110,6 +111,8 @@ export interface ConversationUpdate {
   pinned?: boolean;
 }
 export interface CallReceipt {
+  messageIds?: string[];
+  afterMessageId?: string | null;
   anchorMessageId?: string | null;
   id: string;
   threadId: string;

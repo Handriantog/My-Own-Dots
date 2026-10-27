@@ -205,6 +205,7 @@ it('does not reopen a website when Realtime retries a compute call after its ans
       requireReady: () => platform.requireReady(),
       setup: () => ({ ...platform.setup(), voice: true }),
       history: (threadId) => platform.history(threadId),
+      lastMessageId: (threadId) => platform.lastMessageId(threadId),
       turn: (...args) => platform.turn(...args),
     },
     async () =>

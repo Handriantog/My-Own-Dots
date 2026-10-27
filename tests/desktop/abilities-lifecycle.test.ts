@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { fork, execFile, type ChildProcess } from 'node:child_process';
+import { fork, execFile, spawn, type ChildProcess } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
@@ -23,8 +23,37 @@ import type { ActivityStatus } from '../../src/shared/abilities/activity';
 import type { WorkspaceBackendConnection } from '../../src/desktop/host/workspace-backend.ts';
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
-  for (const fn of cleanups.splice(0).reverse()) await fn();
+  const errors: unknown[] = [];
+  for (const fn of cleanups.splice(0).reverse()) {
+    try {
+      await within(fn(), 'Fixture cleanup', 3000);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length)
+    throw new AggregateError(errors, 'Fixture cleanup failed.');
 });
+async function within<T>(
+  promise: Promise<T>,
+  stage: string,
+  timeoutMs: number,
+) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(Error(`${stage} timed out.`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 const alive = (pid: number) => {
   try {
     process.kill(pid, 0);
@@ -35,9 +64,19 @@ const alive = (pid: number) => {
 };
 async function stop(child: ChildProcess) {
   if (child.exitCode !== null || child.signalCode !== null) return;
-  const done = once(child, 'exit');
-  child.kill('SIGTERM');
-  await done;
+  const listening = new AbortController();
+  const done = once(child, 'exit', { signal: listening.signal });
+  const escalation = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null)
+      child.kill('SIGKILL');
+  }, 1000);
+  try {
+    child.kill('SIGTERM');
+    await within(done, 'Fixture child exit after SIGKILL', 2000);
+  } finally {
+    clearTimeout(escalation);
+    listening.abort();
+  }
 }
 describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
   'desktop Ability lifecycle and owner boundary',
@@ -65,6 +104,41 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
     afterAll(async () => {
       if (root) await rm(root, { recursive: true, force: true });
     });
+    it('reaps a fixture child that ignores graceful shutdown', async () => {
+      const child = spawn(
+        process.execPath,
+        [
+          '--input-type=module',
+          '-e',
+          "import process from 'node:process'; process.on('SIGTERM', () => {}); process.send({ ready: true }); setInterval(() => {}, 1000);",
+        ],
+        { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] },
+      );
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await once(child, 'message', { signal: AbortSignal.timeout(1000) });
+        await Promise.race([
+          stop(child),
+          new Promise<never>((_resolve, reject) => {
+            deadline = setTimeout(
+              () => reject(Error('Fixture shutdown did not escalate.')),
+              1800,
+            );
+          }),
+        ]);
+        expect(child.signalCode).toBe('SIGKILL');
+        expect(alive(child.pid!)).toBe(false);
+      } finally {
+        clearTimeout(deadline);
+        if (child.exitCode === null && child.signalCode === null) {
+          const exited = once(child, 'exit', {
+            signal: AbortSignal.timeout(1000),
+          });
+          child.kill('SIGKILL');
+          await exited;
+        }
+      }
+    }, 3000);
     async function fixture(
       onUnavailable?: (stage: string, code: string) => void,
       interruptCleanup = false,
@@ -177,9 +251,11 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         },
       );
       cleanups.push(() => stop(backend));
-      const [connection] = (await once(backend, 'message')) as [
-        WorkspaceBackendConnection,
-      ];
+      const [connection] = (await within(
+        once(backend, 'message'),
+        'Fixture backend readiness',
+        5000,
+      )) as [WorkspaceBackendConnection];
       const options = {
         profile,
         bundle,
@@ -555,7 +631,11 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
           owner.kill('SIGCONT');
           await stop(owner);
         });
-        const [ready] = await once(owner, 'message');
+        const [ready] = await within(
+          once(owner, 'message'),
+          'Fixture owner readiness',
+          5000,
+        );
         expect(ready).toEqual({ attached: true });
         const worker = await f.worker();
         if (signal === 'SIGSTOP') {
@@ -569,9 +649,15 @@ describe.skipIf(process.platform !== 'darwin' || process.arch !== 'arm64')(
         await expect
           .poll(() => alive(worker.pid), { timeout: 6000, interval: 25 })
           .toBe(false);
-        await worker.response;
+        await within(worker.response, 'Worker response after owner loss', 3000);
         expect(alive(f.backend.pid!)).toBe(true);
-        expect((await fetch(`${f.connection.url}/alive`)).ok).toBe(true);
+        expect(
+          (
+            await fetch(`${f.connection.url}/alive`, {
+              signal: AbortSignal.timeout(3000),
+            })
+          ).ok,
+        ).toBe(true);
       },
       15000,
     );

@@ -51,3 +51,33 @@ it('links a waiting task to its approval conversation and can explicitly stop it
   expect(JSON.stringify(root.toJSON())).toContain('Stopped');
   await act(async () => root.unmount());
 });
+it('keeps every task beyond twenty using one poller', async () => {
+  vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true);
+  vi.useFakeTimers();
+  const fetcher = vi.fn(
+    async () =>
+      new Response(
+        JSON.stringify(
+          Array.from({ length: 25 }, (_, i) => ({
+            id: `job-${i}`,
+            dotId: 'dot',
+            workerThreadId: `worker-${i}`,
+            request: `Task ${i}`,
+            status: 'completed',
+          })),
+        ),
+      ),
+  );
+  vi.stubGlobal('fetch', fetcher);
+  let root!: ReturnType<typeof create>;
+  await act(async () => {
+    root = create(createElement(VoiceTasks, { threadId: 'parent' }));
+  });
+  expect(root.root.findAllByType('a')).toHaveLength(25);
+  expect(fetcher).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2000);
+  });
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  await act(async () => root.unmount());
+});

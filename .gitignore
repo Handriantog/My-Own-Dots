@@ -27,6 +27,7 @@ data/
 
 # Verified execution candidate; pinned by package-lock integrity.
 !vendor/myown-llm-integrator-0.3.0-rc.1.tgz
+!vendor/myown-llm-integrator-0.3.0-rc.2.tgz
 
 # Local daily diagnostics and isolated test candidates
 logs/

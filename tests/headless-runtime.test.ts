@@ -229,3 +229,45 @@ it('cleans up rejected SDK turns while preserving the error', async () => {
   expect(sdk.unsubscribe).toHaveBeenCalledOnce();
   expect(sdk.detach).toHaveBeenCalledOnce();
 });
+
+it('records partial remote output when the SDK rejects its active run', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn<typeof fetch>().mockResolvedValue(
+      Response.json({
+        mode: 'intelligence',
+        intelligence: { wsUrl: 'wss://example.com/client' },
+        agents: { dot: {} },
+      }),
+    ),
+  );
+  const membership = vi.fn(async (_ids: string[]) => {});
+  sdk.run.mockImplementation(async () => {
+    await sdk.subscriber!.onTextMessageStartEvent!({
+      event: {
+        type: 'TEXT_MESSAGE_START',
+        messageId: 'partial-answer',
+        role: 'assistant',
+      },
+    } as never);
+    throw new Error('Fixture stream failed');
+  });
+  await expect(
+    runThreadTurn(
+      'https://runtime.test',
+      {},
+      'dot',
+      'thread',
+      'Record my call',
+      new AbortController().signal,
+      undefined,
+      membership,
+    ),
+  ).rejects.toThrow('Fixture stream failed');
+  expect(membership.mock.calls.flatMap(([ids]) => ids)).toEqual([
+    sdk.message.mock.calls[0][0].id,
+    'partial-answer',
+  ]);
+  expect(sdk.unsubscribe).toHaveBeenCalledOnce();
+  expect(sdk.detach).toHaveBeenCalledOnce();
+});

@@ -13,7 +13,7 @@ it('reports subscription buffering without claiming incremental speech or headle
   expect(capabilities).toMatchObject({
     provider: 'codex',
     model: 'chosen-model',
-    integrator: { name: 'myown-llm-integrator', version: '0.3.0-rc.1' },
+    integrator: { name: 'myown-llm-integrator', version: '0.3.0-rc.2' },
     execution: { backend: 'subscription', location: 'provider-hosted' },
     text: {
       adapter: 'buffered-complete-step',
@@ -71,7 +71,7 @@ it.skipIf(
     expect(stderr).toBe('');
     expect(report).toMatchObject({
       mode: 'fixture-only',
-      integratorVersion: '0.3.0-rc.1',
+      integratorVersion: '0.3.0-rc.2',
       liveProviderInvoked: false,
       valid: {
         textBeforeSuffix: 0,

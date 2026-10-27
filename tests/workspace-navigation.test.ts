@@ -12,6 +12,25 @@ const workspace = {
   conversations: [{ id: 't', dotId: 'd', title: 'Launch notes' }],
 } as WorkspaceState;
 describe('desktop navigation', () => {
+  it('hides durable worker chats from search without hiding ordinary matching titles', () => {
+    const source = {
+      ...workspace,
+      conversations: [
+        { ...workspace.conversations[0], id: 'ordinary', title: 'Voice task' },
+        {
+          ...workspace.conversations[0],
+          id: 'worker',
+          title: 'Custom task name',
+          kind: 'delegated-task' as const,
+        },
+      ],
+    };
+    const threads = navigationItems(source).filter((item) =>
+      item.id.startsWith('thread:'),
+    );
+    expect(threads.map((item) => item.id)).toEqual(['thread:ordinary']);
+    expect(source.conversations).toHaveLength(2);
+  });
   it('guards before any navigation side effect', () => {
     const commit = vi.fn();
     expect(allowNavigation(true, () => false, commit)).toBe(false);

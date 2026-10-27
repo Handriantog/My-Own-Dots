@@ -118,7 +118,7 @@ export class CompanionChatWindow {
   }
 
   async talk(bounds: Rect): Promise<void> {
-    await this.open(bounds);
+    await this.open(bounds, false);
     this.voice.talk();
   }
 
@@ -170,7 +170,7 @@ export class CompanionChatWindow {
       throw new Error('Invalid chat sender');
   }
 
-  async open(bounds: Rect): Promise<void> {
+  async open(bounds: Rect, daily = true): Promise<void> {
     await this.ensureWindow(bounds);
     const window = this.window;
     if (!window || window.isDestroyed()) return;
@@ -178,6 +178,7 @@ export class CompanionChatWindow {
     window.setBounds(bounds);
     window.show();
     window.focus();
+    if (daily && !this.voiceEngaged) window.webContents.send('dot:voice:chat');
   }
 
   private ensureWindow(bounds: Rect): Promise<void> {
@@ -375,7 +376,7 @@ export class CompanionChatWindow {
       await this.workspace.recover();
       return;
     }
-    await this.open(bounds);
+    await this.open(bounds, false);
     this.error =
       'Connect to the workspace that holds your Dots and conversations.';
     await this.window?.loadURL(connectionPage);

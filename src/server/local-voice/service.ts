@@ -22,6 +22,7 @@ import {
 } from '../../shared/voice-settings.js';
 import { encodeFixtureWav } from './audio.js';
 import { VoiceInferenceSession, VoiceProviderSession } from './inference.js';
+import { CodexConversationSession } from './codex-conversation-intake.js';
 import { NativeVoiceWorker } from './native-worker.js';
 import { QwenVoiceSession } from './qwen-voice.js';
 import { voiceJobReceipt } from './native-runtime.js';
@@ -532,7 +533,10 @@ export class LocalVoiceService {
       )
         throw Error('Wait for the current response before starting a call.');
       signal.throwIfAborted();
-      const receipt = await this.platform.workspace.createCall(threadId);
+      const receipt = await this.platform.workspace.createCall(
+        threadId,
+        snapshot.messages.at(-1)?.id,
+      );
       const recognition =
         voiceSettings.quality === 'high'
           ? new NativeVoiceWorker({
@@ -559,7 +563,14 @@ export class LocalVoiceService {
         this.platform.config.llmProvider === 'codex'
           ? new VoiceProviderSession(receipt.id)
           : undefined;
+      const conversation =
+        native && this.platform.config.agentEngine === 'codex'
+          ? new CodexConversationSession({
+              model: this.platform.config.subscriptionModel,
+            })
+          : undefined;
       const inference =
+        conversation ??
         providerSession ??
         (!native && this.config.inferenceSession
           ? new VoiceInferenceSession(receipt.id)
@@ -592,11 +603,17 @@ export class LocalVoiceService {
                     threadId,
                     dotId,
                     native,
+                    ...(conversation
+                      ? { intake: (options) => conversation.run(options) }
+                      : {}),
                   }),
               }
             : {}),
-          voiceTurn: (utterance) => {
-            if (utterance)
+          voiceTurn: async (utterance) => {
+            if (utterance) {
+              await this.platform.workspace.recordCallMessages(receipt.id, [
+                utterance.messageId,
+              ]);
               setVoiceTurn(this.platform.workspace, {
                 callId: receipt.id,
                 threadId,
@@ -627,7 +644,7 @@ export class LocalVoiceService {
                   : {}),
                 ...utterance,
               });
-            else clearVoiceTurn(this.platform.workspace, receipt.id);
+            } else clearVoiceTurn(this.platform.workspace, receipt.id);
           },
           requireThread: async () =>
             await this.platform.workspace.requireThread(threadId, dotId),
@@ -679,7 +696,11 @@ export class LocalVoiceService {
                 update.id,
                 update.spoken,
                 this.platform.nativeVoice!.receiptValidator(job),
-                { retainUntilPlayed },
+                {
+                  retainUntilPlayed,
+                  sourceMessageId: job.sourceMessageId,
+                  approval: job.status === 'approval',
+                },
               );
             }
           })
@@ -691,7 +712,17 @@ export class LocalVoiceService {
               progress.job.parentThreadId === threadId &&
               !call.ended
             )
-              call.nativeUpdate(progress.id, progress.text, progress.authorize);
+              call.nativeUpdate(
+                progress.id,
+                progress.text,
+                progress.authorize,
+                progress.job.status === 'running'
+                  ? {
+                      sourceMessageId: progress.job.sourceMessageId,
+                      approval: false,
+                    }
+                  : undefined,
+              );
           })
         : undefined;
       if (detach)

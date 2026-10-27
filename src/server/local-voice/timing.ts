@@ -1,4 +1,6 @@
 /** Content-free diagnostics. All durations use the server's monotonic clock. */
+import { isAbsolute } from 'node:path';
+import { logDiagnostic } from '../../shared/error-log.js';
 import { recognitionReasons } from './recognition-diagnostics.js';
 import type { VoiceQuality } from '../../shared/voice-settings.js';
 
@@ -88,12 +90,33 @@ export class VoiceTurnTiming {
       quality?: VoiceQuality;
     } = {},
   ) {
+    const configured = process.env.LOCAL_VOICE_TIMING_LOG;
     this.enabled =
-      options.enabled ?? process.env.LOCAL_VOICE_TIMING_LOG === '1';
+      options.enabled ??
+      (configured === '1' ||
+        (configured !== '0' &&
+          isAbsolute(process.env.DOTS_ERROR_LOG_DIR ?? '')));
     this.now = options.now ?? (() => performance.now());
     this.quality = options.quality ?? 'medium';
     this.write =
-      options.write ?? ((row) => console.info('[voice-timing]', row));
+      options.write ??
+      ((row) => {
+        const data = JSON.parse(row);
+        // The packaged backend discards stdout. Persist only the bounded phase
+        // timeline and fixed recognition outcome, never nested provider data.
+        logDiagnostic('voice_timing', {
+          callId: data.callId,
+          messageId: data.messageId,
+          quality: data.quality,
+          operation: data.event,
+          stage: data.stage,
+          step: data.step,
+          elapsedMs: data.elapsedMs,
+          status: data.outcome,
+          code: data.reason,
+        });
+        if (configured === '1') console.info('[voice-timing]', row);
+      });
   }
   nextStep() {
     return ++this.steps;

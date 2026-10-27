@@ -725,3 +725,34 @@
 :root .app .live-chat .chat-entry.assistant .chat-avatar {
   background: transparent;
 }
+
+.chat-call {
+  flex-shrink: 0;
+  border: 1px solid var(--ws-border);
+  border-radius: 12px;
+  margin: 16px 0;
+}
+.chat-call > summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 16px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.chat-call > summary::before {
+  content: '›';
+}
+.chat-call[open] > summary::before {
+  transform: rotate(90deg);
+}
+:root .app .live-chat .chat-call > summary .call-receipt {
+  margin: 0;
+}
+.chat-call-content {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 0 16px 12px;
+}

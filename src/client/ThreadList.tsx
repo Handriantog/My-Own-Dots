@@ -51,6 +51,7 @@ export function ThreadList({
   const needle = query.trim().toLocaleLowerCase();
   const dotNames = new Map(dots.map((dot) => [dot.id, dot.name]));
   const matches = (trash ? deleted : local)
+    .filter((thread) => thread.kind !== 'delegated-task')
     .filter((thread) =>
       `${thread.title} ${dotNames.get(thread.dotId) ?? ''}`
         .toLocaleLowerCase()
@@ -164,7 +165,15 @@ export function ThreadList({
       >
         {trash ? <ArrowLeft size={14} /> : <Trash2 size={14} />}
         {trash ? 'Back to chats' : 'Trash'}
-        {!trash && deleted.length > 0 && <span>{deleted.length}</span>}
+        {!trash &&
+          deleted.some((thread) => thread.kind !== 'delegated-task') && (
+            <span>
+              {
+                deleted.filter((thread) => thread.kind !== 'delegated-task')
+                  .length
+              }
+            </span>
+          )}
       </button>
     </section>
   );

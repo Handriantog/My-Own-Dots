@@ -102,6 +102,7 @@ it('delivers Talk received before React subscribes once and unsubscribes control
     'cancelTalk',
     'end',
     'isWindowless',
+    'onChat',
     'onStop',
     'onTalk',
     'phase',
@@ -132,6 +133,22 @@ it('delivers Talk received before React subscribes once and unsubscribes control
     ['dot:voice:review-folders', 'call-12345678'],
     ['dot:voice:end', 'call-12345678'],
   ]);
+});
+
+it('queues native Chat until React subscribes without granting a Talk gesture', async () => {
+  await import('../../src/desktop/chat-preload.js');
+  const bridge = host.exposed.get('dotVoice') as DesktopVoiceBridge;
+  host.ipc!.emit('dot:voice:chat');
+  const callback = vi.fn();
+  const off = bridge.onChat!(callback);
+  expect(callback).toHaveBeenCalledTimes(1);
+  host.ipc!.emit('dot:voice:chat');
+  expect(callback).toHaveBeenCalledTimes(2);
+  off();
+  const talk = vi.fn();
+  bridge.onTalk(talk);
+  expect(talk).not.toHaveBeenCalled();
+  expect(host.invoke).not.toHaveBeenCalled();
 });
 
 it('discards a queued Talk on stop before React subscribes', async () => {

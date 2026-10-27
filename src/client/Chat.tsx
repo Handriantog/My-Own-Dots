@@ -50,7 +50,11 @@ import {
   ComputerToolCard,
   type ComputerToolRenderProps,
 } from './ComputerToolCard';
-import { ChatTranscript, isInternalVoiceReceipt } from './ChatTranscript';
+import {
+  ChatTranscript,
+  isInternalVoiceReceipt,
+  revealChatMessage,
+} from './ChatTranscript';
 import type { CallReceipt, Conversation, Dot } from '../shared/types';
 import { Mascot } from './Mascot';
 import { useVoice } from './useVoice';
@@ -61,6 +65,7 @@ import {
 } from './local-voice/VoiceSettings';
 import { CallView } from './CallView';
 import { shouldSubmitComposerOnKeyDown } from './chat-composer';
+import type { ConversationChatTarget } from '../shared/voice-delegation';
 
 export function Chat({
   companionColor,
@@ -68,6 +73,7 @@ export function Chat({
   dot,
   initialPrompt,
   onConsumed,
+  onContinueChat,
   voiceReady,
   localVoiceReady = false,
   localVoiceEnabled = false,
@@ -93,6 +99,7 @@ export function Chat({
   dot: Dot;
   initialPrompt?: string;
   onConsumed: () => void;
+  onContinueChat?: (target: ConversationChatTarget, text: string) => boolean;
   voiceReady: boolean;
   localVoiceReady?: boolean;
   localVoiceEnabled?: boolean;
@@ -145,21 +152,37 @@ export function Chat({
       );
   };
   const [pageContext, setPageContext] = useState<PageContext | null>();
+  const [chatTarget, setChatTarget] = useState<ConversationChatTarget | null>();
+  const canContinueChat = !!onContinueChat;
   const [contextError, setContextError] = useState('');
   const [contextAttempt, setContextAttempt] = useState(0);
-  const contextReady = pageContext !== undefined;
+  const contextReady = pageContext !== undefined && chatTarget !== undefined;
   useEffect(() => {
     let active = true;
     setPageContext(undefined);
+    setChatTarget(undefined);
     setContextError('');
-    void api<PageContext | null>(
-      `/conversations/${thread.id}/page-context`,
-      'GET',
-      undefined,
-      AbortSignal.timeout(10000),
-    )
-      .then((page) => {
-        if (active) setPageContext(page);
+    void Promise.all([
+      api<PageContext | null>(
+        `/conversations/${thread.id}/page-context`,
+        'GET',
+        undefined,
+        AbortSignal.timeout(10000),
+      ),
+      canContinueChat
+        ? api<ConversationChatTarget | null>(
+            `/conversations/${thread.id}/chat-target`,
+            'GET',
+            undefined,
+            AbortSignal.timeout(10000),
+          )
+        : Promise.resolve(null),
+    ])
+      .then(([page, target]) => {
+        if (active) {
+          setPageContext(page);
+          setChatTarget(target);
+        }
       })
       .catch(() => {
         if (active)
@@ -170,9 +193,10 @@ export function Chat({
     return () => {
       active = false;
     };
-  }, [thread.id, contextAttempt]);
+  }, [thread.id, contextAttempt, canContinueChat]);
   const memoryActivity = useRef<MemoryActivityHandle>(null);
-  const [draft, setDraft] = useState('');
+  const [draft, setDraft] = useState(initialPrompt ?? '');
+  const composerRevision = useRef(0);
   const [source, setSource] = useState('');
   const [sourceOpen, setSourceOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -182,6 +206,25 @@ export function Chat({
   const chatError = error || runError;
   const [loaded, setLoaded] = useState(false);
   const [running, setRunning] = useState(false);
+  const [routing, setRouting] = useState(false);
+  const routingRequest = useRef<AbortController | undefined>(undefined);
+  const retryMessage = useRef<{ id: string; content: string } | undefined>(
+    undefined,
+  );
+  const editComposer = () => {
+    composerRevision.current += 1;
+    if (routingRequest.current) {
+      routingRequest.current.abort();
+      routingRequest.current = undefined;
+      setRouting(false);
+    }
+  };
+  useEffect(() => {
+    return () => {
+      routingRequest.current?.abort();
+      routingRequest.current = undefined;
+    };
+  }, [thread.id]);
   const [reconnectState, setReconnectState] = useState<
     'idle' | 'pending' | 'success'
   >('idle');
@@ -467,7 +510,56 @@ export function Chat({
       connectionAttempt.current = undefined;
     };
   }, [connect, isReady]);
-  const send = async (text: string, voiceMessageId?: string) => {
+  const send = async (
+    text: string,
+    voiceMessageId?: string,
+    preserveDraftOnError = false,
+  ) => {
+    if (!voiceMessageId && chatTarget) {
+      if (
+        !text.trim() ||
+        paused ||
+        routingRequest.current ||
+        voice.status !== 'idle'
+      )
+        return;
+      const request = new AbortController();
+      routingRequest.current = request;
+      setRouting(true);
+      setError('');
+      try {
+        // Revalidate the host-owned relation at Send. Never copy task history,
+        // approval results, or caller-selected scope into the parent input.
+        const target = await api<ConversationChatTarget | null>(
+          `/conversations/${thread.id}/chat-target`,
+          'GET',
+          undefined,
+          AbortSignal.any([request.signal, AbortSignal.timeout(10000)]),
+        );
+        if (request.signal.aborted) return;
+        if (
+          !target ||
+          target.dotId !== dot.id ||
+          !onContinueChat?.(target, text)
+        )
+          throw new Error(
+            'The conversation could not open. Your draft is still here.',
+          );
+      } catch (cause) {
+        if (!request.signal.aborted)
+          setError(
+            cause instanceof Error
+              ? cause.message
+              : 'The conversation could not open.',
+          );
+      } finally {
+        if (routingRequest.current === request) {
+          routingRequest.current = undefined;
+          setRouting(false);
+        }
+      }
+      return;
+    }
     if (voiceMessageId && voiceMessages.current.has(voiceMessageId)) return;
     // The transport waits for the previous voice promise; React may not have
     // committed its idle render yet when the next final transcript arrives.
@@ -503,14 +595,26 @@ export function Chat({
     }
     setRunning(true);
     if (voiceMessageId) voiceMessages.current.add(voiceMessageId);
-    agent.addMessage({
+    const content = contextualMessage(text, pageContext);
+    const retry =
+      !voiceMessageId && retryMessage.current?.content === content
+        ? retryMessage.current
+        : undefined;
+    const message = {
       id:
         voiceMessageId ??
+        retry?.id ??
         crypto.randomUUID?.() ??
         `${Date.now()}-${Math.random()}`,
-      role: 'user',
-      content: contextualMessage(text, pageContext),
-    });
+      role: 'user' as const,
+      content,
+    };
+    // A failed run leaves the SDK's optimistic message in history. A manual
+    // retry keeps its identity instead of appending the same owner input twice.
+    if (!retry || !agent.messages.some((entry) => entry.id === retry.id))
+      agent.addMessage(message);
+    if (!voiceMessageId) retryMessage.current = undefined;
+    const submittedRevision = composerRevision.current;
     if (!voiceMessageId) {
       setDraft('');
       setSource('');
@@ -543,6 +647,12 @@ export function Chat({
       onSaved();
     } catch (e) {
       if (voiceMessageId && voiceRun.current?.cancelled) return;
+      if (!voiceMessageId) retryMessage.current = message;
+      if (
+        preserveDraftOnError &&
+        composerRevision.current === submittedRevision
+      )
+        setDraft(text);
       setRunError(
         e instanceof Error
           ? e.message
@@ -557,12 +667,19 @@ export function Chat({
     }
   };
   useEffect(() => {
-    if (loaded && contextReady && !paused && initialPrompt && !sent.current) {
+    if (!initialPrompt || sent.current) return;
+    if (composerRevision.current) {
       sent.current = true;
       onConsumed();
-      void send(initialPrompt);
+      return;
     }
-  }, [loaded, contextReady, paused, initialPrompt]);
+    setDraft((current) => current || initialPrompt);
+    if (loaded && contextReady && !paused && !running) {
+      sent.current = true;
+      onConsumed();
+      void send(initialPrompt, undefined, true);
+    }
+  }, [loaded, contextReady, paused, initialPrompt, running]);
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: 'instant', block: 'end' });
   }, [agent.messages.length, running]);
@@ -572,6 +689,13 @@ export function Chat({
     appliedTarget.current = messageTarget;
     jumpToMessage(messageTarget.messageId);
   }, [loaded, messageTarget, agent.messages.length]);
+  const voiceTasks = useVoiceTasks({
+    threadId: thread.id,
+    onUpdated: () => {
+      onSaved();
+      if (!running) void copilotkit.connectAgent({ agent }).catch(() => {});
+    },
+  });
   useEffect(() => {
     if (!jumpRequest) return;
     const element = Array.from(
@@ -584,9 +708,8 @@ export function Chat({
       savedTrigger.current?.focus();
       return;
     }
+    revealChatMessage(element);
     setHighlightedMessageId(jumpRequest.messageId);
-    element.scrollIntoView({ block: 'center', behavior: 'instant' });
-    element.focus({ preventScroll: true });
   }, [jumpRequest]);
   useEffect(() => {
     if (!highlightedMessageId) return;
@@ -856,15 +979,7 @@ export function Chat({
         }}
       >
         <div className="chat-transcript" ref={transcript} inert={savedOpen}>
-          <VoiceTasks
-            threadId={thread.id}
-            onUpdated={() => {
-              onSaved();
-              if (!running)
-                void copilotkit.connectAgent({ agent }).catch(() => {});
-            }}
-          />
-          {!visible.length && (
+          {!visible.length && !calls.length && (
             <div className="chat-welcome">
               <span className="eyebrow">A LITTLE SPACE TO THINK</span>
               <h1>What’s on your mind?</h1>
@@ -884,6 +999,7 @@ export function Chat({
               void saved.update(thread.id, id, kind, active);
             }}
             highlightedMessageId={highlightedMessageId}
+            tasks={voiceTasks}
             calls={calls}
             renderTools={(message) => (
               <CopilotChatToolCallsView
@@ -990,7 +1106,10 @@ export function Chat({
               aria-label="Source page URL"
               type="url"
               value={source}
-              onChange={(e) => setSource(e.target.value)}
+              onChange={(e) => {
+                editComposer();
+                setSource(e.target.value);
+              }}
               placeholder="https://example.com/page"
             />
             <button
@@ -998,6 +1117,7 @@ export function Chat({
               className="icon-button"
               aria-label="Remove source"
               onClick={() => {
+                editComposer();
                 setSourceOpen(false);
                 setSource('');
               }}
@@ -1021,7 +1141,10 @@ export function Chat({
             rows={1}
             value={draft}
             maxLength={4000}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              editComposer();
+              setDraft(e.target.value);
+            }}
             onKeyDown={(e) => {
               if (shouldSubmitComposerOnKeyDown(e)) {
                 e.preventDefault();
@@ -1029,7 +1152,7 @@ export function Chat({
               }
             }}
           />
-          {running ? (
+          {running && (
             <button
               type="button"
               className="send-button"
@@ -1042,14 +1165,16 @@ export function Chat({
             >
               <Square size={16} />
             </button>
-          ) : (
+          )}
+          {(!running || chatTarget) && (
             <button
               className="send-button"
               aria-label="Send message"
               disabled={
                 !draft.trim() ||
-                !loaded ||
+                (!loaded && !chatTarget) ||
                 !contextReady ||
+                routing ||
                 paused ||
                 voice.status !== 'idle'
               }
@@ -1059,10 +1184,12 @@ export function Chat({
           )}
         </div>
         <div className="chat-compose-note">
-          Enter to send · Shift + Enter for a new line
+          {chatTarget
+            ? 'Messages continue in the main conversation.'
+            : 'Enter to send · Shift + Enter for a new line'}
         </div>
       </form>
     </div>
   );
 }
-import { VoiceTasks } from './local-voice/VoiceTasks';
+import { useVoiceTasks } from './local-voice/VoiceTasks';

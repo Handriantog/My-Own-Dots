@@ -11,6 +11,7 @@ function stream(events: unknown[]) {
   );
 }
 it('runs scheduled work over local SSE with persisted context and no Intelligence gateway', async () => {
+  const membership = vi.fn(async (_ids: string[]) => {});
   let submitted:
     { messages: { id: string; role: string; content: string }[] } | undefined;
   vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
@@ -56,11 +57,17 @@ it('runs scheduled work over local SSE with persisted context and no Intelligenc
       'thread',
       'Which notebook?',
       new AbortController().signal,
+      undefined,
+      membership,
     ),
   ).toBe('The blue notebook.');
   expect(submitted?.messages.map((m) => m.content)).toEqual([
     'Remember the blue notebook.',
     'Remembered.',
     'Which notebook?',
+  ]);
+  expect(membership.mock.calls.flatMap(([ids]) => ids)).toEqual([
+    submitted!.messages.at(-1)!.id,
+    'reply',
   ]);
 });
